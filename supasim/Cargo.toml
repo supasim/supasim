@@ -1,0 +1,13 @@
+[package]
+name = "supasim"
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+readme = "../readme.md"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
