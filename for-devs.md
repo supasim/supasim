@@ -1,1 +1,13 @@
-### New crate TOML format
+# Dependencies template
+anyhow.workspace = true
+bitflags.workspace = true
+bytemuck.workspace = true
+getrandom.workspace = true
+libloading.workspace = true
+log.workspace = true
+nalgebra.workspace = true
+rand.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

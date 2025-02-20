@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["supasim", "tests"]
+members = ["crates/supasim", "crates/supasim-shaders"]
 
 [workspace.package]
 version = "0.0.1"
@@ -9,11 +9,21 @@ repository = "https://github.com/supamaggie70incorporated/supasim"
 edition = "2021"
 rust-version = "1.84"
 keywords = ["hpc", "simulation"]
+license = "GPL-3.0"
 
 
 [workspace.dependencies]
 anyhow = "1.0"
-thiserror = "2.0"
 bitflags = "2.8"
 bytemuck = { version = "1.21", features = ["derive"] }
+env_logger = "0.11"
+getrandom = "0.3"
+libloading = "0.8"
 log = { version = "0.4" }
+nalgebra = "0.33"
+rand = "0.9"
+rayon = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tempfile = "3.17"

@@ -1,0 +1,21 @@
+[package]
+name = "supasim-shaders"
+version.workspace = true
+authors.workspace = true
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+license.workspace = true
+
+[features]
+default = ["msl-out"]
+msl-out = ["spirv_cross"]
+
+[dependencies]
+anyhow.workspace = true
+slang = { git = "https://github.com/SupaMaggie70Incorporated/slang-rs.git" }
+rand.workspace = true
+tempfile.workspace = true
+spirv_cross = { version = "0.23", features = ["msl"], optional = true }
+bytemuck.workspace = true
