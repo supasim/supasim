@@ -6,7 +6,7 @@ use supasim_shaders::*;
 pub fn main() -> Result<()> {
     let ctx = supasim_shaders::GlobalState::new_from_env()?;
     let target = if true {
-        ShaderTarget::Ptx {}
+        ShaderTarget::Wgsl
     } else {
         ShaderTarget::VulkanSpv {
             capabilities: VulkanCapabilities::default(),

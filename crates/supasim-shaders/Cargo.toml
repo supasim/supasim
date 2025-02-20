@@ -9,13 +9,25 @@ keywords.workspace = true
 license.workspace = true
 
 [features]
-default = ["msl-out"]
+#default = ["msl-out", "wgsl-out"]
 msl-out = ["spirv_cross"]
+wgsl-out = ["naga"]
+
 
 [dependencies]
+naga = { version = "24.0", features = ["spv-in", "wgsl-out"], optional = true }
 anyhow.workspace = true
 slang = { git = "https://github.com/SupaMaggie70Incorporated/slang-rs.git" }
 rand.workspace = true
 tempfile.workspace = true
-spirv_cross = { version = "0.23", features = ["msl"], optional = true }
+spirv_cross = { version = "0.23", features = [
+    "msl",
+    "hlsl",
+    "glsl",
+], optional = true }
 bytemuck.workspace = true
+
+[[example]]
+name = "simple-shaders"
+path = "examples/simple-shaders.rs"
+required-features = ["msl-out", "wgsl-out"]

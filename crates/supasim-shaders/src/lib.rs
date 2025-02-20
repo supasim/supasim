@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use rand::Rng;
 use slang::Downcast;
+#[cfg(feature = "msl-out")]
 use spirv_cross::spirv;
 use std::{ffi::CString, io::Write, path::Path, str::FromStr};
 use tempfile::tempdir;
@@ -27,6 +28,9 @@ pub enum ShaderTarget {
     OpenClSpv,
     Hip,
     Msl,
+    Hlsl,
+    Glsl,
+    Wgsl,
 }
 pub enum ShaderSource<'a> {
     File(&'a Path),
@@ -72,6 +76,13 @@ impl GlobalState {
             {
                 return Err(anyhow!("Shader compiler was not compiled with MSL support"));
             }
+        } else if options.target == ShaderTarget::Wgsl {
+            #[cfg(not(feature = "wgsl-out"))]
+            {
+                return Err(anyhow!(
+                    "Shader compiler was not compiled with WGSL support"
+                ));
+            }
         }
         let _tempdir;
         let (source_file, _source, search_dir) = match options.source {
@@ -97,9 +108,12 @@ impl GlobalState {
         };
         let target = match options.target {
             ShaderTarget::Ptx {} | ShaderTarget::Hip => slang::CompileTarget::Ptx,
-            ShaderTarget::Msl | ShaderTarget::OpenClSpv | ShaderTarget::VulkanSpv { .. } => {
-                slang::CompileTarget::Spirv
-            }
+            ShaderTarget::Msl
+            | ShaderTarget::OpenClSpv
+            | ShaderTarget::VulkanSpv { .. }
+            | ShaderTarget::Wgsl => slang::CompileTarget::Spirv,
+            ShaderTarget::Glsl => slang::CompileTarget::Glsl,
+            ShaderTarget::Hlsl => slang::CompileTarget::Hlsl,
         };
         let optim = match options.opt_level {
             OptimizationLevel::None => slang::OptimizationLevel::None,
@@ -160,6 +174,30 @@ impl GlobalState {
                 let vec = bytecode.as_slice().to_owned();
                 let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
                 _stringcode = spirv::Ast::<spirv_cross::msl::Target>::parse(&module)?.compile()?;
+                data = _stringcode.as_bytes();
+            }
+        } else if options.target == ShaderTarget::Wgsl {
+            #[cfg(feature = "wgsl-out")]
+            {
+                let module = naga::front::spv::parse_u8_slice(
+                    bytecode.as_slice(),
+                    &naga::front::spv::Options {
+                        adjust_coordinate_space: true,
+                        strict_capabilities: false,
+                        block_ctx_dump_prefix: None,
+                    },
+                )?;
+                module.to_ctx();
+                let mut valid = naga::valid::Validator::new(
+                    naga::valid::ValidationFlags::all(),
+                    naga::valid::Capabilities::all(),
+                );
+                let info = valid.validate(&module)?;
+                _stringcode = naga::back::wgsl::write_string(
+                    &module,
+                    &info,
+                    naga::back::wgsl::WriterFlags::empty(),
+                )?;
                 data = _stringcode.as_bytes();
             }
         }
