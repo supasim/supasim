@@ -27,7 +27,6 @@ spirv_cross = { version = "0.23", features = [
     "glsl",
 ], optional = true } # git = "https://github.com/SupaMaggie70Incorporated/spirv_cross.git"
 bytemuck.workspace = true
-hassle-rs = "0.11.0"
 spirv-tools-sys = { git = "https://github.com/SupaMaggie70Incorporated/spirv-tools.git", optional = true }
 libc = "0.2"
 

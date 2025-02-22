@@ -22,10 +22,16 @@ pub enum SpirvVersion {
     Cl2_2,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum DxilProfile {
-    // TODO: add correct versions
+pub enum ShaderModel {
     #[default]
-    Sm_,
+    Sm6_0,
+    Sm6_1,
+    Sm6_2,
+    Sm6_3,
+    Sm6_4,
+    Sm6_5,
+    Sm6_6,
+    Sm6_7,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShaderTarget {
@@ -36,7 +42,7 @@ pub enum ShaderTarget {
     Hlsl,
     Glsl,
     Wgsl,
-    Dxil,
+    Dxil { shader_model: ShaderModel },
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StabilityGuarantee {
@@ -192,7 +198,7 @@ impl GlobalState {
                 }
             }
             ShaderTarget::Hlsl => (slang::CompileTarget::Hlsl, false),
-            ShaderTarget::Dxil => (slang::CompileTarget::Hlsl, true),
+            ShaderTarget::Dxil { .. } => (slang::CompileTarget::Dxil, false),
         };
         if options.target == ShaderTarget::Msl && needs_further_transpile {
             #[cfg(not(feature = "msl-stable-out"))]
@@ -207,10 +213,7 @@ impl GlobalState {
                 ));
             }
         }
-        if needs_further_transpile
-            && options.target != ShaderTarget::Dxil
-            && (extra_optim || extra_valid)
-        {
+        if needs_further_transpile && (extra_optim || extra_valid) {
             #[cfg(not(feature = "opt-valid"))]
             {
                 return Err(anyhow!(
@@ -218,7 +221,7 @@ impl GlobalState {
                 ));
             }
         }
-        if needs_further_transpile && options.target != ShaderTarget::Dxil {
+        if needs_further_transpile {
             #[cfg(not(feature = "spirv_cross"))]
             {
                 return Err(anyhow!(
@@ -261,7 +264,7 @@ impl GlobalState {
             opt = opt.include(include);
         }
         if let ShaderTarget::Spirv { version } = options.target {
-            opt = opt.capability(self.slang_session.find_capability(match version {
+            opt = opt.profile(self.slang_session.find_profile(match version {
                 SpirvVersion::V1_0 => "spirv_1_0",
                 SpirvVersion::V1_1 => "spirv_1_1",
                 SpirvVersion::V1_2 => "spirv_1_2",
@@ -274,6 +277,20 @@ impl GlobalState {
                 SpirvVersion::Cl2_1 => "spirv_1_0",
                 SpirvVersion::Cl2_2 => "spirv_1_2",
             }));
+        }
+        if let ShaderTarget::Dxil { shader_model } = options.target {
+            use ShaderModel::*;
+            let profile = self.slang_session.find_profile(match shader_model {
+                Sm6_0 => "cs_6_0",
+                Sm6_1 => "cs_6_1",
+                Sm6_2 => "cs_6_2",
+                Sm6_3 => "cs_6_3",
+                Sm6_4 => "cs_6_4",
+                Sm6_5 => "cs_6_5",
+                Sm6_6 => "cs_6_6",
+                Sm6_7 => "cs_6_7",
+            });
+            opt = opt.profile(profile);
         }
         let session = self
             .slang_session
@@ -299,14 +316,17 @@ impl GlobalState {
         let linked_program = program.link()?;
         let bytecode = linked_program.entry_point_code(0, 0)?;
         let mut _stringcode = String::new();
-        let mut _other_blob = Vec::new();
+        let mut _other_blob = Vec::<u8>::new();
 
+        #[allow(unused_mut)]
         let mut data = bytecode.as_slice();
 
-        if extra_valid && options.target != ShaderTarget::Dxil && needs_further_transpile {
+        #[cfg(feature = "opt-valid")]
+        if extra_valid && needs_further_transpile {
             Self::validate_spv(bytemuck::cast_slice(data), SpirvVersion::V1_0)?;
         }
-        if extra_optim && options.target != ShaderTarget::Dxil && needs_further_transpile {
+        #[cfg(feature = "opt-valid")]
+        if extra_optim && needs_further_transpile {
             _other_blob = Self::optimize_spv(bytemuck::cast_slice(data), SpirvVersion::V1_0)?;
             data = &_other_blob;
         }
@@ -351,17 +371,6 @@ impl GlobalState {
                 _stringcode = spirv::Ast::<spirv_cross::glsl::Target>::parse(&module)?.compile()?;
                 data = _stringcode.as_bytes();
             }
-        } else if options.target == ShaderTarget::Dxil {
-            // TODO: make it use correct profile
-            _other_blob = hassle_rs::compile_hlsl(
-                "input.hlsl",
-                unsafe { std::str::from_utf8_unchecked(data) },
-                options.entry,
-                "cs_6_5",
-                &[],
-                &[],
-            )?;
-            data = &_other_blob;
         }
 
         match options.dest {

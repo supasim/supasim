@@ -6,7 +6,9 @@ use supasim_shaders::*;
 pub fn main() -> Result<()> {
     let ctx = supasim_shaders::GlobalState::new_from_env()?;
     let target = if true {
-        ShaderTarget::Dxil
+        ShaderTarget::Dxil {
+            shader_model: ShaderModel::Sm6_1,
+        }
     } else {
         ShaderTarget::Spirv {
             version: SpirvVersion::V1_2,
