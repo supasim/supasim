@@ -6,10 +6,10 @@ use supasim_shaders::*;
 pub fn main() -> Result<()> {
     let ctx = supasim_shaders::GlobalState::new_from_env()?;
     let target = if true {
-        ShaderTarget::Wgsl
+        ShaderTarget::Dxil
     } else {
-        ShaderTarget::VulkanSpv {
-            capabilities: VulkanCapabilities::default(),
+        ShaderTarget::Spirv {
+            version: SpirvVersion::V1_2,
         }
     };
     ctx.compile_shader(ShaderCompileOptions {
@@ -20,6 +20,8 @@ pub fn main() -> Result<()> {
         include: None,
         fp_mode: Default::default(),
         opt_level: OptimizationLevel::Maximal,
+        stability: StabilityGuarantee::Experimental,
+        minify: true,
     })?;
     Ok(())
 }

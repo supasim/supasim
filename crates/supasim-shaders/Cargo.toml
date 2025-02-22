@@ -10,8 +10,9 @@ license.workspace = true
 
 [features]
 #default = ["msl-out", "wgsl-out"]
-msl-out = ["spirv_cross"]
+msl-stable-out = ["spirv_cross"]
 wgsl-out = ["naga"]
+opt-valid = ["spirv-tools-sys", "spirv_cross"]
 
 
 [dependencies]
@@ -24,10 +25,13 @@ spirv_cross = { version = "0.23", features = [
     "msl",
     "hlsl",
     "glsl",
-], optional = true }
+], optional = true } # git = "https://github.com/SupaMaggie70Incorporated/spirv_cross.git"
 bytemuck.workspace = true
+hassle-rs = "0.11.0"
+spirv-tools-sys = { git = "https://github.com/SupaMaggie70Incorporated/spirv-tools.git", optional = true }
+libc = "0.2"
 
 [[example]]
 name = "simple-shaders"
 path = "examples/simple-shaders.rs"
-required-features = ["msl-out", "wgsl-out"]
+required-features = ["msl-stable-out", "wgsl-out", "opt-valid"]

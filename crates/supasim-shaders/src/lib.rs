@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use rand::Rng;
 use slang::Downcast;
-#[cfg(feature = "msl-out")]
+#[cfg(feature = "spirv_cross")]
 use spirv_cross::spirv;
 use std::{ffi::CString, io::Write, path::Path, str::FromStr};
 use tempfile::tempdir;
@@ -16,21 +16,34 @@ pub enum SpirvVersion {
     V1_4,
     V1_5,
     V1_6,
+    Cl1_2,
+    Cl2_0,
+    Cl2_1,
+    Cl2_2,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct VulkanCapabilities {
-    version: SpirvVersion,
+pub enum DxilProfile {
+    // TODO: add correct versions
+    #[default]
+    Sm_,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShaderTarget {
+    CudaCpp,
     Ptx {},
-    VulkanSpv { capabilities: VulkanCapabilities },
-    OpenClSpv,
-    Hip,
+    Spirv { version: SpirvVersion },
     Msl,
     Hlsl,
     Glsl,
     Wgsl,
+    Dxil,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StabilityGuarantee {
+    ExtraValidation,
+    #[default]
+    Stable,
+    Experimental,
 }
 pub enum ShaderSource<'a> {
     File(&'a Path),
@@ -40,14 +53,16 @@ pub enum ShaderDest<'a> {
     File(&'a Path),
     Memory(&'a mut Vec<u8>),
 }
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ShaderFpMode {
     Fast,
     #[default]
     Precise,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OptimizationLevel {
     None,
+    #[default]
     Standard,
     Maximal,
 }
@@ -59,11 +74,95 @@ pub struct ShaderCompileOptions<'a> {
     pub include: Option<&'a str>,
     pub fp_mode: ShaderFpMode,
     pub opt_level: OptimizationLevel,
+    pub stability: StabilityGuarantee,
+    pub minify: bool,
 }
 pub struct GlobalState {
     slang_session: slang::GlobalSession,
 }
 impl GlobalState {
+    #[cfg(feature = "opt-valid")]
+    pub fn env_from_version(s: SpirvVersion) -> u32 {
+        match s {
+            SpirvVersion::Cl1_2 => spirv_tools_sys::spv_target_env_SPV_ENV_OPENCL_1_2,
+            SpirvVersion::Cl2_0 => spirv_tools_sys::spv_target_env_SPV_ENV_OPENCL_2_0,
+            SpirvVersion::Cl2_1 => spirv_tools_sys::spv_target_env_SPV_ENV_OPENCL_2_1,
+            SpirvVersion::Cl2_2 => spirv_tools_sys::spv_target_env_SPV_ENV_OPENCL_2_2,
+            SpirvVersion::V1_0 => spirv_tools_sys::spv_target_env_SPV_ENV_UNIVERSAL_1_0,
+            SpirvVersion::V1_1 => spirv_tools_sys::spv_target_env_SPV_ENV_UNIVERSAL_1_1,
+            SpirvVersion::V1_2 => spirv_tools_sys::spv_target_env_SPV_ENV_UNIVERSAL_1_2,
+            SpirvVersion::V1_3 => spirv_tools_sys::spv_target_env_SPV_ENV_UNIVERSAL_1_3,
+            SpirvVersion::V1_4 => spirv_tools_sys::spv_target_env_SPV_ENV_UNIVERSAL_1_4,
+            SpirvVersion::V1_5 => spirv_tools_sys::spv_target_env_SPV_ENV_UNIVERSAL_1_5,
+            SpirvVersion::V1_6 => spirv_tools_sys::spv_target_env_SPV_ENV_UNIVERSAL_1_6,
+        }
+    }
+    #[cfg(feature = "opt-valid")]
+    pub fn validate_spv(module: &[u32], s: SpirvVersion) -> Result<()> {
+        use std::{ffi::CStr, ptr::null_mut};
+
+        unsafe {
+            let env = Self::env_from_version(s);
+            let options = spirv_tools_sys::spvValidatorOptionsCreate();
+            let ctx = spirv_tools_sys::spvContextCreate(env);
+            let mut binary = spirv_tools_sys::spv_const_binary_t {
+                code: module.as_ptr() as *mut u32,
+                wordCount: module.len(),
+            };
+            let mut diagnostic = null_mut();
+            let res =
+                spirv_tools_sys::spvValidateWithOptions(ctx, options, &mut binary, &mut diagnostic);
+            let mut out = Ok(());
+            if res < 0 {
+                let diagnostic = &*diagnostic;
+                out = Err(anyhow!(
+                    "Validation error: {}",
+                    CStr::from_ptr(diagnostic.error as *const i8).to_str()?
+                ));
+            }
+            if diagnostic.is_null() {
+                spirv_tools_sys::spvDiagnosticDestroy(diagnostic);
+            }
+            spirv_tools_sys::spvContextDestroy(ctx);
+            spirv_tools_sys::spvValidatorOptionsDestroy(options);
+            out
+        }
+    }
+    // TODO: needs to know whether to minify or do other optimizations
+    #[cfg(feature = "opt-valid")]
+    pub fn optimize_spv(module: &[u32], s: SpirvVersion) -> Result<Vec<u8>> {
+        use std::{ffi::c_void, ptr::null_mut};
+
+        unsafe {
+            let env = Self::env_from_version(s);
+            let optim = spirv_tools_sys::spvOptimizerCreate(env);
+            let options = spirv_tools_sys::spvOptimizerOptionsCreate();
+            // TODO: Set options here
+            let mut optimized = null_mut();
+            let res = spirv_tools_sys::spvOptimizerRun(
+                optim,
+                module.as_ptr(),
+                module.len(),
+                &mut optimized,
+                options,
+            );
+            if res < 0 {
+                return Err(anyhow!("Error in optimization"));
+            }
+            let v = {
+                let optimized = &mut *optimized;
+                Vec::from_raw_parts(
+                    optimized.code as *mut u8,
+                    optimized.wordCount * 4,
+                    optimized.wordCount * 4,
+                )
+            };
+            libc::free(optimized as *mut c_void);
+            spirv_tools_sys::spvOptimizerDestroy(optim);
+            spirv_tools_sys::spvOptimizerOptionsDestroy(options);
+            Ok(v)
+        }
+    }
     pub fn new_from_env() -> Result<Self> {
         let global_session = slang::GlobalSession::new().unwrap();
         Ok(Self {
@@ -71,8 +170,32 @@ impl GlobalState {
         })
     }
     pub fn compile_shader(&self, options: ShaderCompileOptions) -> Result<()> {
-        if options.target == ShaderTarget::Msl {
-            #[cfg(not(feature = "msl-out"))]
+        let extra_optim = options.opt_level == OptimizationLevel::Maximal || options.minify;
+        let extra_valid = options.stability == StabilityGuarantee::ExtraValidation;
+        let (target, needs_further_transpile) = match options.target {
+            ShaderTarget::Ptx {} => (slang::CompileTarget::Ptx, false),
+            ShaderTarget::CudaCpp => (slang::CompileTarget::CudaSource, false),
+            ShaderTarget::Msl => {
+                if extra_optim || options.stability != StabilityGuarantee::Experimental {
+                    (slang::CompileTarget::Spirv, true)
+                } else {
+                    (slang::CompileTarget::Metal, false)
+                }
+            }
+            ShaderTarget::Spirv { .. } => (slang::CompileTarget::Spirv, false),
+            ShaderTarget::Wgsl => (slang::CompileTarget::Spirv, true),
+            ShaderTarget::Glsl => {
+                if extra_optim || extra_valid {
+                    (slang::CompileTarget::Spirv, true)
+                } else {
+                    (slang::CompileTarget::Glsl, false)
+                }
+            }
+            ShaderTarget::Hlsl => (slang::CompileTarget::Hlsl, false),
+            ShaderTarget::Dxil => (slang::CompileTarget::Hlsl, true),
+        };
+        if options.target == ShaderTarget::Msl && needs_further_transpile {
+            #[cfg(not(feature = "msl-stable-out"))]
             {
                 return Err(anyhow!("Shader compiler was not compiled with MSL support"));
             }
@@ -81,6 +204,25 @@ impl GlobalState {
             {
                 return Err(anyhow!(
                     "Shader compiler was not compiled with WGSL support"
+                ));
+            }
+        }
+        if needs_further_transpile
+            && options.target != ShaderTarget::Dxil
+            && (extra_optim || extra_valid)
+        {
+            #[cfg(not(feature = "opt-valid"))]
+            {
+                return Err(anyhow!(
+                    "Shader compiler was not compiled with support for extra validation or optimization"
+                ));
+            }
+        }
+        if needs_further_transpile && options.target != ShaderTarget::Dxil {
+            #[cfg(not(feature = "spirv_cross"))]
+            {
+                return Err(anyhow!(
+                    "Shader compiler was not compiled with advanced cross compilation support"
                 ));
             }
         }
@@ -106,15 +248,6 @@ impl GlobalState {
                 )
             }
         };
-        let target = match options.target {
-            ShaderTarget::Ptx {} | ShaderTarget::Hip => slang::CompileTarget::Ptx,
-            ShaderTarget::Msl
-            | ShaderTarget::OpenClSpv
-            | ShaderTarget::VulkanSpv { .. }
-            | ShaderTarget::Wgsl => slang::CompileTarget::Spirv,
-            ShaderTarget::Glsl => slang::CompileTarget::Glsl,
-            ShaderTarget::Hlsl => slang::CompileTarget::Hlsl,
-        };
         let optim = match options.opt_level {
             OptimizationLevel::None => slang::OptimizationLevel::None,
             OptimizationLevel::Standard => slang::OptimizationLevel::Default,
@@ -127,10 +260,7 @@ impl GlobalState {
         if let Some(include) = options.include {
             opt = opt.include(include);
         }
-        if let ShaderTarget::VulkanSpv {
-            capabilities: VulkanCapabilities { version },
-        } = options.target
-        {
+        if let ShaderTarget::Spirv { version } = options.target {
             opt = opt.capability(self.slang_session.find_capability(match version {
                 SpirvVersion::V1_0 => "spirv_1_0",
                 SpirvVersion::V1_1 => "spirv_1_1",
@@ -139,6 +269,10 @@ impl GlobalState {
                 SpirvVersion::V1_4 => "spirv_1_4",
                 SpirvVersion::V1_5 => "spirv_1_5",
                 SpirvVersion::V1_6 => "spirv_1_6",
+                // Pulled from chatgpt, aka my ass
+                SpirvVersion::Cl1_2 | SpirvVersion::Cl2_0 => unimplemented!(),
+                SpirvVersion::Cl2_1 => "spirv_1_0",
+                SpirvVersion::Cl2_2 => "spirv_1_2",
             }));
         }
         let session = self
@@ -165,11 +299,20 @@ impl GlobalState {
         let linked_program = program.link()?;
         let bytecode = linked_program.entry_point_code(0, 0)?;
         let mut _stringcode = String::new();
+        let mut _other_blob = Vec::new();
 
         let mut data = bytecode.as_slice();
 
+        if extra_valid && options.target != ShaderTarget::Dxil && needs_further_transpile {
+            Self::validate_spv(bytemuck::cast_slice(data), SpirvVersion::V1_0)?;
+        }
+        if extra_optim && options.target != ShaderTarget::Dxil && needs_further_transpile {
+            _other_blob = Self::optimize_spv(bytemuck::cast_slice(data), SpirvVersion::V1_0)?;
+            data = &_other_blob;
+        }
+
         if options.target == ShaderTarget::Msl {
-            #[cfg(feature = "msl-out")]
+            #[cfg(feature = "msl-stable-out")]
             {
                 let vec = bytecode.as_slice().to_owned();
                 let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
@@ -200,6 +343,25 @@ impl GlobalState {
                 )?;
                 data = _stringcode.as_bytes();
             }
+        } else if options.target == ShaderTarget::Glsl {
+            #[cfg(feature = "spirv_cross")]
+            {
+                let vec = bytecode.as_slice().to_owned();
+                let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
+                _stringcode = spirv::Ast::<spirv_cross::glsl::Target>::parse(&module)?.compile()?;
+                data = _stringcode.as_bytes();
+            }
+        } else if options.target == ShaderTarget::Dxil {
+            // TODO: make it use correct profile
+            _other_blob = hassle_rs::compile_hlsl(
+                "input.hlsl",
+                unsafe { std::str::from_utf8_unchecked(data) },
+                options.entry,
+                "cs_6_5",
+                &[],
+                &[],
+            )?;
+            data = &_other_blob;
         }
 
         match options.dest {
