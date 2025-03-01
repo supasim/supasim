@@ -1,6 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["crates/supasim", "crates/supasim-shaders"]
+members = [
+    "crates/supasim",
+    "crates/supasim-hal",
+    "crates/supasim-abstract",
+    "crates/supasim-macros",
+    "crates/supasim-shaders",
+    "crates/supasim-types",
+]
 
 [workspace.package]
 version = "0.0.1"
@@ -27,3 +34,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tempfile = "3.17"
+
+abs = { package = "supasim-abstract", path = "crates/supasim-abstract" }
+hal = { package = "supasim-hal", path = "crates/supasim-hal" }
+macros = { package = "supasim-macros", path = "crates/supasim-macros" }
+shaders = { package = "supasim-shaders", path = "crates/supasim-shaders" }
+types = { package = "supasim-types", path = "crates/supasim-types" }

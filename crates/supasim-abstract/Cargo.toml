@@ -1,5 +1,5 @@
 [package]
-name = "supasim"
+name = "supasim-abstract"
 version.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -7,13 +7,9 @@ edition.workspace = true
 rust-version.workspace = true
 keywords.workspace = true
 license.workspace = true
-readme = "../readme.md"
 
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
 
-abs.workspace = true
-macros.workspace = true
-shaders.workspace = true
-types.workspace = true
+hal.workspace = true

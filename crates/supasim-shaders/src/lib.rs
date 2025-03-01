@@ -1,64 +1,13 @@
 use anyhow::{anyhow, Result};
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use slang::Downcast;
 #[cfg(feature = "spirv_cross")]
 use spirv_cross::spirv;
 use std::{ffi::CString, io::Write, path::Path, str::FromStr};
 use tempfile::tempdir;
+pub use types::{ShaderModel, ShaderTarget, SpirvVersion};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SpirvVersion {
-    V1_0,
-    V1_1,
-    V1_2,
-    V1_3,
-    #[default]
-    V1_4,
-    V1_5,
-    V1_6,
-    Cl1_2,
-    Cl2_0,
-    Cl2_1,
-    Cl2_2,
-}
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ShaderModel {
-    #[default]
-    Sm6_0,
-    Sm6_1,
-    Sm6_2,
-    Sm6_3,
-    Sm6_4,
-    Sm6_5,
-    Sm6_6,
-    Sm6_7,
-}
-impl ShaderModel {
-    pub fn to_str(&self) -> &str {
-        use ShaderModel::*;
-        match self {
-            Sm6_0 => "cs_6_0",
-            Sm6_1 => "cs_6_1",
-            Sm6_2 => "cs_6_2",
-            Sm6_3 => "cs_6_3",
-            Sm6_4 => "cs_6_4",
-            Sm6_5 => "cs_6_5",
-            Sm6_6 => "cs_6_6",
-            Sm6_7 => "cs_6_7",
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ShaderTarget {
-    CudaCpp,
-    Ptx {},
-    Spirv { version: SpirvVersion },
-    Msl,
-    Hlsl,
-    Glsl,
-    Wgsl,
-    Dxil { shader_model: ShaderModel },
-}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StabilityGuarantee {
     ExtraValidation,
@@ -98,6 +47,20 @@ pub struct ShaderCompileOptions<'a> {
     pub stability: StabilityGuarantee,
     pub minify: bool,
 }
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub enum ShaderResourceType {
+    #[default]
+    Unknown,
+    Buffer,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ShaderReflectionInfo {
+    pub workgroup_size: [u32; 3],
+    pub entry_name: String,
+    pub resources: Vec<ShaderResourceType>,
+    pub push_constant_len: u32,
+}
+pub type ShaderCompileError = anyhow::Error;
 pub struct GlobalState {
     slang_session: slang::GlobalSession,
 }
@@ -190,7 +153,7 @@ impl GlobalState {
             slang_session: global_session,
         })
     }
-    pub fn compile_shader(&self, options: ShaderCompileOptions) -> Result<()> {
+    pub fn compile_shader(&self, options: ShaderCompileOptions) -> Result<ShaderReflectionInfo> {
         let extra_optim = options.opt_level == OptimizationLevel::Maximal || options.minify;
         let extra_valid = options.stability == StabilityGuarantee::ExtraValidation;
         let (target, needs_spirv_transpile) = match options.target {
@@ -325,7 +288,45 @@ impl GlobalState {
             .ok_or(anyhow!("Entry point not found"))?;
         let program = session
             .create_composite_component_type(&[module.downcast().clone(), ep.downcast().clone()])?;
+        let mut workgroup_size = [0; 3];
         let linked_program = program.link()?;
+        {
+            let layout = program.layout(0)?;
+            //layout.global_params_type_layout();
+            assert!(layout.entry_point_count() == 1);
+            let ep = layout.entry_point_by_index(0).unwrap();
+            let wgs = ep.compute_thread_group_size();
+            for i in 0..3 {
+                workgroup_size[i] = wgs[i] as u32;
+            }
+            /*for p in ep.parameters() {
+                println!(
+                    "Parameter: bind-index {} bind-space {} sem-name {:?} category {:?} var-name {:?}",
+                    p.binding_index(),
+                    p.binding_space(),
+                    p.semantic_name(),
+                    p.category(),
+                    p.variable().name()
+                )
+            }
+            for p in layout.global_params_type_layout().fields() {
+                println!(
+                    "Parameter: bind-index {} bind-space {} sem-name {:?} category {:?} var-name {:?}",
+                    p.binding_index(),
+                    p.binding_space(),
+                    p.semantic_name(),
+                    p.category(),
+                    p.variable().name()
+                )
+            }*/
+            /*
+            As it stands:
+            We need to find all global params, and filter out the ones unused for a given entry point
+            We need to find all entry point params
+            We need to traverse the tree of structures to find all the actual buffers/whatever
+            We need to figure out which of these have bindings, then collect those
+            */
+        }
         let bytecode = linked_program.entry_point_code(0, 0)?;
         let mut _stringcode = String::new();
         let mut _other_blob = Vec::<u8>::new();
@@ -343,61 +344,57 @@ impl GlobalState {
             data = &_other_blob;
         }
 
-        if options.target == ShaderTarget::Msl {
-            #[cfg(feature = "msl-stable-out")]
-            {
-                let vec = bytecode.as_slice().to_owned();
-                let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
-                _stringcode = spirv::Ast::<spirv_cross::msl::Target>::parse(&module)?.compile()?;
-                data = _stringcode.as_bytes();
-            }
-        } else if options.target == ShaderTarget::Wgsl {
-            #[cfg(feature = "wgsl-out")]
-            {
-                let module = naga::front::spv::parse_u8_slice(
-                    bytecode.as_slice(),
-                    &naga::front::spv::Options {
-                        adjust_coordinate_space: true,
-                        strict_capabilities: false,
-                        block_ctx_dump_prefix: None,
-                    },
-                )?;
-                module.to_ctx();
-                let mut valid = naga::valid::Validator::new(
-                    naga::valid::ValidationFlags::all(),
-                    naga::valid::Capabilities::all(),
-                );
-                let info = valid.validate(&module)?;
-                _stringcode = naga::back::wgsl::write_string(
-                    &module,
-                    &info,
-                    naga::back::wgsl::WriterFlags::empty(),
-                )?;
-                data = _stringcode.as_bytes();
-            }
-        } else if options.target == ShaderTarget::Glsl {
-            #[cfg(feature = "spirv_cross")]
-            {
-                let vec = bytecode.as_slice().to_owned();
-                let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
-                _stringcode = spirv::Ast::<spirv_cross::glsl::Target>::parse(&module)?.compile()?;
-                data = _stringcode.as_bytes();
-            }
-        } else if let ShaderTarget::Dxil { shader_model } = options.target {
-            #[cfg(feature = "dxil-out")]
-            {
-                let dxil = hassle_rs::compile_hlsl(
-                    "intermediate.hlsl",
-                    unsafe { std::str::from_utf8_unchecked(data) },
-                    options.entry,
-                    shader_model.to_str(),
-                    &[],
-                    &[],
-                )?;
-                let dxil = hassle_rs::validate_dxil(&dxil)?;
-                _other_blob = dxil;
-                data = &_other_blob;
-            }
+        #[cfg(feature = "msl-stable-out")]
+        if options.target == ShaderTarget::Msl && needs_spirv_transpile {
+            let vec = bytecode.as_slice().to_owned();
+            let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
+            _stringcode = spirv::Ast::<spirv_cross::msl::Target>::parse(&module)?.compile()?;
+            data = _stringcode.as_bytes();
+        }
+        #[cfg(feature = "wgsl-out")]
+        if options.target == ShaderTarget::Wgsl && needs_spirv_transpile {
+            let module = naga::front::spv::parse_u8_slice(
+                bytecode.as_slice(),
+                &naga::front::spv::Options {
+                    adjust_coordinate_space: true,
+                    strict_capabilities: false,
+                    block_ctx_dump_prefix: None,
+                },
+            )?;
+            module.to_ctx();
+            let mut valid = naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            );
+            let info = valid.validate(&module)?;
+            _stringcode = naga::back::wgsl::write_string(
+                &module,
+                &info,
+                naga::back::wgsl::WriterFlags::empty(),
+            )?;
+            data = _stringcode.as_bytes();
+        }
+
+        #[cfg(feature = "spirv_cross")]
+        if options.target == ShaderTarget::Glsl && needs_spirv_transpile {
+            let vec = bytecode.as_slice().to_owned();
+            let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
+            _stringcode = spirv::Ast::<spirv_cross::glsl::Target>::parse(&module)?.compile()?;
+            data = _stringcode.as_bytes();
+        }
+        #[cfg(feature = "dxil-out")]
+        if let ShaderTarget::Dxil { shader_model } = options.target {
+            let dxil = hassle_rs::compile_hlsl(
+                "intermediate.hlsl",
+                unsafe { std::str::from_utf8_unchecked(data) },
+                options.entry,
+                shader_model.to_str(),
+                &[],
+                &[],
+            )?;
+            let dxil = hassle_rs::validate_dxil(&dxil)?;
+            _other_blob = dxil;
+            data = &_other_blob;
         }
 
         match options.dest {
@@ -408,6 +405,11 @@ impl GlobalState {
                 out.write_all(data)?;
             }
         }
-        Ok(())
+        Ok(ShaderReflectionInfo {
+            entry_name: options.entry.to_owned(),
+            workgroup_size,
+            resources: Vec::new(),
+            push_constant_len: 0,
+        })
     }
 }

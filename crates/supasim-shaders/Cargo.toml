@@ -22,6 +22,7 @@ anyhow.workspace = true
 slang = { git = "https://github.com/supasim/slang-rs.git" }
 rand.workspace = true
 tempfile.workspace = true
+serde.workspace = true
 spirv_cross = { version = "0.23", features = [
     "msl",
     "hlsl",
@@ -32,7 +33,10 @@ spirv-tools-sys = { git = "https://github.com/supasim/spirv-tools.git", optional
 libc = "0.2"
 hassle-rs = { version = "0.11", git = "https://github.com/supasim/hassle-rs.git", optional = true }
 
+types.workspace = true
+
 [[example]]
 name = "simple-shaders"
 path = "examples/simple-shaders.rs"
 required-features = ["msl-stable-out", "wgsl-out", "dxil-out", "opt-valid"]
+# Run command: cargo run --example simple-shaders --features="msl-stable-out wgsl-out dxil-out opt-valid"
