@@ -26,7 +26,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     fn compile_kernel(
         &mut self,
         binary: &[u8],
-        reflection: shaders::ShaderReflectionInfo,
+        reflection: &shaders::ShaderReflectionInfo,
         cache: Option<&mut B::PipelineCache>,
     ) -> Result<B::Kernel, B::Error>;
     fn create_pipeline_cache(&mut self, initial_data: &[u8]) -> Result<B::PipelineCache, B::Error>;
@@ -75,12 +75,12 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     fn create_bind_group(
         &mut self,
         kernel: &mut B::Kernel,
-        resources: &mut [&mut GpuResource<B>],
+        resources: &mut [GpuResource<B>],
     ) -> Result<B::BindGroup, B::Error>;
     fn destroy_bind_group(
         &mut self,
         kernel: &mut B::Kernel,
-        bind_groups: B::BindGroup,
+        bind_group: B::BindGroup,
     ) -> Result<(), B::Error>;
 
     fn create_fence(&mut self) -> Result<B::Fence, B::Error>;
@@ -102,13 +102,26 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     ) -> Result<(), B::Error>;
 }
 pub enum GpuResource<'a, B: Backend> {
-    Buffer(&'a mut B::Buffer),
+    Buffer {
+        buffer: &'a mut B::Buffer,
+        offset: u64,
+        size: u64,
+    },
+}
+impl<'a, B: Backend> GpuResource<'a, B> {
+    pub fn buffer(buffer: &'a mut B::Buffer, offset: u64, size: u64) -> Self {
+        Self::Buffer {
+            buffer,
+            offset,
+            size,
+        }
+    }
 }
 pub struct CommandSynchronization<'a, B: Backend> {
-    pub waits: &'a mut [&'a mut B::Semaphore],
+    pub waits: &'a mut [(&'a mut B::Semaphore, u64)],
     pub resources: &'a mut [&'a mut GpuResource<'a, B>],
     pub out_fence: Option<&'a mut B::Fence>,
-    pub out_semaphore: Option<&'a mut B::Semaphore>,
+    pub out_semaphore: Option<(&'a mut B::Semaphore, u64)>,
 }
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
     fn begin(&mut self, instance: &mut B::Instance, allow_resubmits: bool) -> Result<(), B::Error>;
@@ -183,10 +196,12 @@ pub trait Semaphore<B: Backend<Semaphore = Self>> {
 
 pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub command_recorders: &'a mut [&'a mut B::CommandRecorder],
-    pub wait_semaphores: &'a mut [&'a mut B::Semaphore],
-    pub out_semaphores: &'a mut [&'a mut B::Semaphore],
+    pub wait_semaphores: &'a mut [(&'a mut B::Semaphore, u64)],
+    pub out_semaphores: &'a mut [(&'a mut B::Semaphore, u64)],
 }
 #[must_use]
 pub trait Error<B: Backend<Error = Self>>: std::error::Error {
     fn is_out_of_device_memory(&self) -> bool;
+    fn is_out_of_host_memory(&self) -> bool;
+    fn is_timeout(&self) -> bool;
 }
