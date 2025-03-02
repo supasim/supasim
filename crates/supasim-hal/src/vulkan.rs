@@ -419,7 +419,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                         UploadDownload => gpu_allocator::MemoryLocation::CpuToGpu,
                     },
                     linear: true,
-                    allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged, // TODO: verify this is correct
+                    allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
                 })?;
             self.device
                 .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
@@ -592,7 +592,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                                 .offset(*offset)
                                 .range(*size),
                         );
-                        // TODO: fix Undefined behavior
+                        // TODO: fix (potentially) Undefined behavior
                         write = write.buffer_info(std::slice::from_ref(to_static_lifetime(
                             &buffer_infos[buffer_infos.len() - 1],
                         )));
@@ -651,7 +651,6 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         infos: &mut [RecorderSubmitInfo<Vulkan>],
         fence: Option<&mut VulkanFence>,
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        // TODO: do special stuff with VkTimelineSemaphoreSubmitInfo p_next and timeline semaphores
         let mut semaphore_infos = Vec::new();
         let mut cbs = Vec::new();
         for submit in infos.iter() {
