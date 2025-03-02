@@ -1,45 +1,81 @@
-use std::{
-    ffi::c_void,
-    intrinsics::simd,
-    sync::{Mutex, RwLock},
-};
+use std::sync::Mutex;
 
 use crate::{
-    Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, CompiledKernel, Fence,
-    MappedBuffer, PipelineCache, RecorderSubmitInfo, Semaphore,
+    Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, CompiledKernel, Error, Fence,
+    GpuResource, MappedBuffer, PipelineCache, RecorderSubmitInfo, Semaphore,
 };
-use anyhow::anyhow;
 use ash::vk;
-use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
+use gpu_allocator::{
+    vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
+    AllocationError, AllocationSizes, AllocatorDebugSettings,
+};
+use shaders::ShaderResourceType;
 use thiserror::Error;
-use types::InstanceProperties;
+use types::{to_static_lifetime, BufferDescriptor, InstanceProperties};
 
 pub struct Vulkan;
 impl Backend for Vulkan {
     type Buffer = VulkanBuffer;
-    type CommandRecorder = VulkanCommandRecorder;
     type BindGroup = VulkanBindGroup;
+    type CommandRecorder = VulkanCommandRecorder;
+    type Fence = VulkanFence;
     type Instance = VulkanInstance;
     type Kernel = VulkanKernel;
     type MappedBuffer = VulkanMappedBuffer;
     type PipelineCache = VulkanPipelineCache;
     type Semaphore = VulkanSemaphore;
-    type Fence = VulkanFence;
 
     type Error = VulkanError;
 }
 impl Vulkan {
-    pub fn create_instance() -> VulkanInstance {
+    pub fn create_instance(debug: bool) -> VulkanInstance {
+        //let instance = ash::Instance::load(&vk::InstanceCreateInfo::default().application_info(), instance)
         todo!()
     }
     pub fn from_existing(
-        _instance: ash::Instance,
-        _device: ash::Device,
-        _phyd: vk::PhysicalDevice,
-        _queue: vk::Queue,
-        _queue_family_idx: u32,
-    ) -> VulkanInstance {
-        todo!()
+        debug: bool,
+        instance: ash::Instance,
+        device: ash::Device,
+        phyd: vk::PhysicalDevice,
+        queue: vk::Queue,
+        queue_family_idx: u32,
+        renderer_queue_family_idx: Option<u32>,
+    ) -> Result<VulkanInstance, VulkanError> {
+        unsafe {
+            let alloc = Allocator::new(&AllocatorCreateDesc {
+                instance: instance.clone(),
+                device: device.clone(),
+                physical_device: phyd,
+                debug_settings: if debug {
+                    AllocatorDebugSettings {
+                        log_leaks_on_shutdown: true,
+                        log_stack_traces: true,
+                        log_memory_information: true,
+                        ..Default::default()
+                    }
+                } else {
+                    AllocatorDebugSettings::default()
+                },
+                buffer_device_address: false,
+                allocation_sizes: AllocationSizes::default(),
+            })?;
+            let pool = device.create_command_pool(
+                &vk::CommandPoolCreateInfo::default()
+                    .queue_family_index(queue_family_idx)
+                    .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
+                None,
+            )?;
+            Ok(VulkanInstance {
+                instance,
+                device,
+                phyd,
+                alloc: Mutex::new(alloc),
+                queue,
+                queue_family_idx,
+                renderer_queue_family_idx,
+                pool,
+            })
+        }
     }
 }
 #[derive(Error, Debug)]
@@ -54,6 +90,15 @@ pub enum VulkanError {
     LockError(String),
     #[error("Using compute buffers from an external renderer is currently unsupported")]
     ExternalRendererUnsupported,
+}
+impl crate::Error<Vulkan> for VulkanError {
+    fn is_out_of_device_memory(&self) -> bool {
+        match self {
+            Self::VulkanRaw(e) => *e == vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
+            Self::AllocationError(e) => matches!(AllocationError::OutOfMemory, e),
+            _ => false,
+        }
+    }
 }
 pub struct VulkanInstance {
     instance: ash::Instance,
@@ -92,10 +137,10 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 )?
             } else {
                 let mut v = Vec::<u32>::with_capacity(binary.len() / 4);
-                v.set_len(binary.len() / 4);
                 binary
                     .as_ptr()
                     .copy_to(v.as_mut_ptr() as *mut u8, binary.len());
+                v.set_len(binary.len() / 4);
                 self.device
                     .create_shader_module(&shader_create_info.code(&v), None)?
             };
@@ -121,7 +166,24 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .create_compute_pipelines(cache, &[pipeline_create_info], None)
                 .map_err(|e| e.1)?[0];
             drop(_cache_lock);
-            let desc_set_layout_create = vk::DescriptorSetLayoutCreateInfo::default();
+            let bindings: Vec<_> = reflection
+                .resources
+                .iter()
+                .enumerate()
+                .map(|(i, res)| {
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(i as u32)
+                        .descriptor_count(1)
+                        .descriptor_type(match res {
+                            ShaderResourceType::Buffer => vk::DescriptorType::STORAGE_BUFFER,
+                            ShaderResourceType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
+                            ShaderResourceType::Unknown => panic!("Unknown shader binding"),
+                        })
+                        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                })
+                .collect();
+            let desc_set_layout_create =
+                vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
             let descriptor_set_layout = self
                 .device
                 .create_descriptor_set_layout(&desc_set_layout_create, None)?;
@@ -130,9 +192,25 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 pipeline,
                 pipeline_layout,
                 descriptor_set_layout,
-                push_constant_len: reflection.push_constant_len,
                 descriptor_pools: Vec::new(),
             })
+        }
+    }
+    fn destroy_kernel(
+        &mut self,
+        kernel: <Vulkan as Backend>::Kernel,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            for pool in kernel.descriptor_pools {
+                self.device.destroy_descriptor_pool(pool.pool, None);
+            }
+            self.device
+                .destroy_descriptor_set_layout(kernel.descriptor_set_layout, None);
+            self.device.destroy_pipeline(kernel.pipeline, None);
+            self.device
+                .destroy_pipeline_layout(kernel.pipeline_layout, None);
+            self.device.destroy_shader_module(kernel.shader, None);
+            Ok(())
         }
     }
     fn create_buffer(
@@ -255,49 +333,78 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         kernel: &mut VulkanKernel,
         resources: &mut [&mut crate::GpuResource<Vulkan>],
     ) -> Result<VulkanBindGroup, VulkanError> {
-        let mut num_descriptors_so_far = 0;
-        let mut descriptor_sets = Vec::new();
-        let mut set_layouts = Vec::new();
+        let mut pool_idx = None;
         for (i, pool) in kernel.descriptor_pools.iter_mut().enumerate() {
-            let available = pool.max_size - pool.current_size;
-            if available > 0 {
-                let num_to_allocate = available.min(num as u32 - num_descriptors_so_far);
-                while (set_layouts.len() as u32) < num_to_allocate {
-                    set_layouts.push(kernel.descriptor_set_layout);
-                }
-                unsafe {
-                    let info = vk::DescriptorSetAllocateInfo::default()
-                        .descriptor_pool(pool.pool)
-                        .set_layouts(&set_layouts[0..num_to_allocate as usize]);
-                    let desc = self.device.allocate_descriptor_sets(&info)?;
-                    for d in desc {
-                        descriptor_sets.push(VulkanBindGroup {
-                            inner: d,
-                            pool_idx: i as u32,
-                        })
-                    }
-                }
-                num_descriptors_so_far += num_to_allocate;
-                if num_descriptors_so_far == num {
-                    break;
-                }
+            if pool.max_size > pool.current_size {
+                pool_idx = Some(i);
+                break;
             }
         }
-        if num_descriptors_so_far < num {
-            let next_size = num
-                .max(
-                    kernel
-                        .descriptor_pools
-                        .last()
-                        .map(|s| s.max_size)
-                        .unwrap_or(8),
-                )
+        if pool_idx.is_none() {
+            pool_idx = Some(kernel.descriptor_pools.len());
+            let next_size = kernel
+                .descriptor_pools
+                .last()
+                .map(|s| s.max_size * 2)
+                .unwrap_or(8)
                 .next_power_of_two();
             unsafe {
-                let pool = self.device.create_descriptor_pool(&create_info, none)?;
+                let create_info = vk::DescriptorPoolCreateInfo::default();
+                let pool = self.device.create_descriptor_pool(&create_info, None)?;
+                kernel.descriptor_pools.push(DescriptorPoolData {
+                    pool,
+                    max_size: next_size,
+                    current_size: 0,
+                });
             }
         }
-        Ok(descriptor_sets)
+        let pool_idx = pool_idx.unwrap();
+        unsafe {
+            let alloc_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(kernel.descriptor_pools[pool_idx].pool)
+                .set_layouts(std::slice::from_ref(&kernel.descriptor_set_layout));
+            let descriptor_set = self.device.allocate_descriptor_sets(&alloc_info)?[0];
+            let mut writes = Vec::with_capacity(resources.len());
+            let mut buffer_infos = Vec::new();
+            for (i, resource) in resources.iter().enumerate() {
+                let mut write = vk::WriteDescriptorSet::default()
+                    .dst_set(descriptor_set)
+                    .descriptor_count(1)
+                    .dst_binding(i as u32)
+                    .descriptor_type(match resource {
+                        GpuResource::Buffer(VulkanBuffer {
+                            create_info: BufferDescriptor { uniform, .. },
+                            ..
+                        }) => {
+                            if *uniform {
+                                vk::DescriptorType::UNIFORM_BUFFER
+                            } else {
+                                vk::DescriptorType::STORAGE_BUFFER
+                            }
+                        }
+                    });
+                match resource {
+                    GpuResource::Buffer(b) => {
+                        buffer_infos.push(
+                            vk::DescriptorBufferInfo::default()
+                                .buffer(b.buffer)
+                                .offset(b.allocation.offset())
+                                .range(b.allocation.size()),
+                        );
+                        // TODO: fix Undefined behavior
+                        write = write.buffer_info(std::slice::from_ref(to_static_lifetime(
+                            &buffer_infos[buffer_infos.len() - 1],
+                        )));
+                    }
+                }
+                writes.push(write);
+            }
+            self.device.update_descriptor_sets(&writes, &[]);
+            Ok(VulkanBindGroup {
+                inner: descriptor_set,
+                pool_idx: pool_idx as u32,
+            })
+        }
     }
     fn destroy_bind_groups(
         &mut self,
@@ -305,17 +412,17 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         sets: &mut [&mut <Vulkan as Backend>::BindGroup],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         let mut sets_per_pool = Vec::new();
-        sets_per_pool.resize_with(kernel.descriptor_pools.len(), || Vec::new());
+        sets_per_pool.resize_with(kernel.descriptor_pools.len(), Vec::new);
         for set in sets {
             sets_per_pool[set.pool_idx as usize].push(set.inner);
         }
-        for i in 0..kernel.descriptor_pools.len() {
-            if sets_per_pool[i].len() > 0 {
+        for (i, pool) in kernel.descriptor_pools.iter_mut().enumerate() {
+            if !sets_per_pool[i].is_empty() {
                 unsafe {
                     self.device
-                        .free_descriptor_sets(kernel.descriptor_pools[i].pool, &sets_per_pool[i])?;
+                        .free_descriptor_sets(pool.pool, &sets_per_pool[i])?;
                 }
-                kernel.descriptor_pools[i].current_size -= sets_per_pool[i].len() as u32;
+                pool.current_size -= sets_per_pool[i].len() as u32;
             }
         }
         Ok(())
@@ -435,14 +542,32 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         buffer: &mut <Vulkan as Backend>::Buffer,
         map: &mut <Vulkan as Backend>::MappedBuffer,
     ) -> Result<(), VulkanError> {
-        unsafe {
-            let range = vk::MappedMemoryRange::default()
-                .memory(buffer.allocation.memory())
-                .offset(map.buffer_offset + buffer.allocation.offset())
-                .size(map.slice.len() as u64);
-            self.device.flush_mapped_memory_ranges(&[range])?;
-            Ok(())
+        if buffer.create_info.needs_flush {
+            unsafe {
+                let range = vk::MappedMemoryRange::default()
+                    .memory(buffer.allocation.memory())
+                    .offset(map.buffer_offset + buffer.allocation.offset())
+                    .size(map.slice.len() as u64);
+                self.device.flush_mapped_memory_ranges(&[range])?;
+            }
         }
+        Ok(())
+    }
+    fn update_mapped_buffer(
+        &self,
+        buffer: &mut <Vulkan as Backend>::Buffer,
+        map: &mut <Vulkan as Backend>::MappedBuffer,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        if buffer.create_info.needs_flush {
+            unsafe {
+                let range = vk::MappedMemoryRange::default()
+                    .memory(buffer.allocation.memory())
+                    .offset(map.buffer_offset + buffer.allocation.offset())
+                    .size(map.slice.len() as u64);
+                self.device.invalidate_mapped_memory_ranges(&[range])?;
+            }
+        }
+        Ok(())
     }
     fn unmap_buffer(
         &mut self,
@@ -466,13 +591,112 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         self.unmap_buffer(buffer, b)?;
         Ok(())
     }
+    fn create_fences(
+        &mut self,
+        num: u32,
+    ) -> Result<Vec<<Vulkan as Backend>::Fence>, <Vulkan as Backend>::Error> {
+        unsafe {
+            let mut fences = Vec::new();
+            for _ in 0..num {
+                fences.push(VulkanFence {
+                    inner: self.device.create_fence(
+                        &vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::empty()),
+                        None,
+                    )?,
+                });
+            }
+            Ok(fences)
+        }
+    }
+    fn destroy_fences(
+        &mut self,
+        fences: Vec<<Vulkan as Backend>::Fence>,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            for fence in fences {
+                self.device.destroy_fence(fence.inner, None);
+            }
+            Ok(())
+        }
+    }
+    fn wait_for_fences(
+        &mut self,
+        fences: &mut [&mut <Vulkan as Backend>::Fence],
+        all: bool,
+        timeout_seconds: f32,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            let fences: Vec<_> = fences.iter().map(|f| f.inner).collect();
+            self.device.wait_for_fences(
+                &fences,
+                all,
+                (timeout_seconds * 1_000_000_000.0) as u64,
+            )?;
+            Ok(())
+        }
+    }
+    fn create_semaphores(
+        &mut self,
+        timeline: bool,
+        num: u32,
+    ) -> Result<Vec<<Vulkan as Backend>::Semaphore>, <Vulkan as Backend>::Error> {
+        unsafe {
+            let mut semaphores = Vec::new();
+            let mut ext = vk::SemaphoreTypeCreateInfo::default().semaphore_type(if timeline {
+                vk::SemaphoreType::TIMELINE
+            } else {
+                vk::SemaphoreType::BINARY
+            });
+            let create_info = vk::SemaphoreCreateInfo::default()
+                .flags(vk::SemaphoreCreateFlags::empty())
+                .push_next(&mut ext);
+            for _ in 0..num {
+                semaphores.push(VulkanSemaphore {
+                    inner: self.device.create_semaphore(&create_info, None)?,
+                });
+            }
+            Ok(semaphores)
+        }
+    }
+    fn destroy_semaphores(
+        &mut self,
+        semaphores: Vec<<Vulkan as Backend>::Semaphore>,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        for semaphore in semaphores {
+            unsafe {
+                self.device.destroy_semaphore(semaphore.inner, None);
+            }
+        }
+        Ok(())
+    }
+    fn wait_for_semaphores(
+        &mut self,
+        semaphores: &mut [(&mut <Vulkan as Backend>::Semaphore, u64)],
+        all: bool,
+        timeout: f32,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        let sems: Vec<_> = semaphores.iter().map(|a| a.0.inner).collect();
+        let values: Vec<_> = semaphores.iter().map(|a| a.1).collect();
+        let wait_info = vk::SemaphoreWaitInfo::default()
+            .flags(if all {
+                vk::SemaphoreWaitFlags::empty()
+            } else {
+                vk::SemaphoreWaitFlags::ANY
+            })
+            .semaphores(&sems)
+            .values(&values);
+        unsafe {
+            self.device
+                .wait_semaphores(&wait_info, (timeout * 1_000_000_000.0) as u64)?;
+        }
+        Ok(())
+    }
 }
 pub struct VulkanKernel {
     pub shader: vk::ShaderModule,
     pub pipeline: vk::Pipeline,
     pub descriptor_set_layout: vk::DescriptorSetLayout,
     pub pipeline_layout: vk::PipelineLayout,
-    pub push_constant_len: u32,
     pub descriptor_pools: Vec<DescriptorPoolData>,
 }
 impl CompiledKernel<Vulkan> for VulkanKernel {}
@@ -488,7 +712,7 @@ pub struct VulkanMappedBuffer {
 }
 impl MappedBuffer<Vulkan> for VulkanMappedBuffer {
     fn readable(&mut self) -> &[u8] {
-        &self.slice
+        self.slice
     }
     fn writable(&mut self) -> &mut [u8] {
         self.slice
@@ -507,7 +731,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         src_offset: u64,
         dst_offset: u64,
         size: u64,
-        sync: crate::CommandSynchronization<Vulkan>,
+        _sync: crate::CommandSynchronization<Vulkan>,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             instance.device.cmd_copy_buffer(
@@ -519,8 +743,9 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
                     .dst_offset(dst_offset)
                     .size(size)],
             );
-            todo!()
         }
+        // TODO: Do sync stuff
+        todo!()
     }
     fn dispatch_kernel(
         &mut self,
@@ -529,7 +754,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         descriptor_set: &mut <Vulkan as Backend>::BindGroup,
         push_constants: &[u8],
         workgroup_dims: [u32; 3],
-        sync: crate::CommandSynchronization<Vulkan>,
+        _sync: crate::CommandSynchronization<Vulkan>,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             instance.device.cmd_bind_pipeline(
@@ -559,28 +784,29 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
                 workgroup_dims[2],
             );
         }
+        // TODO: Do sync stuff
         todo!()
     }
     fn dispatch_kernel_indirect(
         &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
-        shader: &mut <Vulkan as Backend>::Kernel,
-        descriptor_set: &mut <Vulkan as Backend>::BindGroup,
-        push_constants: &[u8],
-        indirect_buffer: &mut <Vulkan as Backend>::Buffer,
-        buffer_offset: u64,
-        num_dispatches: u64,
-        validate_dispatches: bool,
-        sync: crate::CommandSynchronization<Vulkan>,
+        _instance: &mut <Vulkan as Backend>::Instance,
+        _shader: &mut <Vulkan as Backend>::Kernel,
+        _descriptor_set: &mut <Vulkan as Backend>::BindGroup,
+        _push_constants: &[u8],
+        _indirect_buffer: &mut <Vulkan as Backend>::Buffer,
+        _buffer_offset: u64,
+        _num_dispatches: u64,
+        _validate_dispatches: bool,
+        _sync: crate::CommandSynchronization<Vulkan>,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         Err(VulkanError::DispatchModeUnsupported)
     }
     fn dispatch_kernel_indirect_count(
         &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
-        shader: &mut <Vulkan as Backend>::Kernel,
-        descriptor_set: &mut <Vulkan as Backend>::BindGroup,
-        push_constants: &[u8],
+        _instance: &mut <Vulkan as Backend>::Instance,
+        _shader: &mut <Vulkan as Backend>::Kernel,
+        _descriptor_set: &mut <Vulkan as Backend>::BindGroup,
+        _push_constants: &[u8],
         indirect_buffer: &mut <Vulkan as Backend>::Buffer,
         buffer_offset: u64,
         count_buffer: &mut <Vulkan as Backend>::Buffer,
@@ -609,8 +835,45 @@ impl PipelineCache<Vulkan> for VulkanPipelineCache {}
 pub struct VulkanSemaphore {
     inner: vk::Semaphore,
 }
-impl Semaphore<Vulkan> for VulkanSemaphore {}
+impl Semaphore<Vulkan> for VulkanSemaphore {
+    fn get_timeline_counter(
+        &mut self,
+        instance: &mut <Vulkan as Backend>::Instance,
+    ) -> Result<u64, <Vulkan as Backend>::Error> {
+        unsafe { Ok(instance.device.get_semaphore_counter_value(self.inner)?) }
+    }
+    fn signal(
+        &mut self,
+        instance: &mut VulkanInstance,
+        signal: u64,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            instance.device.signal_semaphore(
+                &vk::SemaphoreSignalInfo::default()
+                    .semaphore(self.inner)
+                    .value(signal),
+            )?;
+            Ok(())
+        }
+    }
+}
 pub struct VulkanFence {
     inner: vk::Fence,
 }
-impl Fence<Vulkan> for VulkanFence {}
+impl Fence<Vulkan> for VulkanFence {
+    fn get_signalled(
+        &mut self,
+        instance: &mut <Vulkan as Backend>::Instance,
+    ) -> Result<bool, <Vulkan as Backend>::Error> {
+        unsafe { Ok(instance.device.get_fence_status(self.inner)?) }
+    }
+    fn reset(
+        &mut self,
+        instance: &mut <Vulkan as Backend>::Instance,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            instance.device.reset_fences(&[self.inner])?;
+            Ok(())
+        }
+    }
+}

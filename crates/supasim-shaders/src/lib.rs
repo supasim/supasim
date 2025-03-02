@@ -52,6 +52,7 @@ pub enum ShaderResourceType {
     #[default]
     Unknown,
     Buffer,
+    UniformBuffer,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ShaderReflectionInfo {

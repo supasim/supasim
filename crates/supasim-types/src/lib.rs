@@ -84,7 +84,10 @@ pub struct InstanceProperties {
     pub pipeline_cache: bool,
     pub shader_type: ShaderTarget,
 }
-pub fn to_static_lifetime<T>(r: &T) -> &'static T {
+pub fn to_static_lifetime<T>(r: &T) -> &'static T
+where
+    T: ?Sized,
+{
     unsafe {
         let r = r as *const T;
         &*r

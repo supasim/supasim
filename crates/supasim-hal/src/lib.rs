@@ -1,5 +1,10 @@
 #[cfg(feature = "vulkan")]
 mod vulkan;
+#[cfg(feature = "vulkan")]
+pub use vulkan::{
+    Vulkan, VulkanBindGroup, VulkanBuffer, VulkanCommandRecorder, VulkanError, VulkanFence,
+    VulkanInstance, VulkanKernel, VulkanMappedBuffer, VulkanPipelineCache, VulkanSemaphore,
+};
 
 use types::*;
 
@@ -14,7 +19,7 @@ pub trait Backend: Sized {
     type Fence: Fence<Self>;
     type Semaphore: Semaphore<Self>;
 
-    type Error: std::error::Error;
+    type Error: Error<Self>;
 }
 pub trait BackendInstance<B: Backend<Instance = Self>> {
     fn get_properties(&mut self) -> InstanceProperties;
@@ -58,6 +63,11 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
         buffer: &mut B::Buffer,
         map: &mut B::MappedBuffer,
     ) -> Result<(), B::Error>;
+    fn update_mapped_buffer(
+        &self,
+        buffer: &mut B::Buffer,
+        map: &mut B::MappedBuffer,
+    ) -> Result<(), B::Error>;
     fn unmap_buffer(
         &mut self,
         buffer: &mut B::Buffer,
@@ -91,24 +101,22 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     fn destroy_semaphores(&mut self, semaphores: Vec<B::Semaphore>) -> Result<(), B::Error>;
     fn wait_for_semaphores(
         &mut self,
-        semaphores: &mut [&mut B::Semaphore],
+        semaphores: &mut [(&mut B::Semaphore, u64)],
+        all: bool,
         timeout: f32,
     ) -> Result<(), B::Error>;
-    fn get_timeline_semaphore_counter(
-        &mut self,
-        semaphore: &mut B::Semaphore,
-    ) -> Result<u64, B::Error>;
 }
 pub enum GpuResource<'a, B: Backend> {
     Buffer(&'a mut B::Buffer),
 }
 pub struct CommandSynchronization<'a, B: Backend> {
-    waits: &'a mut [&'a mut B::Semaphore],
-    resources: &'a mut [&'a mut GpuResource<'a, B>],
-    out_fence: Option<&'a mut B::Fence>,
-    out_semaphore: Option<&'a mut B::Semaphore>,
+    pub waits: &'a mut [&'a mut B::Semaphore],
+    pub resources: &'a mut [&'a mut GpuResource<'a, B>],
+    pub out_fence: Option<&'a mut B::Fence>,
+    pub out_semaphore: Option<&'a mut B::Semaphore>,
 }
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
+    #[allow(clippy::too_many_arguments)]
     fn copy_buffer(
         &mut self,
         instance: &mut B::Instance,
@@ -167,11 +175,20 @@ pub trait Buffer<B: Backend<Buffer = Self>> {}
 pub trait BindGroup<B: Backend<BindGroup = Self>> {}
 pub trait PipelineCache<B: Backend<PipelineCache = Self>> {}
 /// Only used for when an entire submit completes
-pub trait Fence<B: Backend<Fence = Self>> {}
-pub trait Semaphore<B: Backend<Semaphore = Self>> {}
+pub trait Fence<B: Backend<Fence = Self>> {
+    fn reset(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
+    fn get_signalled(&mut self, instance: &mut B::Instance) -> Result<bool, B::Error>;
+}
+pub trait Semaphore<B: Backend<Semaphore = Self>> {
+    fn get_timeline_counter(&mut self, instance: &mut B::Instance) -> Result<u64, B::Error>;
+    fn signal(&mut self, instance: &mut B::Instance, signal: u64) -> Result<(), B::Error>;
+}
 
 pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub command_recorders: &'a mut [&'a mut B::CommandRecorder],
     pub wait_semaphores: &'a mut [&'a mut B::Semaphore],
     pub out_semaphores: &'a mut [&'a mut B::Semaphore],
+}
+pub trait Error<B: Backend<Error = Self>>: std::error::Error {
+    fn is_out_of_device_memory(&self) -> bool;
 }
