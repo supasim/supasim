@@ -753,14 +753,14 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                         .as_ptr() as *mut u8,
                     size as usize,
                 ),
-                buffer_offset: offset,
+                _buffer_offset: offset,
             })
         }
     }
     fn flush_mapped_buffer(
         &self,
-        buffer: &mut <Vulkan as Backend>::Buffer,
-        map: &mut <Vulkan as Backend>::MappedBuffer,
+        _buffer: &mut <Vulkan as Backend>::Buffer,
+        _map: &mut <Vulkan as Backend>::MappedBuffer,
     ) -> Result<(), VulkanError> {
         /*if buffer.create_info.needs_flush {
             unsafe {
@@ -778,8 +778,8 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     fn update_mapped_buffer(
         &self,
-        buffer: &mut <Vulkan as Backend>::Buffer,
-        map: &mut <Vulkan as Backend>::MappedBuffer,
+        _buffer: &mut <Vulkan as Backend>::Buffer,
+        _map: &mut <Vulkan as Backend>::MappedBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         /*if buffer.create_info.needs_flush {
             unsafe {
@@ -797,7 +797,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     fn unmap_buffer(
         &mut self,
-        buffer: &mut <Vulkan as Backend>::Buffer,
+        _buffer: &mut <Vulkan as Backend>::Buffer,
         _map: <Vulkan as Backend>::MappedBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         // unsafe {self.device.unmap_memory(buffer.allocation.memory());}
@@ -935,7 +935,7 @@ pub struct VulkanBuffer {
 impl Buffer<Vulkan> for VulkanBuffer {}
 pub struct VulkanMappedBuffer {
     slice: &'static mut [u8],
-    buffer_offset: u64,
+    _buffer_offset: u64,
 }
 impl MappedBuffer<Vulkan> for VulkanMappedBuffer {
     fn readable(&mut self) -> &[u8] {
