@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
 use crate::{
-    Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, CompiledKernel, Error, Fence,
+    Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, CompiledKernel, Fence,
     GpuResource, MappedBuffer, PipelineCache, RecorderSubmitInfo, Semaphore,
 };
 use ash::vk;
@@ -28,7 +28,7 @@ impl Backend for Vulkan {
     type Error = VulkanError;
 }
 impl Vulkan {
-    pub fn create_instance(debug: bool) -> VulkanInstance {
+    pub fn create_instance(_debug: bool) -> VulkanInstance {
         //let instance = ash::Instance::load(&vk::InstanceCreateInfo::default().application_info(), instance)
         todo!()
     }
@@ -95,11 +95,12 @@ impl crate::Error<Vulkan> for VulkanError {
     fn is_out_of_device_memory(&self) -> bool {
         match self {
             Self::VulkanRaw(e) => *e == vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
-            Self::AllocationError(e) => matches!(AllocationError::OutOfMemory, e),
+            Self::AllocationError(e) => matches!(e, AllocationError::OutOfMemory),
             _ => false,
         }
     }
 }
+#[allow(dead_code)]
 pub struct VulkanInstance {
     instance: ash::Instance,
     device: ash::Device,
@@ -807,13 +808,13 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         _shader: &mut <Vulkan as Backend>::Kernel,
         _descriptor_set: &mut <Vulkan as Backend>::BindGroup,
         _push_constants: &[u8],
-        indirect_buffer: &mut <Vulkan as Backend>::Buffer,
-        buffer_offset: u64,
-        count_buffer: &mut <Vulkan as Backend>::Buffer,
-        count_offset: u64,
-        max_dispatches: u64,
-        validate_dispatches: bool,
-        sync: crate::CommandSynchronization<Vulkan>,
+        _indirect_buffer: &mut <Vulkan as Backend>::Buffer,
+        _buffer_offset: u64,
+        _count_buffer: &mut <Vulkan as Backend>::Buffer,
+        _count_offset: u64,
+        _max_dispatches: u64,
+        _validate_dispatches: bool,
+        _sync: crate::CommandSynchronization<Vulkan>,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         Err(VulkanError::DispatchModeUnsupported)
     }

@@ -48,7 +48,7 @@ pub trait GpuResource<B: Backend>: Clone {
 pub trait WaitHandle<B: Backend>: Clone + std::ops::Add {
     fn wait(&self);
 }
-pub trait CommandRecorder<B: Backend>: Clone + CommandRecordContext<B> {
+pub trait CommandRecorder<B: Backend>: Clone {
     fn clear(&self) -> SupaSimResult<()>;
     fn dispatch_kernel(
         &self,
@@ -64,7 +64,6 @@ pub trait CommandRecorder<B: Backend>: Clone + CommandRecordContext<B> {
     ) -> SupaSimResult<B::WaitHandle>;
     fn create_buffer(&self, alloc_info: &types::BufferDescriptor) -> SupaSimResult<B::Buffer>;
     fn destroy_buffer(&self, buffer: B::Buffer) -> SupaSimResult<()>;
-    fn create_subrecorder(&self, wait: Option<B::WaitHandle>) -> SupaSimResult<B::SubRecorder>;
     fn recorder_wait_handle(&self) -> SupaSimResult<B::WaitHandle>;
     fn map_buffer(&self, buffer: &B::Buffer);
     fn unmap_buffer(&self, buffer: &B::Buffer) -> SupaSimResult<()>;
@@ -81,9 +80,8 @@ pub trait Buffer<B: Backend>: GpuResource<B> + Clone {
     fn get_mapped(&self) -> SupaSimResult<B::MappedBuffer>;
 }
 
-pub trait RecorderIndirectExt<
-    B: Backend<CommandRecorder: RecorderIndirectExt<B>, SubRecorder: RecorderIndirectExt<B>>,
->: Clone + CommandRecordContext<B>
+pub trait RecorderIndirectExt<B: Backend<CommandRecorder: RecorderIndirectExt<B>>>:
+    Clone + CommandRecorder<B>
 {
     fn dispatch_kernel_indirect(
         &self,
