@@ -9,7 +9,8 @@ keywords.workspace = true
 license.workspace = true
 
 [features]
-cuda = ["cust"]                   # Potential cuda libraries: cust, cudarc
+default = ["vulkan", "cuda", "wgpu"]
+cuda = ["cust"]                      # Potential cuda libraries: cust, cudarc
 wgpu = ["dep:wgpu"]
 vulkan = ["ash", "gpu-allocator"]
 
