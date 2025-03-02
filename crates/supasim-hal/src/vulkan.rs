@@ -1,10 +1,11 @@
-use std::sync::Mutex;
+use core::ffi;
+use std::{borrow::Cow, sync::Mutex};
 
 use crate::{
     Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, CompiledKernel, Fence,
     GpuResource, MappedBuffer, PipelineCache, RecorderSubmitInfo, Semaphore,
 };
-use ash::vk;
+use ash::{vk, Entry};
 use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
     AllocationError, AllocationSizes, AllocatorDebugSettings,
@@ -12,6 +13,34 @@ use gpu_allocator::{
 use shaders::ShaderResourceType;
 use thiserror::Error;
 use types::{to_static_lifetime, BufferDescriptor, InstanceProperties};
+
+pub unsafe extern "system" fn vulkan_debug_callback(
+    message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    message_type: vk::DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
+    _user_data: *mut std::os::raw::c_void,
+) -> vk::Bool32 {
+    let callback_data = *p_callback_data;
+    let message_id_number = callback_data.message_id_number;
+
+    let message_id_name = if callback_data.p_message_id_name.is_null() {
+        Cow::from("")
+    } else {
+        ffi::CStr::from_ptr(callback_data.p_message_id_name).to_string_lossy()
+    };
+
+    let message = if callback_data.p_message.is_null() {
+        Cow::from("")
+    } else {
+        ffi::CStr::from_ptr(callback_data.p_message).to_string_lossy()
+    };
+
+    println!(
+        "{message_severity:?}: {message_type:?} [{message_id_name} ({message_id_number})] : {message}\n",
+    );
+
+    vk::FALSE
+}
 
 pub struct Vulkan;
 impl Backend for Vulkan {
@@ -28,18 +57,98 @@ impl Backend for Vulkan {
     type Error = VulkanError;
 }
 impl Vulkan {
-    pub fn create_instance(_debug: bool) -> VulkanInstance {
-        //let instance = ash::Instance::load(&vk::InstanceCreateInfo::default().application_info(), instance)
-        todo!()
+    pub fn create_instance(debug: bool) -> Result<VulkanInstance, VulkanError> {
+        unsafe {
+            let entry = Entry::load()?;
+            let app_info =
+                vk::ApplicationInfo::default().api_version(vk::make_api_version(0, 1, 2, 0));
+            let validation_layers = if debug {
+                vec![c"VK_LAYER_KHRONOS_validation".as_ptr()]
+            } else {
+                Vec::new()
+            };
+            let extension_names = if debug {
+                vec![ash::ext::debug_utils::NAME.as_ptr()]
+            } else {
+                Vec::new()
+            };
+            let instance = entry.create_instance(
+                &vk::InstanceCreateInfo::default()
+                    .application_info(&app_info)
+                    .enabled_layer_names(&validation_layers)
+                    .enabled_extension_names(&extension_names),
+                None,
+            )?;
+            let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+                .message_severity(
+                    vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
+                        | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                        | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
+                )
+                .message_type(
+                    vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                        | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                        | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+                )
+                .pfn_user_callback(Some(vulkan_debug_callback));
+            let debug_utils_loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
+            let debug_callback =
+                debug_utils_loader.create_debug_utils_messenger(&debug_info, None)?;
+            // TODO: add phyd filtering
+            let (phyd, queue_family_idx) = instance
+                .enumerate_physical_devices()?
+                .iter()
+                .find_map(|phyd| {
+                    let queue_families =
+                        instance.get_physical_device_queue_family_properties(*phyd);
+                    queue_families
+                        .iter()
+                        .enumerate()
+                        .find_map(|(i, q)| {
+                            if q.queue_flags
+                                .contains(vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER)
+                            {
+                                Some(i)
+                            } else {
+                                None
+                            }
+                        })
+                        .map(|i| (*phyd, i as u32))
+                })
+                .ok_or(VulkanError::NoSupportedDevice)?;
+            // TODO: multiple queues. currently we only use a general queue, but this could potentially be optimized by using special compute queues and special transfer queues
+            let queue_priority = 1.0;
+            let queue_create_info = vk::DeviceQueueCreateInfo::default()
+                .queue_priorities(std::slice::from_ref(&queue_priority))
+                .queue_family_index(queue_family_idx);
+            let dev_create_info = vk::DeviceCreateInfo::default()
+                .queue_create_infos(std::slice::from_ref(&queue_create_info));
+            let device = instance.create_device(phyd, &dev_create_info, None)?;
+            let queue = device.get_device_queue(queue_family_idx, 0);
+            Self::from_existing(
+                debug,
+                entry,
+                instance,
+                device,
+                phyd,
+                queue,
+                queue_family_idx,
+                None,
+                Some(debug_callback),
+            )
+        }
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn from_existing(
         debug: bool,
+        entry: ash::Entry,
         instance: ash::Instance,
         device: ash::Device,
         phyd: vk::PhysicalDevice,
         queue: vk::Queue,
         queue_family_idx: u32,
         renderer_queue_family_idx: Option<u32>,
+        debug_callback: Option<vk::DebugUtilsMessengerEXT>,
     ) -> Result<VulkanInstance, VulkanError> {
         unsafe {
             let alloc = Allocator::new(&AllocatorCreateDesc {
@@ -66,6 +175,7 @@ impl Vulkan {
                 None,
             )?;
             Ok(VulkanInstance {
+                entry,
                 instance,
                 device,
                 phyd,
@@ -74,6 +184,7 @@ impl Vulkan {
                 queue_family_idx,
                 renderer_queue_family_idx,
                 pool,
+                debug: debug_callback,
             })
         }
     }
@@ -83,6 +194,8 @@ pub enum VulkanError {
     #[error("{0}")]
     VulkanRaw(#[from] vk::Result),
     #[error("{0}")]
+    VulkanLoadError(#[from] ash::LoadingError),
+    #[error("{0}")]
     AllocationError(#[from] gpu_allocator::AllocationError),
     #[error("An unsupported dispatch mode(indirect) was called")]
     DispatchModeUnsupported,
@@ -90,6 +203,8 @@ pub enum VulkanError {
     LockError(String),
     #[error("Using compute buffers from an external renderer is currently unsupported")]
     ExternalRendererUnsupported,
+    #[error("No supported vulkan device")]
+    NoSupportedDevice,
 }
 impl crate::Error<Vulkan> for VulkanError {
     fn is_out_of_device_memory(&self) -> bool {
@@ -102,6 +217,7 @@ impl crate::Error<Vulkan> for VulkanError {
 }
 #[allow(dead_code)]
 pub struct VulkanInstance {
+    entry: ash::Entry,
     instance: ash::Instance,
     device: ash::Device,
     phyd: vk::PhysicalDevice,
@@ -110,6 +226,7 @@ pub struct VulkanInstance {
     queue_family_idx: u32,
     renderer_queue_family_idx: Option<u32>,
     pool: vk::CommandPool,
+    debug: Option<vk::DebugUtilsMessengerEXT>,
 }
 impl BackendInstance<Vulkan> for VulkanInstance {
     fn get_properties(&mut self) -> InstanceProperties {
@@ -349,8 +466,34 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .map(|s| s.max_size * 2)
                 .unwrap_or(8)
                 .next_power_of_two();
+            let mut num_buffers = 0;
+            let mut num_uniform_buffers = 0;
+            for res in resources.iter() {
+                match res {
+                    GpuResource::Buffer(VulkanBuffer {
+                        create_info: BufferDescriptor { uniform, .. },
+                        ..
+                    }) => {
+                        if *uniform {
+                            num_uniform_buffers += 1;
+                        } else {
+                            num_buffers += 1;
+                        }
+                    }
+                }
+            }
+            let sizes = [
+                vk::DescriptorPoolSize::default()
+                    .descriptor_count(num_buffers * next_size)
+                    .ty(vk::DescriptorType::STORAGE_BUFFER),
+                vk::DescriptorPoolSize::default()
+                    .descriptor_count(num_uniform_buffers * next_size)
+                    .ty(vk::DescriptorType::UNIFORM_BUFFER),
+            ];
             unsafe {
-                let create_info = vk::DescriptorPoolCreateInfo::default();
+                let create_info = vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(next_size)
+                    .pool_sizes(&sizes);
                 let pool = self.device.create_descriptor_pool(&create_info, None)?;
                 kernel.descriptor_pools.push(DescriptorPoolData {
                     pool,
@@ -691,6 +834,19 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .wait_semaphores(&wait_info, (timeout * 1_000_000_000.0) as u64)?;
         }
         Ok(())
+    }
+}
+impl VulkanInstance {
+    pub fn destroy(self) {
+        unsafe {
+            self.device.destroy_command_pool(self.pool, None);
+            self.device.destroy_device(None);
+            if let Some(debug) = self.debug {
+                ash::ext::debug_utils::Instance::new(&self.entry, &self.instance)
+                    .destroy_debug_utils_messenger(debug, None);
+            }
+            self.instance.destroy_instance(None);
+        }
     }
 }
 pub struct VulkanKernel {

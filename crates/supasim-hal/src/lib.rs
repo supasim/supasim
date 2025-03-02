@@ -23,7 +23,6 @@ pub trait Backend: Sized {
 }
 pub trait BackendInstance<B: Backend<Instance = Self>> {
     fn get_properties(&mut self) -> InstanceProperties;
-
     fn compile_kernel(
         &mut self,
         binary: &[u8],

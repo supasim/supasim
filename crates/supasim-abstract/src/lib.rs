@@ -1,3 +1,10 @@
+//! Issues this must handle:
+//!
+//! * Sharing references/multithreading
+//! * Moving buffers in and out of GPU memory when OOM is hit
+//! * Synchronization/creation and synchronization of command buffers
+//! * Lazy operations
+//! * Combine/optimize allocations and creation of things
 use std::sync::{Arc, RwLock, RwLockWriteGuard};
 use thiserror::Error;
 
@@ -37,5 +44,10 @@ impl<B: hal::Backend> Instance<B> {
                 .map_err(|e| SupaSimError::Poison(e.to_string()))?,
             Default::default(),
         ))
+    }
+    pub fn from_inner(inner: B::Instance) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(InstanceInner { inner })),
+        }
     }
 }

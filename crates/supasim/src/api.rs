@@ -4,6 +4,7 @@
 use std::ops::{Deref, DerefMut};
 
 use thiserror::Error;
+use types::InstanceProperties;
 
 #[derive(Error, Debug)]
 pub enum SupaSimError {
@@ -24,29 +25,38 @@ pub trait Backend: Sized {
     type DynResource: GpuResource<Self>;
     type WaitHandle: WaitHandle<Self>;
     type CommandRecorder: CommandRecorder<Self>;
+    type BindGroup: BindGroup<Self>;
+    type PipelineCache: PipelineCache<Self>;
 }
 pub trait BackendInstance<B: Backend>: Clone {
-    fn shader_format(&self) -> types::ShaderTarget;
-    /// Whether or not the system should wait until the last moment to do certain actions. May allow more efficient bundling/memory sharing/certain optimizations
-    fn set_lazy(&self, lazy: bool) -> SupaSimResult<()>;
+    fn properties(&self) -> InstanceProperties;
     fn compile_kernel(
         &self,
         binary: &[u8],
         reflection: shaders::ShaderReflectionInfo,
     ) -> SupaSimResult<B::Kernel>;
-    fn destroy_kernel(&self, kernel: B::Kernel) -> SupaSimResult<()>;
+    fn create_pipeline_cache(&self, data: &[u8]) -> SupaSimResult<B::PipelineCache>;
+    fn create_recorder(&self) -> SupaSimResult<B::CommandRecorder>;
+    fn create_bind_group(
+        &self,
+        kernel: &B::Kernel,
+        resources: &[&B::DynResource],
+    ) -> SupaSimResult<B::BindGroup>;
+    fn create_buffer(&self, alloc_info: &types::BufferDescriptor) -> SupaSimResult<B::Buffer>;
+    fn submit_commands(&self, recorders: &[&B::CommandRecorder]) -> SupaSimResult<B::WaitHandle>;
+    fn wait_for_any(&self, wait_handles: &[B::WaitHandle]);
     /// Wait for all compute work to complete on the GPU.
     fn wait_for_idle(&self) -> SupaSimResult<()>;
     /// Do all work that might take time, such as building yet unused compute pipelines. Useful in benchmarking.
     fn do_busywork(&self) -> SupaSimResult<()>;
-    fn create_recorder(&self) -> SupaSimResult<B::CommandRecorder>;
-    fn submit_commands(&self, recorder: &B::CommandRecorder) -> SupaSimResult<B::WaitHandle>;
+    fn destroy(self) -> SupaSimResult<()>;
 }
 pub trait GpuResource<B: Backend>: Clone {
     fn as_buffer(&self) -> Option<&B::Buffer>;
+    fn destroy(self) -> SupaSimResult<()>;
 }
 pub trait WaitHandle<B: Backend>: Clone + std::ops::Add {
-    fn wait(&self);
+    fn destroy(self) -> SupaSimResult<()>;
 }
 pub trait CommandRecorder<B: Backend>: Clone {
     fn clear(&self) -> SupaSimResult<()>;
@@ -55,20 +65,21 @@ pub trait CommandRecorder<B: Backend>: Clone {
         shader: B::Kernel,
         dispatch_info: &ComputeDispatchInfo<B>,
         workgroup_dims: [u32; 3],
-    ) -> SupaSimResult<B::WaitHandle>;
+        return_wait: bool,
+    ) -> SupaSimResult<Option<B::WaitHandle>>;
     #[allow(clippy::type_complexity)]
     fn cpu_code(
         &self,
         closure: Box<dyn Fn(&[B::MappedBuffer]) -> anyhow::Result<()>>,
         buffers: &[&B::Buffer],
-    ) -> SupaSimResult<B::WaitHandle>;
-    fn create_buffer(&self, alloc_info: &types::BufferDescriptor) -> SupaSimResult<B::Buffer>;
-    fn destroy_buffer(&self, buffer: B::Buffer) -> SupaSimResult<()>;
+        return_wait: bool,
+    ) -> SupaSimResult<Option<B::WaitHandle>>;
     fn recorder_wait_handle(&self) -> SupaSimResult<B::WaitHandle>;
-    fn map_buffer(&self, buffer: &B::Buffer);
-    fn unmap_buffer(&self, buffer: &B::Buffer) -> SupaSimResult<()>;
+    fn destroy(self) -> SupaSimResult<()>;
 }
-pub trait CompiledKernel<B: Backend>: Clone {}
+pub trait CompiledKernel<B: Backend>: Clone {
+    fn destroy(self) -> SupaSimResult<()>;
+}
 pub trait MappedBuffer<B: Backend>: Clone + std::io::Read + std::io::Write {
     type ReadLock: Deref<Target = [u8]>;
     type WriteLock: DerefMut<Target = [u8]>;
@@ -77,12 +88,14 @@ pub trait MappedBuffer<B: Backend>: Clone + std::io::Read + std::io::Write {
 }
 pub trait Buffer<B: Backend>: GpuResource<B> + Clone {
     fn resize(&self, new_size: u64, force_resize: bool) -> SupaSimResult<()>;
+    fn map(&self, offset: u64, size: u64) -> SupaSimResult<B::MappedBuffer>;
     fn get_mapped(&self) -> SupaSimResult<B::MappedBuffer>;
+    fn unmap(&self) -> SupaSimResult<()>;
+    fn destroy(self) -> SupaSimResult<()>;
 }
 
-pub trait RecorderIndirectExt<B: Backend<CommandRecorder: RecorderIndirectExt<B>>>:
-    Clone + CommandRecorder<B>
-{
+pub trait RecorderIndirectExt<B: Backend>: Clone + CommandRecorder<B> {
+    #[allow(clippy::too_many_arguments)]
     fn dispatch_kernel_indirect(
         &self,
         shader: B::Kernel,
@@ -91,7 +104,8 @@ pub trait RecorderIndirectExt<B: Backend<CommandRecorder: RecorderIndirectExt<B>
         buffer_offset: u64,
         num_dispatches: u64,
         validate_dispatches: bool,
-    );
+        return_wait: bool,
+    ) -> SupaSimResult<Option<B::WaitHandle>>;
     #[allow(clippy::too_many_arguments)]
     fn dispatch_kernel_indirect_count(
         &self,
@@ -103,5 +117,13 @@ pub trait RecorderIndirectExt<B: Backend<CommandRecorder: RecorderIndirectExt<B>
         count_offset: u64,
         max_dispatches: u64,
         validate_dispatches: bool,
-    );
+        return_wait: bool,
+    ) -> SupaSimResult<Option<B::WaitHandle>>;
+}
+pub trait BindGroup<B: Backend>: Clone {
+    fn destroy(self) -> SupaSimResult<()>;
+}
+pub trait PipelineCache<B: Backend>: Clone {
+    fn get_data(&self) -> Vec<u8>;
+    fn destroy(self) -> SupaSimResult<()>;
 }
