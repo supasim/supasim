@@ -77,14 +77,14 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
         kernel: &mut B::Kernel,
         resources: &mut [&mut GpuResource<B>],
     ) -> Result<B::BindGroup, B::Error>;
-    fn destroy_bind_groups(
+    fn destroy_bind_group(
         &mut self,
         kernel: &mut B::Kernel,
-        bind_groups: &mut [&mut B::BindGroup],
+        bind_groups: B::BindGroup,
     ) -> Result<(), B::Error>;
 
-    fn create_fences(&mut self, num: u32) -> Result<Vec<B::Fence>, B::Error>;
-    fn destroy_fences(&mut self, fences: Vec<B::Fence>) -> Result<(), B::Error>;
+    fn create_fence(&mut self) -> Result<B::Fence, B::Error>;
+    fn destroy_fence(&mut self, fence: B::Fence) -> Result<(), B::Error>;
     fn wait_for_fences(
         &mut self,
         fences: &mut [&mut B::Fence],
@@ -92,12 +92,8 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
         timeout_seconds: f32,
     ) -> Result<(), B::Error>;
 
-    fn create_semaphores(
-        &mut self,
-        timeline: bool,
-        num: u32,
-    ) -> Result<Vec<B::Semaphore>, B::Error>;
-    fn destroy_semaphores(&mut self, semaphores: Vec<B::Semaphore>) -> Result<(), B::Error>;
+    fn create_semaphore(&mut self, timeline: bool) -> Result<B::Semaphore, B::Error>;
+    fn destroy_semaphore(&mut self, semaphore: B::Semaphore) -> Result<(), B::Error>;
     fn wait_for_semaphores(
         &mut self,
         semaphores: &mut [(&mut B::Semaphore, u64)],
@@ -115,6 +111,8 @@ pub struct CommandSynchronization<'a, B: Backend> {
     pub out_semaphore: Option<&'a mut B::Semaphore>,
 }
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
+    fn begin(&mut self, instance: &mut B::Instance, allow_resubmits: bool) -> Result<(), B::Error>;
+    fn end(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
     #[allow(clippy::too_many_arguments)]
     fn copy_buffer(
         &mut self,
@@ -188,6 +186,7 @@ pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub wait_semaphores: &'a mut [&'a mut B::Semaphore],
     pub out_semaphores: &'a mut [&'a mut B::Semaphore],
 }
+#[must_use]
 pub trait Error<B: Backend<Error = Self>>: std::error::Error {
     fn is_out_of_device_memory(&self) -> bool;
 }
