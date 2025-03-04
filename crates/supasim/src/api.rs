@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 // This file will probably be deleted eventually
 
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, Range};
 
 use thiserror::Error;
 use types::InstanceProperties;
@@ -14,15 +14,13 @@ pub enum SupaSimError {
 pub type SupaSimResult<T> = Result<T, Box<SupaSimError>>;
 
 pub struct ComputeDispatchInfo<B: Backend> {
-    pub resources: Vec<B::DynResource>,
+    pub resources: Vec<GpuResource<B>>,
 }
-
 pub trait Backend: Sized {
     type Instance: BackendInstance<Self>;
     type Kernel: CompiledKernel<Self>;
     type Buffer: Buffer<Self>;
     type MappedBuffer: MappedBuffer<Self>;
-    type DynResource: GpuResource<Self>;
     type WaitHandle: WaitHandle<Self>;
     type CommandRecorder: CommandRecorder<Self>;
     type BindGroup: BindGroup<Self>;
@@ -40,7 +38,7 @@ pub trait BackendInstance<B: Backend>: Clone {
     fn create_bind_group(
         &self,
         kernel: &B::Kernel,
-        resources: &[&B::DynResource],
+        resources: &[GpuResource<B>],
     ) -> SupaSimResult<B::BindGroup>;
     fn create_buffer(&self, alloc_info: &types::BufferDescriptor) -> SupaSimResult<B::Buffer>;
     fn submit_commands(&self, recorders: &[&B::CommandRecorder]) -> SupaSimResult<B::WaitHandle>;
@@ -51,9 +49,23 @@ pub trait BackendInstance<B: Backend>: Clone {
     fn do_busywork(&self) -> SupaSimResult<()>;
     fn destroy(self) -> SupaSimResult<()>;
 }
-pub trait GpuResource<B: Backend>: Clone {
-    fn as_buffer(&self) -> Option<&B::Buffer>;
-    fn destroy(self) -> SupaSimResult<()>;
+#[derive(Clone)]
+pub struct BufferView<B: Backend> {
+    buffer: B::Buffer,
+    range: Range<u64>,
+}
+
+#[derive(Clone)]
+pub enum GpuResource<B: Backend> {
+    Buffer(BufferView<B>),
+}
+impl<B: Backend> GpuResource<B> {
+    fn as_buffer(&self) -> Option<B::Buffer> {
+        todo!()
+    }
+    fn destroy(self) -> SupaSimResult<()> {
+        todo!()
+    }
 }
 pub trait WaitHandle<B: Backend>: Clone + std::ops::Add {
     fn destroy(self) -> SupaSimResult<()>;
@@ -86,7 +98,7 @@ pub trait MappedBuffer<B: Backend>: Clone + std::io::Read + std::io::Write {
     fn read(&self) -> SupaSimResult<Self::ReadLock>;
     fn write(&mut self) -> SupaSimResult<Self::WriteLock>;
 }
-pub trait Buffer<B: Backend>: GpuResource<B> + Clone {
+pub trait Buffer<B: Backend>: Clone {
     fn resize(&self, new_size: u64, force_resize: bool) -> SupaSimResult<()>;
     fn map(&self, offset: u64, size: u64) -> SupaSimResult<B::MappedBuffer>;
     fn get_mapped(&self) -> SupaSimResult<B::MappedBuffer>;

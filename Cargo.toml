@@ -34,6 +34,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 tempfile = "3.17"
+scopeguard = "1.2"
 
 abs = { package = "supasim-abstract", path = "crates/supasim-abstract" }
 hal = { package = "supasim-hal", path = "crates/supasim-hal" }

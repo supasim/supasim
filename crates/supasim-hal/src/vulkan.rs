@@ -1,5 +1,5 @@
 use core::ffi;
-use std::{borrow::Cow, ffi::CString, sync::Mutex};
+use std::{borrow::Cow, cell::Cell, ffi::CString, sync::Mutex};
 
 use crate::{
     Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, CompiledKernel, Fence,
@@ -14,6 +14,8 @@ use log::Level;
 use shaders::ShaderResourceType;
 use thiserror::Error;
 use types::{to_static_lifetime, BufferDescriptor, InstanceProperties};
+
+use scopeguard::defer;
 
 pub struct Vulkan;
 impl Backend for Vulkan {
@@ -64,6 +66,7 @@ impl Vulkan {
         vk::FALSE
     }
     pub fn create_instance(debug: bool) -> Result<VulkanInstance, VulkanError> {
+        // TODO: currently, if this errors, memory leaks happen.
         unsafe {
             let entry = Entry::load()?;
             let app_info =
@@ -276,6 +279,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         cache: Option<&mut VulkanPipelineCache>,
     ) -> Result<<Vulkan as Backend>::Kernel, <Vulkan as Backend>::Error> {
         unsafe {
+            let err = Cell::new(true);
             let shader_create_info = &vk::ShaderModuleCreateInfo::default();
             let ptr = binary.as_ptr() as *const u32;
             let shader = if ptr.is_aligned() {
@@ -292,6 +296,11 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 self.device
                     .create_shader_module(&shader_create_info.code(&v), None)?
             };
+            defer! {
+                if err.get() {
+                    self.device.destroy_shader_module(shader, None);
+                }
+            }
             let bindings: Vec<_> = reflection
                 .resources
                 .iter()
@@ -313,6 +322,11 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             let descriptor_set_layout = self
                 .device
                 .create_descriptor_set_layout(&desc_set_layout_create, None)?;
+            defer! {
+                if err.get() {
+                    self.device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                }
+            }
             let pipeline_layout = self.device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default().set_layouts(&[descriptor_set_layout]),
                 None,
@@ -344,6 +358,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .create_compute_pipelines(cache, &[pipeline_create_info], None)
                 .map_err(|e| e.1)?[0];
             drop(_cache_lock);
+            err.set(false);
             Ok(VulkanKernel {
                 shader,
                 pipeline,
@@ -375,6 +390,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         alloc_info: &types::BufferDescriptor,
     ) -> Result<<Vulkan as Backend>::Buffer, <Vulkan as Backend>::Error> {
         unsafe {
+            let err = Cell::new(true);
             if alloc_info.visible_to_renderer {
                 return Err(VulkanError::ExternalRendererUnsupported);
             }
@@ -402,9 +418,14 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     flags
                 });
             let buffer = self.device.create_buffer(&create_info, None)?;
+            defer! {
+                if err.get() {
+                    self.device.destroy_buffer(buffer, None);
+                }
+            }
             let requirements = self.device.get_buffer_memory_requirements(buffer);
             use types::MemoryType::*;
-            let allocation = self
+            let mut allocation = self
                 .alloc
                 .lock()
                 .map_err(|e| VulkanError::LockError(e.to_string()))?
@@ -421,8 +442,16 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     linear: true,
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
                 })?;
+            let alloc_ptr = &mut allocation as *mut Allocation;
+            defer! {
+                if err.get() {
+                    // TODO: is this undefined behavior? Lets find out!
+                    self.alloc.lock().unwrap().free(std::mem::take(&mut *alloc_ptr)).unwrap();
+                }
+            }
             self.device
                 .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
+            err.set(false);
             Ok(VulkanBuffer {
                 buffer,
                 allocation,

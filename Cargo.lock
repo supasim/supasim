@@ -1457,6 +1457,7 @@ dependencies = [
  "env_logger",
  "gpu-allocator",
  "log",
+ "scopeguard",
  "supasim-shaders",
  "supasim-types",
  "thiserror 2.0.11",
