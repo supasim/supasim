@@ -79,8 +79,8 @@ pub enum ShaderTarget {
     Dxil { shader_model: ShaderModel },
 }
 pub struct InstanceProperties {
+    pub needs_explicit_sync: bool,
     pub indirect: bool,
-    pub indirect_count: bool,
     pub pipeline_cache: bool,
     pub shader_type: ShaderTarget,
 }

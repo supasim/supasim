@@ -202,7 +202,8 @@ impl Vulkan {
                 queue,
                 queue_family_idx,
                 renderer_queue_family_idx,
-                pool,
+                command_pool: pool,
+                unused_command_buffers: Vec::new(),
                 debug: debug_callback,
             })
         }
@@ -257,15 +258,16 @@ pub struct VulkanInstance {
     queue: vk::Queue,
     queue_family_idx: u32,
     renderer_queue_family_idx: Option<u32>,
-    pool: vk::CommandPool,
+    command_pool: vk::CommandPool,
+    unused_command_buffers: Vec<vk::CommandBuffer>,
     debug: Option<vk::DebugUtilsMessengerEXT>,
     sync2_dev: khr::synchronization2::Device,
 }
 impl BackendInstance<Vulkan> for VulkanInstance {
     fn get_properties(&mut self) -> InstanceProperties {
         InstanceProperties {
+            needs_explicit_sync: true,
             indirect: false,
-            indirect_count: false,
             pipeline_cache: true,
             shader_type: types::ShaderTarget::Spirv {
                 version: types::SpirvVersion::V1_0,
@@ -649,102 +651,38 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
-    fn create_recorders(
+    fn create_recorder(
         &mut self,
-        num: u32,
-    ) -> Result<Vec<<Vulkan as Backend>::CommandRecorder>, <Vulkan as Backend>::Error> {
-        unsafe {
-            let create_info = vk::CommandBufferAllocateInfo::default()
-                .command_pool(self.pool)
-                .command_buffer_count(num)
-                .level(vk::CommandBufferLevel::PRIMARY);
-            let cbs = self.device.allocate_command_buffers(&create_info)?;
-            Ok(cbs
-                .into_iter()
-                .map(|cb| VulkanCommandRecorder { inner: cb })
-                .collect())
-        }
+        allow_resubmits: bool,
+    ) -> Result<<Vulkan as Backend>::CommandRecorder, <Vulkan as Backend>::Error> {
+        Ok(VulkanCommandRecorder {
+            cbs: Vec::new(),
+            allow_resubmits,
+        })
     }
-    fn destroy_recorders(
+    fn destroy_recorder(
         &mut self,
-        recorders: Vec<<Vulkan as Backend>::CommandRecorder>,
+        recorder: <Vulkan as Backend>::CommandRecorder,
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        let cb: Vec<vk::CommandBuffer> = recorders.into_iter().map(|cb| cb.inner).collect();
-        unsafe {
-            self.device.free_command_buffers(self.pool, &cb);
-        }
-        Ok(())
+        todo!()
     }
     fn submit_recorders(
         &mut self,
         infos: &mut [RecorderSubmitInfo<Vulkan>],
         fence: Option<&mut VulkanFence>,
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        let mut semaphore_infos = Vec::new();
-        let mut cbs = Vec::new();
-        for submit in infos.iter() {
-            semaphore_infos.extend(submit.wait_semaphores.iter().map(|(s, v)| {
-                vk::SemaphoreSubmitInfo::default()
-                    .semaphore(s.inner)
-                    .value(*v)
-                    .stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-            }));
-            cbs.extend(
-                submit
-                    .command_recorders
-                    .iter()
-                    .map(|a| vk::CommandBufferSubmitInfo::default().command_buffer(a.inner)),
-            );
-        }
-        let signal_start = semaphore_infos.len();
-        for submit in infos.iter() {
-            semaphore_infos.extend(submit.out_semaphores.iter().map(|(s, v)| {
-                vk::SemaphoreSubmitInfo::default()
-                    .semaphore(s.inner)
-                    .value(*v)
-                    .stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-            }));
-        }
-        let mut submits = Vec::new();
-        let mut cb_idx = 0;
-        let mut wait_idx = 0;
-        let mut signal_idx = signal_start;
-        for submit in infos.iter() {
-            submits.push(
-                vk::SubmitInfo2::default()
-                    .command_buffer_infos(&cbs[cb_idx..cb_idx + submit.command_recorders.len()])
-                    .wait_semaphore_infos(
-                        &semaphore_infos[wait_idx..wait_idx + submit.wait_semaphores.len()],
-                    )
-                    .signal_semaphore_infos(
-                        &semaphore_infos[signal_idx..signal_idx + submit.out_semaphores.len()],
-                    ),
-            );
-            cb_idx += submit.command_recorders.len();
-            wait_idx += submit.wait_semaphores.len();
-            signal_idx += submit.out_semaphores.len();
-        }
-        unsafe {
-            self.sync2_dev.queue_submit2(
-                self.queue,
-                &submits,
-                if let Some(f) = fence {
-                    f.inner
-                } else {
-                    vk::Fence::null()
-                },
-            )?;
-        }
-        Ok(())
+        todo!()
     }
     fn clear_recorders(
         &mut self,
         recorders: &mut [&mut VulkanCommandRecorder],
     ) -> Result<(), VulkanError> {
         unsafe {
-            for cb in recorders {
-                self.device
-                    .reset_command_buffer(cb.inner, vk::CommandBufferResetFlags::empty())?;
+            for recorder in recorders {
+                for cb in &recorder.cbs {
+                    self.device
+                        .reset_command_buffer(cb.cb, vk::CommandBufferResetFlags::empty())?;
+                }
             }
         }
         Ok(())
@@ -757,7 +695,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     fn map_buffer(
         &mut self,
-        buffer: &mut <Vulkan as Backend>::Buffer,
+        buffer: &<Vulkan as Backend>::Buffer,
         offset: u64,
         size: u64,
     ) -> Result<<Vulkan as Backend>::MappedBuffer, <Vulkan as Backend>::Error> {
@@ -787,8 +725,8 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     fn flush_mapped_buffer(
         &self,
-        _buffer: &mut <Vulkan as Backend>::Buffer,
-        _map: &mut <Vulkan as Backend>::MappedBuffer,
+        _buffer: &<Vulkan as Backend>::Buffer,
+        _map: &<Vulkan as Backend>::MappedBuffer,
     ) -> Result<(), VulkanError> {
         /*if buffer.create_info.needs_flush {
             unsafe {
@@ -806,8 +744,8 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     fn update_mapped_buffer(
         &self,
-        _buffer: &mut <Vulkan as Backend>::Buffer,
-        _map: &mut <Vulkan as Backend>::MappedBuffer,
+        _buffer: &<Vulkan as Backend>::Buffer,
+        _map: &<Vulkan as Backend>::MappedBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         /*if buffer.create_info.needs_flush {
             unsafe {
@@ -825,7 +763,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     fn unmap_buffer(
         &mut self,
-        _buffer: &mut <Vulkan as Backend>::Buffer,
+        _buffer: &<Vulkan as Backend>::Buffer,
         _map: <Vulkan as Backend>::MappedBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         // unsafe {self.device.unmap_memory(buffer.allocation.memory());}
@@ -836,7 +774,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     fn write_buffer(
         &mut self,
-        buffer: &mut <Vulkan as Backend>::Buffer,
+        buffer: &<Vulkan as Backend>::Buffer,
         offset: u64,
         data: &[u8],
     ) -> Result<(), <Vulkan as Backend>::Error> {
@@ -928,6 +866,16 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
+    fn cleanup_cached_resources(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
+        if !self.unused_command_buffers.is_empty() {
+            unsafe {
+                self.device
+                    .free_command_buffers(self.command_pool, &self.unused_command_buffers);
+            }
+        }
+        self.unused_command_buffers.clear();
+        Ok(())
+    }
 }
 impl VulkanInstance {
     pub fn destroy(mut self) {
@@ -937,7 +885,7 @@ impl VulkanInstance {
                 .unwrap()
                 .report_memory_leaks(log::Level::Error);
             drop(self.alloc);
-            self.device.destroy_command_pool(self.pool, None);
+            self.device.destroy_command_pool(self.command_pool, None);
             self.device.destroy_device(None);
             if let Some(debug) = self.debug {
                 ash::ext::debug_utils::Instance::new(&self.entry, &self.instance)
@@ -973,20 +921,25 @@ impl MappedBuffer<Vulkan> for VulkanMappedBuffer {
         self.slice
     }
 }
-pub struct VulkanCommandRecorder {
-    inner: vk::CommandBuffer,
+struct CommandBufferSubmit {
+    cb: vk::CommandBuffer,
+    wait_semaphores: Vec<vk::Semaphore>,
+    signal_semaphores: Vec<vk::Semaphore>,
 }
-impl VulkanCommandRecorder {}
-impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
+pub struct VulkanCommandRecorder {
+    cbs: Vec<CommandBufferSubmit>,
+    allow_resubmits: bool,
+}
+impl VulkanCommandRecorder {
     fn begin(
         &mut self,
         instance: &mut <Vulkan as Backend>::Instance,
-        allow_resubmits: bool,
+        cb: vk::CommandBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             instance.device.begin_command_buffer(
-                self.inner,
-                &vk::CommandBufferBeginInfo::default().flags(if allow_resubmits {
+                cb,
+                &vk::CommandBufferBeginInfo::default().flags(if self.allow_resubmits {
                     vk::CommandBufferUsageFlags::empty()
                 } else {
                     vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT
@@ -998,12 +951,14 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
     fn end(
         &mut self,
         instance: &mut <Vulkan as Backend>::Instance,
+        cb: vk::CommandBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            instance.device.end_command_buffer(self.inner)?;
+            instance.device.end_command_buffer(cb)?;
             Ok(())
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn copy_buffer(
         &mut self,
         instance: &mut <Vulkan as Backend>::Instance,
@@ -1012,11 +967,11 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         src_offset: u64,
         dst_offset: u64,
         size: u64,
-        _sync: crate::CommandSynchronization<Vulkan>,
+        cb: vk::CommandBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             instance.device.cmd_copy_buffer(
-                self.inner,
+                cb,
                 src_buffer.buffer,
                 dst_buffer.buffer,
                 &[vk::BufferCopy::default()
@@ -1035,16 +990,14 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         descriptor_set: &mut <Vulkan as Backend>::BindGroup,
         push_constants: &[u8],
         workgroup_dims: [u32; 3],
-        _sync: crate::CommandSynchronization<Vulkan>,
+        cb: vk::CommandBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            instance.device.cmd_bind_pipeline(
-                self.inner,
-                vk::PipelineBindPoint::COMPUTE,
-                shader.pipeline,
-            );
+            instance
+                .device
+                .cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, shader.pipeline);
             instance.device.cmd_bind_descriptor_sets(
-                self.inner,
+                cb,
                 vk::PipelineBindPoint::COMPUTE,
                 shader.pipeline_layout,
                 0,
@@ -1053,7 +1006,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
             );
             if !push_constants.is_empty() {
                 instance.device.cmd_push_constants(
-                    self.inner,
+                    cb,
                     shader.pipeline_layout,
                     vk::ShaderStageFlags::COMPUTE,
                     0,
@@ -1061,7 +1014,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
                 );
             }
             instance.device.cmd_dispatch(
-                self.inner,
+                cb,
                 workgroup_dims[0],
                 workgroup_dims[1],
                 workgroup_dims[2],
@@ -1070,6 +1023,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         // TODO: Do sync stuff
         Ok(())
     }
+    #[allow(clippy::too_many_arguments)]
     fn dispatch_kernel_indirect(
         &mut self,
         _instance: &mut <Vulkan as Backend>::Instance,
@@ -1084,21 +1038,19 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
     ) -> Result<(), <Vulkan as Backend>::Error> {
         Err(VulkanError::DispatchModeUnsupported)
     }
-    fn dispatch_kernel_indirect_count(
+}
+impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
+    fn record_dag(
         &mut self,
-        _instance: &mut <Vulkan as Backend>::Instance,
-        _shader: &mut <Vulkan as Backend>::Kernel,
-        _descriptor_set: &mut <Vulkan as Backend>::BindGroup,
-        _push_constants: &[u8],
-        _indirect_buffer: &mut <Vulkan as Backend>::Buffer,
-        _buffer_offset: u64,
-        _count_buffer: &mut <Vulkan as Backend>::Buffer,
-        _count_offset: u64,
-        _max_dispatches: u64,
-        _validate_dispatches: bool,
-        _sync: crate::CommandSynchronization<Vulkan>,
+        dag: &mut daggy::Dag<crate::GpuOperation<Vulkan>, ()>,
+    ) -> Result<(), VulkanError> {
+        todo!()
+    }
+    fn record_commands(
+        &mut self,
+        commands: &mut [crate::GpuOperation<Vulkan>],
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        Err(VulkanError::DispatchModeUnsupported)
+        todo!()
     }
 }
 pub struct DescriptorPoolData {
@@ -1166,9 +1118,11 @@ impl Fence<Vulkan> for VulkanFence {
 mod tests {
     use shaders::ShaderReflectionInfo;
 
+    use crate::{CommandSynchronization, GpuCommand, GpuOperation};
+
     use super::*;
     fn create_storage_buf(instance: &mut VulkanInstance, data: &[u8]) -> VulkanBuffer {
-        let mut buf = instance
+        let buf = instance
             .create_buffer(&BufferDescriptor {
                 size: data.len() as u64,
                 memory_type: types::MemoryType::UploadDownload,
@@ -1181,10 +1135,10 @@ mod tests {
                 needs_flush: true,
             })
             .unwrap();
-        let mut mapped = instance.map_buffer(&mut buf, 0, data.len() as u64).unwrap();
+        let mut mapped = instance.map_buffer(&buf, 0, data.len() as u64).unwrap();
         mapped.writable().copy_from_slice(data);
-        instance.flush_mapped_buffer(&mut buf, &mut mapped).unwrap();
-        instance.unmap_buffer(&mut buf, mapped).unwrap();
+        instance.flush_mapped_buffer(&buf, &mapped).unwrap();
+        instance.unmap_buffer(&buf, mapped).unwrap();
         buf
     }
     fn read_buf(instance: &mut VulkanInstance, buf: &mut VulkanBuffer, out_data: &mut [u8]) {
@@ -1228,48 +1182,41 @@ mod tests {
                 needs_flush: true,
             })
             .unwrap();
-        let mut sb1 = create_storage_buf(&mut instance, bytemuck::bytes_of(&[5u32, 0, 0, 0]));
-        let mut sb2 = create_storage_buf(&mut instance, bytemuck::bytes_of(&[8u32, 0, 0, 0]));
+        let sb1 = create_storage_buf(&mut instance, bytemuck::bytes_of(&[5u32, 0, 0, 0]));
+        let sb2 = create_storage_buf(&mut instance, bytemuck::bytes_of(&[8u32, 0, 0, 0]));
         let mut sbout = create_storage_buf(&mut instance, bytemuck::bytes_of(&[2u32, 0, 0, 0]));
-        let mut bind_group = instance
+        let bind_group = instance
             .create_bind_group(
                 &mut kernel,
                 &mut [
-                    GpuResource::buffer(&mut sb1, 0, 16),
-                    GpuResource::buffer(&mut sb2, 0, 16),
-                    GpuResource::buffer(&mut sbout, 0, 16),
+                    GpuResource::buffer(&sb1, 0, 16),
+                    GpuResource::buffer(&sb2, 0, 16),
+                    GpuResource::buffer(&sbout, 0, 16),
                 ],
             )
             .unwrap();
 
-        let mut recorder = instance
-            .create_recorders(1)
-            .unwrap()
-            .into_iter()
-            .next()
-            .unwrap();
+        let mut recorder = instance.create_recorder(false).unwrap();
 
-        recorder.begin(&mut instance, true).unwrap();
         recorder
-            .dispatch_kernel(
-                &mut instance,
-                &mut kernel,
-                &mut bind_group,
-                &[],
-                [1, 1, 1],
-                crate::CommandSynchronization {
-                    waits: &mut [],
-                    resources: &mut [],
-                    out_fence: None,
+            .record_commands(&mut [GpuOperation {
+                command: GpuCommand::DispatchKernel {
+                    shader: &kernel,
+                    bind_group: &bind_group,
+                    push_constants: &[],
+                    workgroup_dims: [1, 1, 1],
+                },
+                sync: CommandSynchronization {
+                    resources_needing_sync: &mut [],
                     out_semaphore: None,
                 },
-            )
+                validate_indirect: false,
+            }])
             .unwrap();
-        recorder.end(&mut instance).unwrap();
         instance
             .submit_recorders(
                 std::slice::from_mut(&mut RecorderSubmitInfo {
-                    command_recorders: &mut [&mut recorder],
+                    command_recorder: &mut recorder,
                     wait_semaphores: &mut [],
                     out_semaphores: &mut [(&mut fun_semaphore, 3)],
                 }),
@@ -1289,7 +1236,7 @@ mod tests {
             panic!("Expected 13, got {}", res[0]);
         }
 
-        instance.destroy_recorders(vec![recorder]).unwrap();
+        instance.destroy_recorder(recorder).unwrap();
 
         instance.destroy_semaphore(fun_semaphore).unwrap();
         instance.destroy_fence(fence).unwrap();

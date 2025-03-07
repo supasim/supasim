@@ -24,6 +24,7 @@ bytemuck.workspace = true
 log.workspace = true
 env_logger.workspace = true
 scopeguard.workspace = true
+daggy.workspace = true
 
 # Vulkan dependencies
 ash = { version = "0.38", optional = true }
