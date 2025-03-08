@@ -541,7 +541,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     fn create_bind_group(
         &mut self,
         kernel: &mut VulkanKernel,
-        resources: &mut [crate::GpuResource<Vulkan>],
+        resources: &[crate::GpuResource<Vulkan>],
     ) -> Result<VulkanBindGroup, VulkanError> {
         let mut pool_idx = None;
         for (i, pool) in kernel.descriptor_pools.iter_mut().enumerate() {
@@ -661,6 +661,14 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 pool_idx: pool_idx as u32,
             })
         }
+    }
+    fn update_bind_group(
+        &mut self,
+        bg: &mut <Vulkan as Backend>::BindGroup,
+        kernel: &mut <Vulkan as Backend>::Kernel,
+        resources: &[GpuResource<Vulkan>],
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        todo!()
     }
     fn destroy_bind_group(
         &mut self,

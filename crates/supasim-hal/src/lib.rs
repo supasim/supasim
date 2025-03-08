@@ -71,8 +71,14 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     fn create_bind_group(
         &mut self,
         kernel: &mut B::Kernel,
-        resources: &mut [GpuResource<B>],
+        resources: &[GpuResource<B>],
     ) -> Result<B::BindGroup, B::Error>;
+    fn update_bind_group(
+        &mut self,
+        bg: &mut B::BindGroup,
+        kernel: &mut B::Kernel,
+        resources: &[GpuResource<B>],
+    ) -> Result<(), B::Error>;
     fn destroy_bind_group(
         &mut self,
         kernel: &mut B::Kernel,

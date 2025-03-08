@@ -42,7 +42,7 @@ pub trait BackendInstance<B: Backend>: Clone {
     ) -> SupaSimResult<B::BindGroup>;
     fn create_buffer(&self, alloc_info: &types::BufferDescriptor) -> SupaSimResult<B::Buffer>;
     fn submit_commands(&self, recorders: &[&B::CommandRecorder]) -> SupaSimResult<B::WaitHandle>;
-    fn wait_for_any(&self, wait_handles: &[B::WaitHandle]);
+    fn wait(&self, wait_handles: &[B::WaitHandle], wait_for_all: bool) -> SupaSimResult<()>;
     /// Wait for all compute work to complete on the GPU.
     fn wait_for_idle(&self) -> SupaSimResult<()>;
     /// Do all work that might take time, such as building yet unused compute pipelines. Useful in benchmarking.
@@ -69,6 +69,7 @@ impl<B: Backend> GpuResource<B> {
 }
 pub trait WaitHandle<B: Backend>: Clone + std::ops::Add {
     fn destroy(self) -> SupaSimResult<()>;
+    fn has_happened(&self) -> SupaSimResult<()>;
 }
 pub trait CommandRecorder<B: Backend>: Clone {
     fn clear(&self) -> SupaSimResult<()>;
@@ -100,9 +101,6 @@ pub trait MappedBuffer<B: Backend>: Clone + std::io::Read + std::io::Write {
 }
 pub trait Buffer<B: Backend>: Clone {
     fn resize(&self, new_size: u64, force_resize: bool) -> SupaSimResult<()>;
-    fn map(&self, offset: u64, size: u64) -> SupaSimResult<B::MappedBuffer>;
-    fn get_mapped(&self) -> SupaSimResult<B::MappedBuffer>;
-    fn unmap(&self) -> SupaSimResult<()>;
     fn destroy(self) -> SupaSimResult<()>;
 }
 

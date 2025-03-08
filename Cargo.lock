@@ -1452,6 +1452,8 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "supasim-hal",
+ "supasim-shaders",
+ "supasim-types",
  "thiserror 2.0.11",
 ]
 

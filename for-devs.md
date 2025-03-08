@@ -12,6 +12,10 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+# Options for vulkan without descriptor sets
+* `VK_KHR_push_descriptor` - only in vk1.4, push all descriptors at dispatch time
+* `VK_KHR_buffer_device_address` - in vk1.2, push buffers specifically, requires modifications to shader code
+
 
 ## GUI options
 * [Iced](https://github.com/iced-rs/iced) - popular, mature
