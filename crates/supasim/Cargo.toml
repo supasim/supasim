@@ -13,7 +13,7 @@ readme = "../readme.md"
 anyhow.workspace = true
 thiserror.workspace = true
 
-abs.workspace = true
 macros.workspace = true
 shaders.workspace = true
 types.workspace = true
+hal.workspace = true

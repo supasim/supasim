@@ -1439,19 +1439,8 @@ name = "supasim"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "supasim-abstract",
- "supasim-macros",
- "supasim-shaders",
- "supasim-types",
- "thiserror 2.0.11",
-]
-
-[[package]]
-name = "supasim-abstract"
-version = "0.0.1"
-dependencies = [
- "anyhow",
  "supasim-hal",
+ "supasim-macros",
  "supasim-shaders",
  "supasim-types",
  "thiserror 2.0.11",
