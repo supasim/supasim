@@ -88,11 +88,11 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
         timeout_seconds: f32,
     ) -> Result<(), B::Error>;
 
-    fn create_semaphore(&mut self, timeline: bool) -> Result<B::Semaphore, B::Error>;
+    fn create_semaphore(&mut self) -> Result<B::Semaphore, B::Error>;
     fn destroy_semaphore(&mut self, semaphore: B::Semaphore) -> Result<(), B::Error>;
     fn wait_for_semaphores(
         &mut self,
-        semaphores: &mut [(&mut B::Semaphore, u64)],
+        semaphores: &[&B::Semaphore],
         all: bool,
         timeout: f32,
     ) -> Result<(), B::Error>;
@@ -120,8 +120,18 @@ pub struct CommandSynchronization<'a, B: Backend> {
     pub out_semaphore: Option<(&'a mut B::Semaphore, u64)>,
 }
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
-    fn record_dag(&mut self, dag: &mut daggy::Dag<GpuOperation<B>, ()>) -> Result<(), B::Error>;
-    fn record_commands(&mut self, commands: &mut [GpuOperation<B>]) -> Result<(), B::Error>;
+    /// Edges contain the start and length in resources buffer of used resources
+    fn record_dag(
+        &mut self,
+        instance: &mut B::Instance,
+        resources: &[&GpuResource<B>],
+        dag: &mut daggy::Dag<GpuOperation<B>, (usize, usize)>,
+    ) -> Result<(), B::Error>;
+    fn record_commands(
+        &mut self,
+        instance: &mut B::Instance,
+        commands: &mut [GpuOperation<B>],
+    ) -> Result<(), B::Error>;
 }
 pub trait CompiledKernel<B: Backend<Kernel = Self>> {}
 pub trait MappedBuffer<B: Backend<MappedBuffer = Self>> {
@@ -137,14 +147,13 @@ pub trait Fence<B: Backend<Fence = Self>> {
     fn get_signalled(&mut self, instance: &mut B::Instance) -> Result<bool, B::Error>;
 }
 pub trait Semaphore<B: Backend<Semaphore = Self>> {
-    fn get_timeline_counter(&mut self, instance: &mut B::Instance) -> Result<u64, B::Error>;
-    fn signal(&mut self, instance: &mut B::Instance, signal: u64) -> Result<(), B::Error>;
+    fn signal(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
 
 pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub command_recorder: &'a mut B::CommandRecorder,
-    pub wait_semaphores: &'a mut [(&'a mut B::Semaphore, u64)],
-    pub out_semaphores: &'a mut [(&'a mut B::Semaphore, u64)],
+    pub wait_semaphores: &'a [&'a B::Semaphore],
+    pub signal_semaphores: &'a [&'a B::Semaphore],
 }
 #[must_use]
 pub trait Error<B: Backend<Error = Self>>: std::error::Error {
@@ -178,6 +187,5 @@ pub enum GpuCommand<'a, B: Backend> {
         push_constants: &'a [u8],
         indirect_buffer: &'a B::Buffer,
         buffer_offset: u64,
-        num_dispatches: u64,
     },
 }
