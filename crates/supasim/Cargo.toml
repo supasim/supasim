@@ -10,6 +10,8 @@ license.workspace = true
 readme = "../readme.md"
 
 [dependencies]
+paste = "1.0"
+
 anyhow.workspace = true
 thiserror.workspace = true
 

@@ -8,7 +8,7 @@ pub use vulkan::{
 
 use types::*;
 
-pub trait Backend: Sized {
+pub trait Backend: Sized + std::fmt::Debug {
     type Instance: BackendInstance<Self>;
     type Kernel: CompiledKernel<Self>;
     type Buffer: Buffer<Self>;

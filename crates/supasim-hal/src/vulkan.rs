@@ -17,6 +17,7 @@ use types::{to_static_lifetime, BufferDescriptor, InstanceProperties};
 
 use scopeguard::defer;
 
+#[derive(Debug)]
 pub struct Vulkan;
 impl Backend for Vulkan {
     type Buffer = VulkanBuffer;

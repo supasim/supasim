@@ -1439,6 +1439,7 @@ name = "supasim"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "paste",
  "supasim-hal",
  "supasim-macros",
  "supasim-shaders",
