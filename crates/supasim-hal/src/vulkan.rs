@@ -17,7 +17,7 @@ use types::{to_static_lifetime, BufferDescriptor, InstanceProperties};
 
 use scopeguard::defer;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Vulkan;
 impl Backend for Vulkan {
     type Buffer = VulkanBuffer;
@@ -527,7 +527,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     fn get_pipeline_cache_data(
         &mut self,
-        cache: <Vulkan as Backend>::PipelineCache,
+        cache: &mut <Vulkan as Backend>::PipelineCache,
     ) -> Result<Vec<u8>, <Vulkan as Backend>::Error> {
         unsafe {
             let lock = cache

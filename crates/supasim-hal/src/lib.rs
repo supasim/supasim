@@ -8,7 +8,7 @@ pub use vulkan::{
 
 use types::*;
 
-pub trait Backend: Sized + std::fmt::Debug {
+pub trait Backend: Sized + std::fmt::Debug + Clone {
     type Instance: BackendInstance<Self>;
     type Kernel: CompiledKernel<Self>;
     type Buffer: Buffer<Self>;
@@ -31,7 +31,10 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     ) -> Result<B::Kernel, B::Error>;
     fn create_pipeline_cache(&mut self, initial_data: &[u8]) -> Result<B::PipelineCache, B::Error>;
     fn destroy_pipeline_cache(&mut self, cache: B::PipelineCache) -> Result<(), B::Error>;
-    fn get_pipeline_cache_data(&mut self, cache: B::PipelineCache) -> Result<Vec<u8>, B::Error>;
+    fn get_pipeline_cache_data(
+        &mut self,
+        cache: &mut B::PipelineCache,
+    ) -> Result<Vec<u8>, B::Error>;
     fn destroy_kernel(&mut self, kernel: B::Kernel) -> Result<(), B::Error>;
     /// Wait for all compute work to complete on the GPU.
     fn wait_for_idle(&mut self) -> Result<(), B::Error>;

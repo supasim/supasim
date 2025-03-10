@@ -13,8 +13,8 @@ pub enum SupaSimError {
 }
 pub type SupaSimResult<T> = Result<T, Box<SupaSimError>>;
 
-pub struct ComputeDispatchInfo<B: Backend> {
-    pub resources: Vec<GpuResource<B>>,
+pub struct ComputeDispatchInfo<'a, B: Backend> {
+    pub buffers: &'a [B::Buffer],
 }
 pub trait Backend: Sized {
     type Instance: BackendInstance<Self>;
@@ -23,7 +23,6 @@ pub trait Backend: Sized {
     type MappedBuffer: MappedBuffer<Self>;
     type WaitHandle: WaitHandle<Self>;
     type CommandRecorder: CommandRecorder<Self>;
-    type BindGroup: BindGroup<Self>;
     type PipelineCache: PipelineCache<Self>;
 }
 pub trait BackendInstance<B: Backend>: Clone {
@@ -35,11 +34,6 @@ pub trait BackendInstance<B: Backend>: Clone {
     ) -> SupaSimResult<B::Kernel>;
     fn create_pipeline_cache(&self, data: &[u8]) -> SupaSimResult<B::PipelineCache>;
     fn create_recorder(&self) -> SupaSimResult<B::CommandRecorder>;
-    fn create_bind_group(
-        &self,
-        kernel: &B::Kernel,
-        resources: &[GpuResource<B>],
-    ) -> SupaSimResult<B::BindGroup>;
     fn create_buffer(&self, alloc_info: &types::BufferDescriptor) -> SupaSimResult<B::Buffer>;
     fn submit_commands(&self, recorders: &[&B::CommandRecorder]) -> SupaSimResult<B::WaitHandle>;
     fn wait(&self, wait_handles: &[B::WaitHandle], wait_for_all: bool) -> SupaSimResult<()>;
@@ -53,19 +47,6 @@ pub trait BackendInstance<B: Backend>: Clone {
 pub struct BufferView<B: Backend> {
     buffer: B::Buffer,
     range: Range<u64>,
-}
-
-#[derive(Clone)]
-pub enum GpuResource<B: Backend> {
-    Buffer(BufferView<B>),
-}
-impl<B: Backend> GpuResource<B> {
-    fn as_buffer(&self) -> Option<B::Buffer> {
-        todo!()
-    }
-    fn destroy(self) -> SupaSimResult<()> {
-        todo!()
-    }
 }
 pub trait WaitHandle<B: Backend>: Clone + std::ops::Add {
     fn destroy(self) -> SupaSimResult<()>;
@@ -129,9 +110,6 @@ pub trait RecorderIndirectExt<B: Backend>: Clone + CommandRecorder<B> {
         validate_dispatches: bool,
         return_wait: bool,
     ) -> SupaSimResult<Option<B::WaitHandle>>;
-}
-pub trait BindGroup<B: Backend>: Clone {
-    fn destroy(self) -> SupaSimResult<()>;
 }
 pub trait PipelineCache<B: Backend>: Clone {
     fn get_data(&self) -> Vec<u8>;
