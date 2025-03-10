@@ -21,17 +21,18 @@ jobs:
         curl -L -o slang.tar.gz "https://github.com/shader-slang/slang/releases/download/v2025.5.1/slang-2025.5.1-linux-x86_64.tar.gz"
         mkdir slang-extracted
         tar -xzf slang.tar.gz -C slang-extracted
-        echo "SLANG_DIR=$GITHUB_WORKSPACE/slang-extracted" >> $GITHUB_ENV
     - name: Download Vulkan SDK
       run: |
         export VULKAN_VERSION=1.4.304.0  # Change this to the desired version
         export INSTALL_DIR=$GITHUB_WORKSPACE/vulkan-sdk
         mkdir -p $INSTALL_DIR
-        curl -L -o vulkan-sdk.tar.gz "https://sdk.lunarg.com/sdk/download/$VULKAN_VERSION/linux/vulkan-sdk.tar.gz"
-        tar -xzf vulkan-sdk.tar.gz --strip-components=1 -C $INSTALL_DIR
-        echo "VULKAN_SDK=$INSTALL_DIR" >> $GITHUB_ENV
-    - name: Setup spirv-tools
-      run: echo "SLANG_DIR=$GITHUB_WORKSPACE/.github/spirv-tools" >> $GITHUB_ENV
+        curl -L -o vulkan-sdk.tar.xz "https://sdk.lunarg.com/sdk/download/$VULKAN_VERSION/linux/vulkan-sdk.tar.xz"
+        tar -xf vulkan-sdk.tar.xz --strip-components=1 -C $INSTALL_DIR
+        export VULKAN_SDK = "$INSTALL_DIR/1.4.304.0/x86_64"
+        echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
+        echo "SLANG_DIR=$VULKAN_SDK" >> $GITHUB_ENV # Slang is included in the sdk
+        echo "SPIRV_TOOLS_DIR=$VULKAN_SDK" >> $GITHUB_ENV # Spirv tools is also included
+        mv "$INSTALL_DIR/include/slang/*" "$INSTALL_DIR/include"
 
     - name: Build
       run: cargo build --verbose --all-targets --all-features

@@ -1,3 +1,0 @@
-.github/spirv-tools/bin filter=lfs diff=lfs merge=lfs -text
-.github/spirv-tools/include filter=lfs diff=lfs merge=lfs -text
-.github/spirv-tools/lib filter=lfs diff=lfs merge=lfs -text
