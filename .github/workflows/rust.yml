@@ -21,13 +21,15 @@ jobs:
         curl -L -o slang.tar.gz "https://github.com/shader-slang/slang/releases/download/v2025.5.1/slang-2025.5.1-linux-x86_64.tar.gz"
         mkdir slang-extracted
         tar -xzf slang.tar.gz -C slang-extracted
-        echo "SLANG_DIR=$GITHUB_WORKSPACE/slang-extracted" >> $GITHUB_ENV  
-    - name: Download
+        echo "SLANG_DIR=$GITHUB_WORKSPACE/slang-extracted" >> $GITHUB_ENV
+    - name: Download vulkan
       uses: humbletim/setup-vulkan-sdk@v1.2.0
       with:
         vulkan-query-version: 1.4.304.0
         vulkan-components: Vulkan-Headers, Vulkan-Loader
         vulkan-use-cache: true
+    - name: Setup spirv-tools
+      run: echo "SLANG_DIR=$GITHUB_WORKSPACE/.github/spirv-tools" >> $GITHUB_ENV
 
     - name: Build
       run: cargo build --verbose --all-targets --all-features
