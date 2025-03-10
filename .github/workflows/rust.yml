@@ -30,6 +30,7 @@ jobs:
         ls "$INSTALL_DIR"
         ls "$VULKAN_SDK"
         ls "$VULKAN_SDK/include"
+        ls "$VULKAN_SDK/include/slang"
         mv "$VULKAN_SDK/include/slang/*" "$VULKAN_SDK/include"
 
     - name: Build
