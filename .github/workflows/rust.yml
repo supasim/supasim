@@ -27,7 +27,7 @@ jobs:
         echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
         echo "SLANG_DIR=$VULKAN_SDK" >> $GITHUB_ENV # Slang is included in the sdk
         echo "SPIRV_TOOLS_DIR=$VULKAN_SDK" >> $GITHUB_ENV # Spirv tools is also included
-        mv -r "$VULKAN_SDK/include/slang/"* "$VULKAN_SDK/include"
+        mv "$VULKAN_SDK/include/slang/"* "$VULKAN_SDK/include"
 
     - name: Build
       run: cargo build --verbose --all-targets --all-features
