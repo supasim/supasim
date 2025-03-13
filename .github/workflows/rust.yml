@@ -23,9 +23,11 @@ jobs:
         curl -L -o vulkan-sdk.tar.xz "https://sdk.lunarg.com/sdk/download/$VULKAN_VERSION/linux/vulkan-sdk.tar.xz"
         tar -xf vulkan-sdk.tar.xz --strip-components=1 -C $INSTALL_DIR
         export VULKAN_SDK="$INSTALL_DIR/x86_64"
+        export LD_LOAD_LIBRARY="$VULKAN_SDK/lib:$LD_LOAD_LIBRARY"
         echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
         echo "SLANG_DIR=$VULKAN_SDK" >> $GITHUB_ENV # Slang is included in the sdk
         echo "SPIRV_TOOLS_DIR=$VULKAN_SDK" >> $GITHUB_ENV # Spirv tools is also included
+        echo "LD_LOAD_LIBRARY=$LD_LOAD_LIBRARY" >> $GITHUB_ENV # Make this a path to search for libraries
         mv "$VULKAN_SDK/include/slang/"* "$VULKAN_SDK/include"
 
     - name: Build

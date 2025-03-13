@@ -94,7 +94,6 @@ macro_rules! api_type {
                 $($field)*
             }
 
-
             // Outer type, with some helper methods
             #[derive(Clone)]
             $(
