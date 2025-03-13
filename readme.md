@@ -1,9 +1,9 @@
-# SupaSim
+ # SupaSim
 
 ## Planned features
 
 ### Backends
-* Wgpu for when certain assumptions can't be made(old/crappy/esoteric setups), or where vulkan isn't supported for some reason. This 
+* Wgpu for when certain assumptions can't be made(old/crappy/esoteric setups), or where vulkan isn't supported for some reason. This will massively limit concurrency and performance. In case certain assumptions can't be met, they will be emulated, further degrading performance.
 * Cuda for nvidia GPUs
 * HIP(maybe, long term)
 * Metal(long term) 2.3 or 2.4 for apple devices with M1 or newer
