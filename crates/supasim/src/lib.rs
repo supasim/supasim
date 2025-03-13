@@ -40,6 +40,7 @@ impl<T> Tracker<T> {
         Some(&value.1)
     }
     pub fn add(&mut self, value: T) -> Id {
+        // TODO: currently this overwrites the previous value. Make it soemtimes preserve if that is desired
         let identifier = self.current_identifier;
         self.current_identifier = self.current_identifier.wrapping_add(1);
         let idx = match self.unused.pop() {
@@ -283,34 +284,23 @@ impl<B: hal::Backend> Instance<B> {
         todo!()
     }
     pub fn clear_cached_resources(&self) -> SupaSimResult<B, ()> {
-        todo!()
+        let mut s = self.inner_mut()?;
+        s.inner.cleanup_cached_resources().map_supasim()?;
+        todo!();
+        //Ok(())
     }
 }
 impl<B: hal::Backend> Drop for InstanceInner<B> {
     fn drop(&mut self) {
         let _ = self.inner.wait_for_idle();
-        for (_, r) in std::mem::take(&mut self.command_recorders.list) {
-            if let Some(r) = r {
-                if let Ok(r) = r.as_inner() {
-                    let _ = self.inner.destroy_recorder(r.inner);
-                }
-            }
-        }
+        self.command_recorders.list.clear(); // These will call their destructors, politely taking care of themselves
         for (_, f) in std::mem::take(&mut self.fences.list) {
             let _ = self.inner.destroy_fence(f.inner);
         }
-        for (_, w) in std::mem::take(&mut self.wait_handles.list) {
-            if let Ok(w) = w.as_inner() {
-                let _ = self.inner.destroy_semaphore(w.inner);
-            }
-        }
-        /*for (_, c) in std::mem::take(&mut self.kernel_caches.list) {
-            if let Some(c) = c {
-                if let Ok(c) = c.into_inner() {
-                    let _ = self.inner.destroy_pipeline_cache(c.inner);
-                }
-            }
-        }*/
+        self.wait_handles.list.clear();
+        self.kernel_caches.list.clear();
+        self.buffers.list.clear();
+        self.kernels.list.clear();
     }
 }
 api_type!(Kernel, {
@@ -373,6 +363,20 @@ api_type!(CommandRecorder, {
     #[allow(dead_code)]
     used_buffers: Vec<Id>,
 },);
+impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
+    fn drop(&mut self) {
+        if let Ok(mut instance) = self.instance.clone().inner_mut() {
+            instance.command_recorders.remove(self.id, Some(None));
+            let _ = instance
+                .inner
+                .destroy_recorder(std::mem::replace(&mut self.inner, unsafe {
+                    #[allow(clippy::uninit_assumed_init)]
+                    std::mem::MaybeUninit::uninit().assume_init()
+                }));
+        }
+    }
+}
+
 api_type!(Buffer, {
     #[allow(dead_code)]
     instance: Instance<B>,
@@ -382,6 +386,19 @@ api_type!(Buffer, {
     #[allow(dead_code)]
     semaphores: Vec<Id>,
 },);
+impl<B: hal::Backend> Drop for BufferInner<B> {
+    fn drop(&mut self) {
+        if let Ok(mut instance) = self.instance.clone().inner_mut() {
+            instance.buffers.remove(self.id, Some(None));
+            let _ = instance
+                .inner
+                .destroy_buffer(std::mem::replace(&mut self.inner, unsafe {
+                    #[allow(clippy::uninit_assumed_init)]
+                    std::mem::MaybeUninit::uninit().assume_init()
+                }));
+        }
+    }
+}
 
 api_type!(WaitHandle, {
     #[allow(dead_code)]
@@ -390,3 +407,16 @@ api_type!(WaitHandle, {
     #[allow(dead_code)]
     id: Id,
 },);
+impl<B: hal::Backend> Drop for WaitHandleInner<B> {
+    fn drop(&mut self) {
+        if let Ok(mut instance) = self.instance.clone().inner_mut() {
+            instance.wait_handles.remove(self.id, None);
+            let _ = instance
+                .inner
+                .destroy_semaphore(std::mem::replace(&mut self.inner, unsafe {
+                    #[allow(clippy::uninit_assumed_init)]
+                    std::mem::MaybeUninit::uninit().assume_init()
+                }));
+        }
+    }
+}
