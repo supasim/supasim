@@ -38,7 +38,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     fn destroy_kernel(&mut self, kernel: B::Kernel) -> Result<(), B::Error>;
     /// Wait for all compute work to complete on the GPU.
     fn wait_for_idle(&mut self) -> Result<(), B::Error>;
-    fn create_recorder(&mut self, allow_resubmis: bool) -> Result<B::CommandRecorder, B::Error>;
+    fn create_recorder(&mut self, allow_resubmits: bool) -> Result<B::CommandRecorder, B::Error>;
     fn submit_recorders(
         &mut self,
         infos: &mut [RecorderSubmitInfo<B>],
@@ -92,7 +92,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     fn destroy_fence(&mut self, fence: B::Fence) -> Result<(), B::Error>;
     fn wait_for_fences(
         &mut self,
-        fences: &mut [&mut B::Fence],
+        fences: &[&B::Fence],
         all: bool,
         timeout_seconds: f32,
     ) -> Result<(), B::Error>;

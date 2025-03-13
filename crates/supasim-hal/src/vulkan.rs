@@ -613,63 +613,75 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .descriptor_pool(kernel.descriptor_pools[pool_idx].pool)
                 .set_layouts(std::slice::from_ref(&kernel.descriptor_set_layout));
             let descriptor_set = self.device.allocate_descriptor_sets(&alloc_info)?[0];
-            let mut writes = Vec::with_capacity(resources.len());
-            let mut buffer_infos = Vec::new();
-            for (i, resource) in resources.iter().enumerate() {
-                let mut write = vk::WriteDescriptorSet::default()
-                    .dst_set(descriptor_set)
-                    .descriptor_count(1)
-                    .dst_binding(i as u32)
-                    .descriptor_type(match resource {
-                        GpuResource::Buffer {
-                            buffer:
-                                VulkanBuffer {
-                                    create_info: BufferDescriptor { uniform, .. },
-                                    ..
-                                },
-                            ..
-                        } => {
-                            if *uniform {
-                                vk::DescriptorType::UNIFORM_BUFFER
-                            } else {
-                                vk::DescriptorType::STORAGE_BUFFER
-                            }
-                        }
-                    });
-                match resource {
-                    GpuResource::Buffer {
-                        buffer,
-                        offset,
-                        size,
-                    } => {
-                        buffer_infos.push(
-                            vk::DescriptorBufferInfo::default()
-                                .buffer(buffer.buffer)
-                                .offset(*offset)
-                                .range(*size),
-                        );
-                        // TODO: fix (potentially) Undefined behavior
-                        write = write.buffer_info(std::slice::from_ref(to_static_lifetime(
-                            &buffer_infos[buffer_infos.len() - 1],
-                        )));
-                    }
-                }
-                writes.push(write);
-            }
-            self.device.update_descriptor_sets(&writes, &[]);
-            Ok(VulkanBindGroup {
+            defer! {}
+            let mut bg = VulkanBindGroup {
                 inner: descriptor_set,
                 pool_idx: pool_idx as u32,
-            })
+            };
+            if let Err(e) = self.update_bind_group(&mut bg, kernel, resources) {
+                let _ = self.device.free_descriptor_sets(
+                    kernel.descriptor_pools[pool_idx].pool,
+                    &[descriptor_set],
+                );
+                Err(e)
+            } else {
+                Ok(bg)
+            }
         }
     }
     fn update_bind_group(
         &mut self,
         bg: &mut <Vulkan as Backend>::BindGroup,
-        kernel: &mut <Vulkan as Backend>::Kernel,
+        _kernel: &mut <Vulkan as Backend>::Kernel,
         resources: &[GpuResource<Vulkan>],
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        todo!()
+        let mut writes = Vec::with_capacity(resources.len());
+        let mut buffer_infos = Vec::new();
+        for (i, resource) in resources.iter().enumerate() {
+            let mut write = vk::WriteDescriptorSet::default()
+                .dst_set(bg.inner)
+                .descriptor_count(1)
+                .dst_binding(i as u32)
+                .descriptor_type(match resource {
+                    GpuResource::Buffer {
+                        buffer:
+                            VulkanBuffer {
+                                create_info: BufferDescriptor { uniform, .. },
+                                ..
+                            },
+                        ..
+                    } => {
+                        if *uniform {
+                            vk::DescriptorType::UNIFORM_BUFFER
+                        } else {
+                            vk::DescriptorType::STORAGE_BUFFER
+                        }
+                    }
+                });
+            match resource {
+                GpuResource::Buffer {
+                    buffer,
+                    offset,
+                    size,
+                } => {
+                    buffer_infos.push(
+                        vk::DescriptorBufferInfo::default()
+                            .buffer(buffer.buffer)
+                            .offset(*offset)
+                            .range(*size),
+                    );
+                    // TODO: fix (potentially) Undefined behavior
+                    write = write.buffer_info(std::slice::from_ref(to_static_lifetime(
+                        &buffer_infos[buffer_infos.len() - 1],
+                    )));
+                }
+            }
+            writes.push(write);
+        }
+        unsafe {
+            self.device.update_descriptor_sets(&writes, &[]);
+        }
+        Ok(())
     }
     fn destroy_bind_group(
         &mut self,
@@ -969,7 +981,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     fn wait_for_fences(
         &mut self,
-        fences: &mut [&mut <Vulkan as Backend>::Fence],
+        fences: &[&<Vulkan as Backend>::Fence],
         all: bool,
         timeout_seconds: f32,
     ) -> Result<(), <Vulkan as Backend>::Error> {
@@ -1153,7 +1165,7 @@ impl VulkanCommandRecorder {
             );
         }
         // TODO: Do sync stuff
-        todo!()
+        Ok(())
     }
     fn dispatch_kernel(
         &mut self,
@@ -1235,6 +1247,7 @@ impl VulkanCommandRecorder {
                 .device
                 .cmd_dispatch_indirect(cb, indirect_buffer.buffer, buffer_offset);
         }
+        // TODO: Do sync stuff
         Ok(())
     }
     fn record_command(
@@ -1296,9 +1309,9 @@ impl VulkanCommandRecorder {
 impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
     fn record_dag(
         &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
-        resources: &[&GpuResource<Vulkan>],
-        dag: &mut daggy::Dag<crate::GpuOperation<Vulkan>, (usize, usize)>,
+        _instance: &mut <Vulkan as Backend>::Instance,
+        _resources: &[&GpuResource<Vulkan>],
+        _dag: &mut daggy::Dag<crate::GpuOperation<Vulkan>, (usize, usize)>,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         todo!()
     }
@@ -1452,7 +1465,7 @@ mod tests {
         let bind_group = instance
             .create_bind_group(
                 &mut kernel,
-                &mut [
+                &[
                     GpuResource::buffer(&sb1, 0, 16),
                     GpuResource::buffer(&sb2, 0, 16),
                     GpuResource::buffer(&sbout, 0, 16),
@@ -1490,9 +1503,7 @@ mod tests {
                 Some(&mut fence),
             )
             .unwrap();
-        instance
-            .wait_for_fences(&mut [&mut fence], true, 1.0)
-            .unwrap();
+        instance.wait_for_fences(&[&fence], true, 1.0).unwrap();
         instance
             .wait_for_semaphores(&[&fun_semaphore], true, 1.0)
             .unwrap();
