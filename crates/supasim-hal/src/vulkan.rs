@@ -5,15 +5,15 @@ use crate::{
     Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, CompiledKernel, Fence,
     GpuCommand, GpuResource, MappedBuffer, PipelineCache, RecorderSubmitInfo, Semaphore,
 };
-use ash::{khr, vk, Entry};
+use ash::{Entry, khr, vk};
 use gpu_allocator::{
-    vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
     AllocationError, AllocationSizes, AllocatorDebugSettings,
+    vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
 };
 use log::Level;
 use shaders::ShaderResourceType;
 use thiserror::Error;
-use types::{to_static_lifetime, BufferDescriptor, InstanceProperties};
+use types::{BufferDescriptor, InstanceProperties, to_static_lifetime};
 
 use scopeguard::defer;
 
@@ -39,19 +39,19 @@ impl Vulkan {
         p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
         _user_data: *mut std::os::raw::c_void,
     ) -> vk::Bool32 {
-        let callback_data = *p_callback_data;
+        let callback_data = unsafe { *p_callback_data };
         let message_id_number = callback_data.message_id_number;
 
         let message_id_name = if callback_data.p_message_id_name.is_null() {
             Cow::from("")
         } else {
-            ffi::CStr::from_ptr(callback_data.p_message_id_name).to_string_lossy()
+            unsafe { ffi::CStr::from_ptr(callback_data.p_message_id_name).to_string_lossy() }
         };
 
         let message = if callback_data.p_message.is_null() {
             Cow::from("")
         } else {
-            ffi::CStr::from_ptr(callback_data.p_message).to_string_lossy()
+            unsafe { ffi::CStr::from_ptr(callback_data.p_message).to_string_lossy() }
         };
         let level = match message_severity {
             vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => Level::Error,
@@ -61,8 +61,10 @@ impl Vulkan {
             _ => Level::Error,
         };
 
-        log::log!(level, "{message_severity:?}: {message_type:?} [{message_id_name} ({message_id_number})] : {message}\n",
-    );
+        log::log!(
+            level,
+            "{message_severity:?}: {message_type:?} [{message_id_name} ({message_id_number})] : {message}\n",
+        );
 
         vk::FALSE
     }
@@ -228,7 +230,9 @@ pub enum VulkanError {
     ExternalRendererUnsupported,
     #[error("No supported vulkan device")]
     NoSupportedDevice,
-    #[error("A command recorder was submitted that would've required signalled semaphores for a complex DAG structure")]
+    #[error(
+        "A command recorder was submitted that would've required signalled semaphores for a complex DAG structure"
+    )]
     SemaphoreSignalInDag,
 }
 impl crate::Error<Vulkan> for VulkanError {
