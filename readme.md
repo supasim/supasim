@@ -1,13 +1,16 @@
-# SupaSim
+ # SupaSim
 
 ## Planned features
 
 ### Backends
-* Cuda
-* Vulkan
-* OpenCL(long term)
-* HIP(long term)
-* Metal(long term) 2.3 or 2.4
+* Wgpu for when certain assumptions can't be made(old/crappy/esoteric setups), or where vulkan isn't supported for some reason. This will massively limit concurrency and performance. In case certain assumptions can't be met, they will be emulated, further degrading performance.
+* Cuda for nvidia GPUs
+* HIP(maybe, long term)
+* Metal(long term) 2.3 or 2.4 for apple devices with M1 or newer
+* Vulkan for GPUs with somewhat modern capabilities. Currently, that means
+  * At least 16 concurrently executing threadgroups(aka streaming multiprocessors). It seems that all discrete GPUs and desktop integrated GPUs from the past decade have this.
+  * Allow threadgroups with 1024 threads. All systems I checked have exactly this limit.
+  * Warp size that is a factor/multiple of 64 - lowest I could find is 15 year old Nvidia GPUs with 16. No reason this wouldn't be a power of 2.
 
 ### Graphics
 * WGPU powered
