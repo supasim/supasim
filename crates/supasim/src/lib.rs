@@ -8,7 +8,7 @@
 
 mod api;
 
-use hal::BackendInstance as _;
+use hal::{BackendInstance as _, MappedBuffer as _};
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -16,7 +16,9 @@ use std::{
 };
 use thiserror::Error;
 
+pub use bytemuck;
 pub use hal;
+pub use types::{MemoryType, ShaderModel, ShaderTarget, SpirvVersion};
 
 /// Contains the index, and a certain "random" value to check if a destroyed thing has been replaced
 #[derive(Clone, Copy, Debug)]
@@ -38,6 +40,13 @@ impl<T> Tracker<T> {
             return None;
         }
         Some(&value.1)
+    }
+    pub fn get_mut(&mut self, id: Id) -> Option<&mut T> {
+        let value = &mut self.list[id.0 as usize];
+        if value.0 != id.1 {
+            return None;
+        }
+        Some(&mut value.1)
     }
     pub fn add(&mut self, value: T) -> Id {
         // TODO: currently this overwrites the previous value. Make it soemtimes preserve if that is desired
@@ -64,6 +73,12 @@ impl<T> Tracker<T> {
             }
         }
     }
+    pub fn acquire(&mut self, idx: u32) -> Id {
+        let v = self.current_identifier;
+        self.current_identifier += 1;
+        self.list[idx as usize].0 = v;
+        Id(idx, v)
+    }
 }
 
 struct InnerRef<'a, T>(RwLockReadGuard<'a, Option<T>>);
@@ -83,6 +98,74 @@ impl<T> Deref for InnerRefMut<'_, T> {
 impl<T> DerefMut for InnerRefMut<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.0.as_mut().unwrap()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BufferDescriptor {
+    /// The size needed in bytes
+    pub size: u64,
+    /// The type of memory and usage
+    pub memory_type: MemoryType,
+    /// Whether this can be used as an indirect buffer for indirect dispatch calls
+    pub indirect_capable: bool,
+    /// Whether this can be the source for a copy
+    pub transfer_src: bool,
+    /// Whether this can be the destination for a copy
+    pub transfer_dst: bool,
+    /// Whether the buffer is used for uniform data(small amount of data which can be **read** from all threads in a dispatch quickly)
+    pub uniform: bool,
+    /// The value that the contents of the buffer must be aligned to. This is important for when supasim must detect
+    pub contents_align: u64,
+    /// Currently unused. In the future this may be used to prefer keeping some buffers in memory when device runs out of memory and swapping becomes necessary
+    pub priority: f32,
+}
+impl Default for BufferDescriptor {
+    fn default() -> Self {
+        Self {
+            size: 0,
+            memory_type: MemoryType::Any,
+            indirect_capable: false,
+            transfer_src: true,
+            transfer_dst: true,
+            uniform: false,
+            contents_align: 0,
+            priority: 1.0,
+        }
+    }
+}
+impl From<BufferDescriptor> for types::BufferDescriptor {
+    fn from(s: BufferDescriptor) -> types::BufferDescriptor {
+        types::BufferDescriptor {
+            size: s.size,
+            memory_type: s.memory_type,
+            mapped_at_creation: false,
+            visible_to_renderer: false,
+            indirect_capable: s.indirect_capable,
+            transfer_src: true,
+            transfer_dst: true,
+            uniform: s.uniform,
+            needs_flush: true,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct BufferRange<B: hal::Backend> {
+    pub buffer: Buffer<B>,
+    pub start: u64,
+    pub len: u64,
+}
+impl<B: hal::Backend> BufferRange<B> {
+    pub fn validate(&self) -> SupaSimResult<B, ()> {
+        let b = self.buffer.inner()?;
+        if (self.start % b.create_info.contents_align) == 0
+            && (self.len % b.create_info.contents_align) == 0
+        {
+            Ok(())
+        } else {
+            Err(SupaSimError::BufferRegionNotValid)
+        }
     }
 }
 
@@ -136,6 +219,8 @@ pub enum SupaSimError<B: hal::Backend> {
     Other(anyhow::Error),
     AlreadyDestroyed,
     DestroyWhileInUse,
+    BufferRegionNotValid,
+    ValidateIndirectUnsupported,
 }
 trait MapSupasimError<T, B: hal::Backend> {
     fn map_supasim(self) -> Result<T, SupaSimError<B>>;
@@ -154,9 +239,15 @@ struct Fence<B: hal::Backend> {
     inner: B::Fence,
     in_use: bool,
 }
-pub struct InstanceProperties {}
+#[derive(Clone, Copy, Debug)]
+pub struct InstanceProperties {
+    pub supports_pipeline_cache: bool,
+    pub supports_indirect_dispatch: bool,
+    pub shader_type: types::ShaderTarget,
+}
 api_type!(Instance, {
     inner: B::Instance,
+    inner_properties: types::InstanceProperties,
     kernels: Tracker<Option<Kernel<B>>>,
     kernel_caches: Tracker<Option<KernelCache<B>>>,
     command_recorders: Tracker<Option<CommandRecorder<B>>>,
@@ -165,8 +256,13 @@ api_type!(Instance, {
     fences: Tracker<Fence<B>>,
 },);
 impl<B: hal::Backend> Instance<B> {
-    pub fn properties(&self) -> InstanceProperties {
-        InstanceProperties {}
+    pub fn properties(&self) -> SupaSimResult<B, InstanceProperties> {
+        let v = self.as_inner()?.inner_properties;
+        Ok(InstanceProperties {
+            supports_pipeline_cache: v.pipeline_cache,
+            supports_indirect_dispatch: v.indirect,
+            shader_type: v.shader_type,
+        })
     }
     pub fn compile_kernel(
         &self,
@@ -224,29 +320,61 @@ impl<B: hal::Backend> Instance<B> {
             id: Default::default(),
             current_fence: None,
             used_buffers: Vec::new(),
+            recorded: false,
+            cleared: true,
+            commands: Vec::new(),
         });
         r.inner_mut()?.id = s.command_recorders.add(Some(r.clone()));
         Ok(r)
     }
-    pub fn create_buffer(&self, desc: &types::BufferDescriptor) -> SupaSimResult<B, Buffer<B>> {
+    pub fn create_buffer(&self, desc: &BufferDescriptor) -> SupaSimResult<B, Buffer<B>> {
         let mut s = self.inner_mut()?;
-        let inner = s.inner.create_buffer(desc).map_supasim()?;
+        let inner = s.inner.create_buffer(&(*desc).into()).map_supasim()?;
         let b = Buffer::from_inner(BufferInner {
             _phantom: Default::default(),
             instance: self.clone(),
             inner,
             id: Default::default(),
             semaphores: Vec::new(),
+            create_info: *desc,
         });
         b.inner_mut()?.id = s.buffers.add(Some(b.clone()));
         Ok(b)
     }
-    pub fn submit_commands(
-        &self,
-        _recorders: &[CommandRecorder<B>],
-    ) -> SupaSimResult<B, CommandRecorder<B>> {
-        //let mut s = self.inner_mut()?;
-        todo!()
+    pub fn submit_commands(&self, recorders: &[CommandRecorder<B>]) -> SupaSimResult<B, ()> {
+        for recorder_ref in recorders {
+            let mut recorder = recorder_ref.inner_mut()?;
+            let _instance = recorder.instance.clone();
+            let mut instance = _instance.inner_mut()?;
+            if !recorder.cleared && !recorder.recorded {
+                instance
+                    .inner
+                    .clear_recorders(&mut [&mut recorder.inner])
+                    .map_supasim()?;
+            }
+            let needs_record = !recorder.recorded;
+            drop(recorder);
+            if needs_record {
+                recorder_ref.record()?;
+            }
+        }
+        let mut recorded_locks = Vec::new();
+        for recorder in recorders {
+            recorded_locks.push(recorder.inner_mut()?);
+        }
+        let mut recorded: Vec<_> = recorded_locks
+            .iter_mut()
+            .map(|a| hal::RecorderSubmitInfo {
+                command_recorder: &mut a.inner,
+                wait_semaphores: &[],
+                signal_semaphores: &[],
+            })
+            .collect();
+        self.inner_mut()?
+            .inner
+            .submit_recorders(&mut recorded, None)
+            .map_supasim()?;
+        Ok(())
     }
     pub fn wait(
         &self,
@@ -288,6 +416,23 @@ impl<B: hal::Backend> Instance<B> {
         s.inner.cleanup_cached_resources().map_supasim()?;
         todo!();
         //Ok(())
+    }
+    fn acquire_wait_handle(&mut self) -> SupaSimResult<B, WaitHandle<B>> {
+        let mut s = self.inner_mut()?;
+        let idx = if let Some(idx) = s.wait_handles.unused.pop() {
+            s.wait_handles.acquire(idx)
+        } else {
+            let semaphore = s.inner.create_semaphore().map_supasim()?;
+            let id = s.wait_handles.add(WaitHandle::from_inner(WaitHandleInner {
+                instance: self.clone(),
+                _phantom: Default::default(),
+                inner: semaphore,
+                id: Id::default(),
+            }));
+            s.wait_handles.get_mut(id).unwrap().inner_mut()?.id = id;
+            id
+        };
+        Ok(s.wait_handles.get(idx).unwrap().clone())
     }
 }
 impl<B: hal::Backend> Drop for InstanceInner<B> {
@@ -353,16 +498,150 @@ impl<B: hal::Backend> Drop for KernelCacheInner<B> {
         }
     }
 }
+struct GpuCommand<B: hal::Backend> {
+    #[allow(dead_code)]
+    inner: GpuCommandInner<B>,
+    #[allow(dead_code)]
+    buffers: Vec<BufferRange<B>>,
+    #[allow(dead_code)]
+    wait_handle: Option<WaitHandle<B>>,
+}
+enum GpuCommandInner<B: hal::Backend> {
+    /// Callback
+    #[allow(clippy::type_complexity)]
+    #[allow(dead_code)]
+    CpuCode(Box<dyn Fn(&[MappedBuffer<B>]) -> anyhow::Result<()>>),
+    /// Kernel, workgroup size
+    #[allow(dead_code)]
+    KernelDispatch(Kernel<B>, [u32; 3]),
+    /// Kernel, buffer and offset, needs validation
+    #[allow(dead_code)]
+    KernelDispatchIndirect(Kernel<B>, BufferRange<B>, bool),
+}
 api_type!(CommandRecorder, {
     #[allow(dead_code)]
     instance: Instance<B>,
     inner: B::CommandRecorder,
     id: Id,
     #[allow(dead_code)]
-    current_fence: Option<u32>,
+    current_fence: Option<Id>,
     #[allow(dead_code)]
     used_buffers: Vec<Id>,
+    #[allow(dead_code)]
+    recorded: bool,
+    #[allow(dead_code)]
+    cleared: bool,
+    commands: Vec<GpuCommand<B>>,
 },);
+impl<B: hal::Backend> CommandRecorder<B> {
+    #[allow(clippy::type_complexity)]
+    #[allow(unused_variables)]
+    pub fn cpu_code(
+        &self,
+        closure: Box<dyn Fn(&[MappedBuffer<B>]) -> anyhow::Result<()>>,
+        buffers: &[&BufferRange<B>],
+        return_wait: bool,
+    ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
+        for b in buffers {
+            b.validate()?;
+        }
+        let wait_handle = if return_wait {
+            Some(self.as_inner()?.instance.acquire_wait_handle()?)
+        } else {
+            None
+        };
+        let mut s = self.inner_mut()?;
+        s.commands.push(GpuCommand {
+            inner: GpuCommandInner::CpuCode(closure),
+            buffers: buffers.iter().map(|&b| b.clone()).collect(),
+            wait_handle: wait_handle.clone(),
+        });
+        s.recorded = false;
+        Ok(wait_handle)
+    }
+    #[allow(unused_variables)]
+    pub fn dispatch_kernel(
+        &self,
+        shader: Kernel<B>,
+        buffers: &[&BufferRange<B>],
+        workgroup_dims: [u32; 3],
+        return_wait: bool,
+    ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
+        for b in buffers {
+            b.validate()?;
+        }
+        let wait_handle = if return_wait {
+            Some(self.as_inner()?.instance.acquire_wait_handle()?)
+        } else {
+            None
+        };
+        let mut s = self.inner_mut()?;
+        s.commands.push(GpuCommand {
+            inner: GpuCommandInner::KernelDispatch(shader, workgroup_dims),
+            buffers: buffers.iter().map(|&b| b.clone()).collect(),
+            wait_handle: wait_handle.clone(),
+        });
+        s.recorded = false;
+        Ok(wait_handle)
+    }
+    #[allow(clippy::too_many_arguments)]
+    #[allow(unused_variables)]
+    pub fn dispatch_kernel_indirect(
+        &self,
+        shader: Kernel<B>,
+        buffers: &[&BufferRange<B>],
+        indirect_buffer: &BufferRange<B>,
+        validate_dispatch: bool,
+        return_wait: bool,
+    ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
+        for b in buffers {
+            b.validate()?;
+        }
+        indirect_buffer.validate()?;
+        if (indirect_buffer.start % 4) != 0 || indirect_buffer.len != 12 {
+            return Err(SupaSimError::BufferRegionNotValid);
+        }
+        let wait_handle = if return_wait {
+            Some(self.as_inner()?.instance.acquire_wait_handle()?)
+        } else {
+            None
+        };
+        if validate_dispatch {
+            return Err(SupaSimError::ValidateIndirectUnsupported);
+        }
+        let mut s = self.inner_mut()?;
+        s.commands.push(GpuCommand {
+            inner: GpuCommandInner::KernelDispatchIndirect(
+                shader,
+                indirect_buffer.clone(),
+                validate_dispatch,
+            ),
+            buffers: buffers.iter().map(|&b| b.clone()).collect(),
+            wait_handle: wait_handle.clone(),
+        });
+        s.recorded = false;
+        Ok(wait_handle)
+    }
+    pub fn clear(&self) -> SupaSimResult<B, ()> {
+        let mut s = self.inner_mut()?;
+        s.commands.clear();
+        s.instance
+            .clone()
+            .inner_mut()?
+            .inner
+            .clear_recorders(&mut [&mut s.inner])
+            .map_supasim()?;
+        s.recorded = false;
+        s.cleared = true;
+        Ok(())
+    }
+    fn record(&self) -> SupaSimResult<B, ()> {
+        let mut s = self.inner_mut()?;
+        s.recorded = true;
+        s.cleared = false;
+        todo!()
+    }
+}
 impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
@@ -385,6 +664,7 @@ api_type!(Buffer, {
     id: Id,
     #[allow(dead_code)]
     semaphores: Vec<Id>,
+    create_info: BufferDescriptor,
 },);
 impl<B: hal::Backend> Drop for BufferInner<B> {
     fn drop(&mut self) {
@@ -396,6 +676,60 @@ impl<B: hal::Backend> Drop for BufferInner<B> {
                     #[allow(clippy::uninit_assumed_init)]
                     std::mem::MaybeUninit::uninit().assume_init()
                 }));
+        }
+    }
+}
+
+pub struct MappedBuffer<B: hal::Backend> {
+    instance: Instance<B>,
+    #[allow(dead_code)]
+    inner: B::MappedBuffer,
+    buffer: Id,
+    has_mut: bool,
+}
+impl<B: hal::Backend> MappedBuffer<B> {
+    pub fn read<T: bytemuck::Pod>(&self) -> SupaSimResult<B, &[T]> {
+        // This code lol... maybe I need to do some major refactor this is gross
+        let buffer_align = self
+            .instance
+            .inner()?
+            .buffers
+            .get(self.buffer)
+            .as_ref()
+            .ok_or(SupaSimError::AlreadyDestroyed)?
+            .as_ref()
+            .ok_or(SupaSimError::AlreadyDestroyed)?
+            .inner()?
+            .create_info
+            .contents_align;
+        let s = self.inner.readable();
+        if (s.len() % size_of::<T>()) == 0 && (s.len() as u64 % buffer_align) == 0 {
+            Ok(bytemuck::cast_slice(s))
+        } else {
+            Err(SupaSimError::BufferRegionNotValid)
+        }
+    }
+    pub fn write<T: bytemuck::Pod>(&mut self) -> SupaSimResult<B, &mut [T]> {
+        if !self.has_mut {
+            return Err(SupaSimError::BufferRegionNotValid);
+        }
+        let buffer_align = self
+            .instance
+            .inner()?
+            .buffers
+            .get(self.buffer)
+            .as_ref()
+            .ok_or(SupaSimError::AlreadyDestroyed)?
+            .as_ref()
+            .ok_or(SupaSimError::AlreadyDestroyed)?
+            .inner()?
+            .create_info
+            .contents_align;
+        let s = self.inner.writable();
+        if (s.len() % size_of::<T>()) == 0 && (s.len() as u64 % buffer_align) == 0 {
+            Ok(bytemuck::cast_slice_mut(s))
+        } else {
+            Err(SupaSimError::BufferRegionNotValid)
         }
     }
 }

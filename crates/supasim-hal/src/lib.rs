@@ -144,7 +144,7 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
 }
 pub trait CompiledKernel<B: Backend<Kernel = Self>> {}
 pub trait MappedBuffer<B: Backend<MappedBuffer = Self>> {
-    fn readable(&mut self) -> &[u8];
+    fn readable(&self) -> &[u8];
     fn writable(&mut self) -> &mut [u8];
 }
 pub trait Buffer<B: Backend<Buffer = Self>> {}

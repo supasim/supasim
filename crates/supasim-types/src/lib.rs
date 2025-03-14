@@ -78,13 +78,16 @@ pub enum ShaderTarget {
     Wgsl,
     Dxil { shader_model: ShaderModel },
 }
+#[derive(Clone, Copy, Debug)]
 pub struct InstanceProperties {
     pub needs_explicit_sync: bool,
     pub indirect: bool,
     pub pipeline_cache: bool,
     pub shader_type: ShaderTarget,
 }
-pub fn to_static_lifetime<T>(r: &T) -> &'static T
+/// # Safety
+/// This is undefined behavior lol
+pub unsafe fn to_static_lifetime<T>(r: &T) -> &'static T
 where
     T: ?Sized,
 {
@@ -93,7 +96,9 @@ where
         &*r
     }
 }
-pub fn to_static_lifetime_mut<T>(r: &mut T) -> &'static mut T {
+/// # Safety
+/// This is undefined behavior lol
+pub unsafe fn to_static_lifetime_mut<T>(r: &mut T) -> &'static mut T {
     unsafe {
         let r = r as *mut T;
         &mut *r

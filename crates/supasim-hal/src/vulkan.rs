@@ -675,9 +675,9 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                             .range(*size),
                     );
                     // TODO: fix (potentially) Undefined behavior
-                    write = write.buffer_info(std::slice::from_ref(to_static_lifetime(
-                        &buffer_infos[buffer_infos.len() - 1],
-                    )));
+                    write = write.buffer_info(std::slice::from_ref(unsafe {
+                        to_static_lifetime(&buffer_infos[buffer_infos.len() - 1])
+                    }));
                 }
             }
             writes.push(write);
@@ -1099,7 +1099,7 @@ pub struct VulkanMappedBuffer {
     _buffer_offset: u64,
 }
 impl MappedBuffer<Vulkan> for VulkanMappedBuffer {
-    fn readable(&mut self) -> &[u8] {
+    fn readable(&self) -> &[u8] {
         self.slice
     }
     fn writable(&mut self) -> &mut [u8] {
@@ -1333,6 +1333,17 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
                 &mut command.command,
                 command.validate_indirect,
             )?;
+            unsafe {
+                instance.device.cmd_pipeline_barrier(
+                    cb,
+                    vk::PipelineStageFlags::ALL_COMMANDS,
+                    vk::PipelineStageFlags::ALL_COMMANDS,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[],
+                );
+            }
         }
         self.end(instance, cb)?;
         self.cbs.push(CommandBufferSubmit {
