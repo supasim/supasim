@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MemoryType {
     /// Driver decides
@@ -103,4 +105,19 @@ pub unsafe fn to_static_lifetime_mut<T>(r: &mut T) -> &'static mut T {
         let r = r as *mut T;
         &mut *r
     }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub enum ShaderResourceType {
+    #[default]
+    Unknown,
+    Buffer,
+    UniformBuffer,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ShaderReflectionInfo {
+    pub workgroup_size: [u32; 3],
+    pub entry_name: String,
+    pub resources: Vec<ShaderResourceType>,
+    pub push_constant_len: u32,
 }

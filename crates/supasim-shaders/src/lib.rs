@@ -1,11 +1,11 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
 use slang::Downcast;
 #[cfg(feature = "spirv_cross")]
 use spirv_cross::spirv;
 use std::{ffi::CString, io::Write, path::Path, str::FromStr};
 use tempfile::tempdir;
+use types::ShaderReflectionInfo;
 pub use types::{ShaderModel, ShaderTarget, SpirvVersion};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -46,20 +46,6 @@ pub struct ShaderCompileOptions<'a> {
     pub opt_level: OptimizationLevel,
     pub stability: StabilityGuarantee,
     pub minify: bool,
-}
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub enum ShaderResourceType {
-    #[default]
-    Unknown,
-    Buffer,
-    UniformBuffer,
-}
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct ShaderReflectionInfo {
-    pub workgroup_size: [u32; 3],
-    pub entry_name: String,
-    pub resources: Vec<ShaderResourceType>,
-    pub push_constant_len: u32,
 }
 pub type ShaderCompileError = anyhow::Error;
 pub struct GlobalState {

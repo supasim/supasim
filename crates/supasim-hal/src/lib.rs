@@ -26,7 +26,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     fn compile_kernel(
         &mut self,
         binary: &[u8],
-        reflection: &shaders::ShaderReflectionInfo,
+        reflection: &types::ShaderReflectionInfo,
         cache: Option<&mut B::PipelineCache>,
     ) -> Result<B::Kernel, B::Error>;
     fn create_pipeline_cache(&mut self, initial_data: &[u8]) -> Result<B::PipelineCache, B::Error>;

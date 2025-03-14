@@ -4,7 +4,7 @@
 use std::ops::{Deref, DerefMut, Range};
 
 use thiserror::Error;
-use types::InstanceProperties;
+use types::{InstanceProperties, ShaderReflectionInfo};
 
 #[derive(Error, Debug)]
 pub enum SupaSimError {
@@ -30,7 +30,7 @@ pub trait BackendInstance<B: Backend>: Clone {
     fn compile_kernel(
         &self,
         binary: &[u8],
-        reflection: shaders::ShaderReflectionInfo,
+        reflection: ShaderReflectionInfo,
     ) -> SupaSimResult<B::Kernel>;
     fn create_pipeline_cache(&self, data: &[u8]) -> SupaSimResult<B::PipelineCache>;
     fn create_recorder(&self) -> SupaSimResult<B::CommandRecorder>;

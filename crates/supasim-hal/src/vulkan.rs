@@ -11,9 +11,11 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
 };
 use log::Level;
-use shaders::ShaderResourceType;
 use thiserror::Error;
-use types::{BufferDescriptor, InstanceProperties, to_static_lifetime};
+use types::{
+    BufferDescriptor, InstanceProperties, ShaderReflectionInfo, ShaderResourceType,
+    to_static_lifetime,
+};
 
 use scopeguard::defer;
 
@@ -306,7 +308,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     fn compile_kernel(
         &mut self,
         binary: &[u8],
-        reflection: &shaders::ShaderReflectionInfo,
+        reflection: &ShaderReflectionInfo,
         cache: Option<&mut VulkanPipelineCache>,
     ) -> Result<<Vulkan as Backend>::Kernel, <Vulkan as Backend>::Error> {
         unsafe {
@@ -1408,9 +1410,8 @@ impl Fence<Vulkan> for VulkanFence {
 
 #[cfg(test)]
 mod tests {
-    use shaders::ShaderReflectionInfo;
-
     use crate::{CommandSynchronization, GpuCommand, GpuOperation};
+    use types::ShaderReflectionInfo;
 
     use super::*;
     fn create_storage_buf(instance: &mut VulkanInstance, data: &[u8]) -> VulkanBuffer {

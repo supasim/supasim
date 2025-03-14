@@ -18,20 +18,32 @@ use thiserror::Error;
 
 pub use bytemuck;
 pub use hal;
-pub use types::{MemoryType, ShaderModel, ShaderTarget, SpirvVersion};
+pub use shaders;
+pub use types::{
+    MemoryType, ShaderModel, ShaderReflectionInfo, ShaderResourceType, ShaderTarget, SpirvVersion,
+};
 
 /// Contains the index, and a certain "random" value to check if a destroyed thing has been replaced
 #[derive(Clone, Copy, Debug)]
-pub struct Id(u32, u32);
+struct Id(u32, u32);
 impl Default for Id {
     fn default() -> Self {
         Self(u32::MAX, 0)
     }
 }
-pub struct Tracker<T> {
+struct Tracker<T> {
     list: Vec<(u32, T)>,
     unused: Vec<u32>,
     current_identifier: u32,
+}
+impl<T> Default for Tracker<T> {
+    fn default() -> Self {
+        Self {
+            list: Vec::new(),
+            unused: Vec::new(),
+            current_identifier: 0,
+        }
+    }
 }
 impl<T> Tracker<T> {
     pub fn get(&self, id: Id) -> Option<&T> {
@@ -190,10 +202,20 @@ macro_rules! api_type {
                     Self(Arc::new(RwLock::new(Some(inner))))
                 }
                 pub(crate) fn inner(&self) -> SupaSimResult<B, InnerRef<[<$name Inner>]<B>>> {
-                    Ok(InnerRef(self.0.read().map_err(|e| SupaSimError::Poison(e.to_string()))?))
+                    let r = self.0.read().map_err(|e| SupaSimError::Poison(e.to_string()))?;
+                    if r.is_some() {
+                        Ok(InnerRef(r))
+                    } else {
+                        Err(SupaSimError::AlreadyDestroyed)
+                    }
                 }
                 pub(crate) fn inner_mut(&self) -> SupaSimResult<B, InnerRefMut<[<$name Inner>]<B>>> {
-                    Ok(InnerRefMut(self.0.write().map_err(|e| SupaSimError::Poison(e.to_string()))?))
+                    let r = self.0.write().map_err(|e| SupaSimError::Poison(e.to_string()))?;
+                    if r.is_some() {
+                        Ok(InnerRefMut(r))
+                    } else {
+                        Err(SupaSimError::AlreadyDestroyed)
+                    }
                 }
                 pub(crate) fn as_inner(&self) -> SupaSimResult<B, [<$name Inner>]<B>> {
                     let mut a = self.0.write().map_err(|e| SupaSimError::Poison(e.to_string()))?;
@@ -218,7 +240,6 @@ pub enum SupaSimError<B: hal::Backend> {
     Poison(String),
     Other(anyhow::Error),
     AlreadyDestroyed,
-    DestroyWhileInUse,
     BufferRegionNotValid,
     ValidateIndirectUnsupported,
 }
@@ -256,6 +277,20 @@ api_type!(Instance, {
     fences: Tracker<Fence<B>>,
 },);
 impl<B: hal::Backend> Instance<B> {
+    pub fn from_hal(mut hal: B::Instance) -> Self {
+        let inner_properties = hal.get_properties();
+        Self::from_inner(InstanceInner {
+            _phantom: Default::default(),
+            inner: hal,
+            inner_properties,
+            kernels: Tracker::default(),
+            kernel_caches: Tracker::default(),
+            command_recorders: Tracker::default(),
+            buffers: Tracker::default(),
+            wait_handles: Tracker::default(),
+            fences: Tracker::default(),
+        })
+    }
     pub fn properties(&self) -> SupaSimResult<B, InstanceProperties> {
         let v = self.as_inner()?.inner_properties;
         Ok(InstanceProperties {
@@ -267,7 +302,7 @@ impl<B: hal::Backend> Instance<B> {
     pub fn compile_kernel(
         &self,
         binary: &[u8],
-        reflection: shaders::ShaderReflectionInfo,
+        reflection: ShaderReflectionInfo,
         cache: Option<&KernelCache<B>>,
     ) -> SupaSimResult<B, Kernel<B>> {
         let mut cache_lock = if let Some(cache) = cache {
