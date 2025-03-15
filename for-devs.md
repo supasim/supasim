@@ -22,6 +22,7 @@ thiserror.workspace = true
 * In buffer creation, specify a "priority" to prevent it from being swapped in/out of memory constantly
 * Give a buffer an "item size" that it can be split along when swapping in/out of GPU memory
 * In kernel dispatch, specify which ranges of a buffer might be used
+* Split certain dispatches into multiple if the gpu doesn't support the size
 
 ## How to handle types/references in front-facing supasim
 * Front facing type
