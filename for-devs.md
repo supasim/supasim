@@ -39,6 +39,7 @@ thiserror.workspace = true
 
 
 ## GUI options
+Note that CPU support is desired due to relieving gpu/not using its memory, even if it is not always the first choice. Of course wgpu rendering in app is desired, as that is how visualizations will be done. Nice image and svg with updating support is also desired due to graphing with plotters.
 * [Iced](https://github.com/iced-rs/iced) - popular, mature
   * Supports wgpu integration using special widgets
   * Supports cpu and gpu, using its own wgpu renderer or tiny-skia
