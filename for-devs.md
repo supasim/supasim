@@ -1,4 +1,4 @@
-## Dependencies template
+## Dependencies template(copy from source)
 anyhow.workspace = true
 bitflags.workspace = true
 bytemuck.workspace = true
@@ -12,6 +12,14 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+## Synchronization things
+### Metal
+Metal supports similar synchronization to vulkan, except the different primitives are named differently(fences instead of semaphores and the like). It also supports automatic synchronization of certain resources, depending on how they are allocated. Resources allocated directly from a device default to synchronized, while resources allocated from an explicit memory heap must have an additional flag at creation time.
+### Vulkan
+Vulkan has very intricate synchronization, but libraries like vulkano can help(although vulkano's task graph is experimental, the use case here is relatively narrow, consisting of only compute dispatches and memory copies, so the few issues should be easy to find). It may also be feasible to translate a task graph system from another library written in another language.
+### Cuda
+Cuda supports cuda-graphs, but these are only in "recent" versions of cuda. Otherwise, the synchronization is rather strange. Essentially, each item submitted to a stream must wait for all previous items in the stream, and you can also optionally add extra dependencies. There are different numbers of streams on different cards. This may be easier to manually synchronize than other apis, particularly for simpler workloads, as 16 streams is a lot, far more than the number of queues usually used with vulkan for example. It also helps that there aren't too many synchronization requirements.
+
 ## Work for abstractions in supasim
 * Sharing references/multithreading
 * Moving buffers in and out of GPU memory when OOM is hit
@@ -24,7 +32,7 @@ thiserror.workspace = true
 * In kernel dispatch, specify which ranges of a buffer might be used
 * Split certain dispatches into multiple if the gpu doesn't support the size
 
-## How to handle types/references in front-facing supasim
+## ~~How to handle types/references in front-facing supasim~~ (resolved)
 * Front facing type
   * Should have a destroy method that can be called either way
   * Needs to be reference counting somehow, and a destructor that calls destroy
@@ -33,9 +41,15 @@ thiserror.workspace = true
     * This should be fine. The instance should destroy it when the instance is destroyed, and destorying it should tell the instance to remove the reference
   * References to things other than the instance should be done through an "id" system rather than direct references
 
-## Options for vulkan without descriptor sets
+## Bindless details
+### Cuda
+Cuda doesn't use anything like bind groups or descriptor sets.
+### Metal
+Metal uses bind groups, but there are alternatives. Also maybe something like "resource indexing"?
+### Vulkan
 * `VK_KHR_push_descriptor` - only in vk1.4, push all descriptors at dispatch time
 * `VK_KHR_buffer_device_address` - in vk1.2, push buffers specifically, requires modifications to shader code
+* Bindless - may be equivalent to one of the above, this is almost a buzzword.
 
 
 ## GUI options
