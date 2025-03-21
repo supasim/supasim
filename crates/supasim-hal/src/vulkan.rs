@@ -3,7 +3,7 @@ use std::{borrow::Cow, cell::Cell, ffi::CString, sync::Mutex};
 
 use crate::{
     Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, CompiledKernel, Fence,
-    GpuCommand, GpuResource, MappedBuffer, PipelineCache, RecorderSubmitInfo, Semaphore,
+    GpuCommand, GpuResource, PipelineCache, RecorderSubmitInfo, Semaphore,
 };
 use ash::{Entry, khr, vk};
 use gpu_allocator::{
@@ -28,7 +28,6 @@ impl Backend for Vulkan {
     type Fence = VulkanFence;
     type Instance = VulkanInstance;
     type Kernel = VulkanKernel;
-    type MappedBuffer = VulkanMappedBuffer;
     type PipelineCache = VulkanPipelineCache;
     type Semaphore = VulkanSemaphore;
 
@@ -297,7 +296,7 @@ impl VulkanInstance {
 impl BackendInstance<Vulkan> for VulkanInstance {
     fn get_properties(&mut self) -> InstanceProperties {
         InstanceProperties {
-            needs_explicit_sync: true,
+            sync_mode: types::SyncMode::VulkanStyle,
             indirect: false,
             pipeline_cache: true,
             shader_type: types::ShaderTarget::Spirv {
@@ -485,6 +484,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             self.device
                 .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
             err.set(false);
+            assert!(allocation.mapped_ptr().is_some());
             Ok(VulkanBuffer {
                 buffer,
                 allocation,
@@ -882,79 +882,22 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         &mut self,
         buffer: &<Vulkan as Backend>::Buffer,
         offset: u64,
-        size: u64,
-    ) -> Result<<Vulkan as Backend>::MappedBuffer, <Vulkan as Backend>::Error> {
+        _size: u64,
+    ) -> Result<*mut u8, <Vulkan as Backend>::Error> {
         unsafe {
-            /*let ptr = self.device.map_memory(
-                buffer.allocation.memory(),
-                buffer.allocation.offset() + offset,
-                size,
-                vk::MemoryMapFlags::empty(),
-            )?;*/
-
-            // Memory is automatically mapped by gpu-allocator
-
-            Ok(VulkanMappedBuffer {
-                slice: std::slice::from_raw_parts_mut(
-                    buffer
-                        .allocation
-                        .mapped_ptr()
-                        .unwrap()
-                        .byte_add(offset as usize)
-                        .as_ptr() as *mut u8,
-                    size as usize,
-                ),
-                _buffer_offset: offset,
-            })
+            Ok(buffer
+                .allocation
+                .mapped_ptr()
+                .unwrap()
+                .add(offset as usize)
+                .as_ptr() as *mut u8)
         }
-    }
-    fn flush_mapped_buffer(
-        &self,
-        _buffer: &<Vulkan as Backend>::Buffer,
-        _map: &<Vulkan as Backend>::MappedBuffer,
-    ) -> Result<(), VulkanError> {
-        /*if buffer.create_info.needs_flush {
-            unsafe {
-                let range = vk::MappedMemoryRange::default()
-                    .memory(buffer.allocation.memory())
-                    .offset(map.buffer_offset + buffer.allocation.offset())
-                    .size(map.slice.len() as u64);
-                self.device.flush_mapped_memory_ranges(&[range])?;
-            }
-        }*/
-
-        // Memory is always coherent with gpu-allocator
-
-        Ok(())
-    }
-    fn update_mapped_buffer(
-        &self,
-        _buffer: &<Vulkan as Backend>::Buffer,
-        _map: &<Vulkan as Backend>::MappedBuffer,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        /*if buffer.create_info.needs_flush {
-            unsafe {
-                let range = vk::MappedMemoryRange::default()
-                    .memory(buffer.allocation.memory())
-                    .offset(map.buffer_offset + buffer.allocation.offset())
-                    .size(map.slice.len() as u64);
-                self.device.invalidate_mapped_memory_ranges(&[range])?;
-            }
-        }*/
-
-        // Memory is always coherent with gpu-allocator
-
-        Ok(())
     }
     fn unmap_buffer(
         &mut self,
         _buffer: &<Vulkan as Backend>::Buffer,
-        _map: <Vulkan as Backend>::MappedBuffer,
+        _map: *mut u8,
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        // unsafe {self.device.unmap_memory(buffer.allocation.memory());}
-
-        // Memory is always mapped with gpu-allocator
-
         Ok(())
     }
     fn write_buffer(
@@ -964,8 +907,20 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         data: &[u8],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         let b = self.map_buffer(buffer, offset, data.len() as u64)?;
-        b.slice.copy_from_slice(data);
-        self.flush_mapped_buffer(buffer, &b)?;
+        let slice = unsafe { std::slice::from_raw_parts_mut(b, data.len()) };
+        slice.copy_from_slice(data);
+        self.unmap_buffer(buffer, b)?;
+        Ok(())
+    }
+    fn read_buffer(
+        &mut self,
+        buffer: &<Vulkan as Backend>::Buffer,
+        offset: u64,
+        data: &mut [u8],
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        let b = self.map_buffer(buffer, offset, data.len() as u64)?;
+        let slice = unsafe { std::slice::from_raw_parts(b as *const u8, data.len()) };
+        data.copy_from_slice(slice);
         self.unmap_buffer(buffer, b)?;
         Ok(())
     }
@@ -1096,18 +1051,6 @@ pub struct VulkanBuffer {
     pub create_info: types::BufferDescriptor,
 }
 impl Buffer<Vulkan> for VulkanBuffer {}
-pub struct VulkanMappedBuffer {
-    slice: &'static mut [u8],
-    _buffer_offset: u64,
-}
-impl MappedBuffer<Vulkan> for VulkanMappedBuffer {
-    fn readable(&self) -> &[u8] {
-        self.slice
-    }
-    fn writable(&mut self) -> &mut [u8] {
-        self.slice
-    }
-}
 struct CommandBufferSubmit {
     cb: vk::CommandBuffer,
     wait_semaphores: Vec<vk::Semaphore>,
@@ -1428,16 +1371,8 @@ mod tests {
                 needs_flush: true,
             })
             .unwrap();
-        let mut mapped = instance.map_buffer(&buf, 0, data.len() as u64).unwrap();
-        mapped.writable().copy_from_slice(data);
-        instance.flush_mapped_buffer(&buf, &mapped).unwrap();
-        instance.unmap_buffer(&buf, mapped).unwrap();
+        instance.write_buffer(&buf, 0, data).unwrap();
         buf
-    }
-    fn read_buf(instance: &mut VulkanInstance, buf: &mut VulkanBuffer, out_data: &mut [u8]) {
-        let mapped = instance.map_buffer(buf, 0, out_data.len() as u64).unwrap();
-        out_data.copy_from_slice(mapped.slice);
-        instance.unmap_buffer(buf, mapped).unwrap();
     }
     #[test]
     fn vulkan_main_test() {
@@ -1477,7 +1412,7 @@ mod tests {
             .unwrap();
         let sb1 = create_storage_buf(&mut instance, bytemuck::bytes_of(&[5u32, 0, 0, 0]));
         let sb2 = create_storage_buf(&mut instance, bytemuck::bytes_of(&[8u32, 0, 0, 0]));
-        let mut sbout = create_storage_buf(&mut instance, bytemuck::bytes_of(&[2u32, 0, 0, 0]));
+        let sbout = create_storage_buf(&mut instance, bytemuck::bytes_of(&[2u32, 0, 0, 0]));
         let bind_group = instance
             .create_bind_group(
                 &mut kernel,
@@ -1525,7 +1460,9 @@ mod tests {
             .unwrap();
 
         let mut res = [3u32, 0, 0, 0];
-        read_buf(&mut instance, &mut sbout, bytemuck::bytes_of_mut(&mut res));
+        instance
+            .read_buffer(&sbout, 0, bytemuck::cast_slice_mut(&mut res))
+            .unwrap();
         if res[0] != 13 {
             panic!("Expected 13, got {}", res[0]);
         }

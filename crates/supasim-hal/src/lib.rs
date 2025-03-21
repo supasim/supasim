@@ -3,7 +3,7 @@ mod vulkan;
 #[cfg(feature = "vulkan")]
 pub use vulkan::{
     Vulkan, VulkanBindGroup, VulkanBuffer, VulkanCommandRecorder, VulkanError, VulkanFence,
-    VulkanInstance, VulkanKernel, VulkanMappedBuffer, VulkanPipelineCache, VulkanSemaphore,
+    VulkanInstance, VulkanKernel, VulkanPipelineCache, VulkanSemaphore,
 };
 
 use types::*;
@@ -12,7 +12,6 @@ pub trait Backend: Sized + std::fmt::Debug + Clone {
     type Instance: BackendInstance<Self>;
     type Kernel: CompiledKernel<Self>;
     type Buffer: Buffer<Self>;
-    type MappedBuffer: MappedBuffer<Self>;
     type CommandRecorder: CommandRecorder<Self>;
     type BindGroup: BindGroup<Self>;
     type PipelineCache: PipelineCache<Self>;
@@ -54,23 +53,19 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
         offset: u64,
         data: &[u8],
     ) -> Result<(), B::Error>;
+    fn read_buffer(
+        &mut self,
+        buffer: &B::Buffer,
+        offset: u64,
+        data: &mut [u8],
+    ) -> Result<(), B::Error>;
     fn map_buffer(
         &mut self,
         buffer: &B::Buffer,
         offset: u64,
         size: u64,
-    ) -> Result<B::MappedBuffer, B::Error>;
-    fn flush_mapped_buffer(
-        &self,
-        buffer: &B::Buffer,
-        map: &B::MappedBuffer,
-    ) -> Result<(), B::Error>;
-    fn update_mapped_buffer(
-        &self,
-        buffer: &B::Buffer,
-        map: &B::MappedBuffer,
-    ) -> Result<(), B::Error>;
-    fn unmap_buffer(&mut self, buffer: &B::Buffer, map: B::MappedBuffer) -> Result<(), B::Error>;
+    ) -> Result<*mut u8, B::Error>;
+    fn unmap_buffer(&mut self, buffer: &B::Buffer, map: *mut u8) -> Result<(), B::Error>;
     fn create_bind_group(
         &mut self,
         kernel: &mut B::Kernel,
@@ -143,10 +138,6 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
     ) -> Result<(), B::Error>;
 }
 pub trait CompiledKernel<B: Backend<Kernel = Self>> {}
-pub trait MappedBuffer<B: Backend<MappedBuffer = Self>> {
-    fn readable(&self) -> &[u8];
-    fn writable(&mut self) -> &mut [u8];
-}
 pub trait Buffer<B: Backend<Buffer = Self>> {}
 pub trait BindGroup<B: Backend<BindGroup = Self>> {}
 pub trait PipelineCache<B: Backend<PipelineCache = Self>> {}

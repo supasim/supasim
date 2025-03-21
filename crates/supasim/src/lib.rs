@@ -8,7 +8,7 @@
 
 mod api;
 
-use hal::{BackendInstance as _, MappedBuffer as _};
+use hal::{BackendInstance as _, CommandRecorder as _};
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -163,12 +163,13 @@ impl From<BufferDescriptor> for types::BufferDescriptor {
 }
 
 #[derive(Clone)]
-pub struct BufferRange<B: hal::Backend> {
+pub struct BufferSlice<B: hal::Backend> {
     pub buffer: Buffer<B>,
     pub start: u64,
     pub len: u64,
+    pub needs_mut: bool,
 }
-impl<B: hal::Backend> BufferRange<B> {
+impl<B: hal::Backend> BufferSlice<B> {
     pub fn validate(&self) -> SupaSimResult<B, ()> {
         let b = self.buffer.inner()?;
         if (self.start % b.create_info.contents_align) == 0
@@ -178,6 +179,45 @@ impl<B: hal::Backend> BufferRange<B> {
         } else {
             Err(SupaSimError::BufferRegionNotValid)
         }
+    }
+    pub fn entire_buffer(buffer: &Buffer<B>, needs_mut: bool) -> SupaSimResult<B, Self> {
+        Ok(Self {
+            buffer: buffer.clone(),
+            start: 0,
+            len: buffer.inner()?.create_info.size,
+            needs_mut,
+        })
+    }
+    fn acquire(&self) -> SupaSimResult<B, ()> {
+        let mut s = self.buffer.inner_mut()?;
+        let _instance = s.instance.clone();
+        let mut instance = _instance.inner_mut()?;
+
+        s.host_using.push(BufferRange {
+            start: self.start,
+            len: self.len,
+            needs_mut: self.needs_mut,
+        });
+        // We also need to check it isn't in use
+        todo!()
+    }
+    fn release(&self) -> SupaSimResult<B, ()> {
+        let mut s = self.buffer.inner_mut()?;
+        let range = BufferRange {
+            start: self.start,
+            len: self.len,
+            needs_mut: self.needs_mut,
+        };
+        // I don't understand clippy's recommendation here
+        #[allow(clippy::unnecessary_filter_map)]
+        s.host_using
+            .iter()
+            .enumerate()
+            .filter_map(|a| if *a.1 == range { Some(a) } else { None })
+            .next()
+            .unwrap();
+        // Check it isn't in use
+        todo!()
     }
 }
 
@@ -242,6 +282,7 @@ pub enum SupaSimError<B: hal::Backend> {
     AlreadyDestroyed,
     BufferRegionNotValid,
     ValidateIndirectUnsupported,
+    UserClosure(anyhow::Error),
 }
 trait MapSupasimError<T, B: hal::Backend> {
     fn map_supasim(self) -> Result<T, SupaSimError<B>>;
@@ -252,6 +293,11 @@ impl<T, B: hal::Backend> MapSupasimError<T, B> for Result<T, B::Error> {
             Ok(t) => Ok(t),
             Err(e) => Err(SupaSimError::HalError(e)),
         }
+    }
+}
+impl<B: hal::Backend> std::fmt::Display for SupaSimError<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
     }
 }
 pub type SupaSimResult<B, T> = Result<T, SupaSimError<B>>;
@@ -371,6 +417,7 @@ impl<B: hal::Backend> Instance<B> {
             inner,
             id: Default::default(),
             semaphores: Vec::new(),
+            host_using: Vec::new(),
             create_info: *desc,
         });
         b.inner_mut()?.id = s.buffers.add(Some(b.clone()));
@@ -469,6 +516,40 @@ impl<B: hal::Backend> Instance<B> {
         };
         Ok(s.wait_handles.get(idx).unwrap().clone())
     }
+
+    #[allow(clippy::type_complexity)]
+    pub fn access_buffers(
+        &self,
+        closure: Box<dyn FnOnce(&mut [MappedBuffer<B>]) -> anyhow::Result<()>>,
+        buffers: &[&BufferSlice<B>],
+    ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
+        let mut mapped_buffers = Vec::new();
+        for b in buffers {
+            b.validate()?;
+            b.acquire()?;
+            let buffer = b.buffer.inner()?;
+            let _instance = buffer.instance.clone();
+            let ptr = _instance
+                .inner_mut()?
+                .inner
+                .map_buffer(&buffer.inner, b.start, b.len)
+                .map_supasim()?;
+            let mapped = MappedBuffer {
+                instance: self.clone(),
+                inner: ptr,
+                len: b.len,
+                buffer: b.buffer.as_inner()?.id,
+                has_mut: b.needs_mut,
+            };
+            mapped_buffers.push(mapped);
+        }
+        closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e))?;
+        drop(mapped_buffers);
+        for b in buffers {
+            b.release()?;
+        }
+        todo!()
+    }
 }
 impl<B: hal::Backend> Drop for InstanceInner<B> {
     fn drop(&mut self) {
@@ -537,21 +618,17 @@ struct GpuCommand<B: hal::Backend> {
     #[allow(dead_code)]
     inner: GpuCommandInner<B>,
     #[allow(dead_code)]
-    buffers: Vec<BufferRange<B>>,
+    buffers: Vec<BufferSlice<B>>,
     #[allow(dead_code)]
     wait_handle: Option<WaitHandle<B>>,
 }
 enum GpuCommandInner<B: hal::Backend> {
-    /// Callback
-    #[allow(clippy::type_complexity)]
-    #[allow(dead_code)]
-    CpuCode(Box<dyn Fn(&[MappedBuffer<B>]) -> anyhow::Result<()>>),
     /// Kernel, workgroup size
     #[allow(dead_code)]
     KernelDispatch(Kernel<B>, [u32; 3]),
     /// Kernel, buffer and offset, needs validation
     #[allow(dead_code)]
-    KernelDispatchIndirect(Kernel<B>, BufferRange<B>, bool),
+    KernelDispatchIndirect(Kernel<B>, BufferSlice<B>, bool),
 }
 api_type!(CommandRecorder, {
     #[allow(dead_code)]
@@ -569,36 +646,11 @@ api_type!(CommandRecorder, {
     commands: Vec<GpuCommand<B>>,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
-    #[allow(clippy::type_complexity)]
-    #[allow(unused_variables)]
-    pub fn cpu_code(
-        &self,
-        closure: Box<dyn Fn(&[MappedBuffer<B>]) -> anyhow::Result<()>>,
-        buffers: &[&BufferRange<B>],
-        return_wait: bool,
-    ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
-        for b in buffers {
-            b.validate()?;
-        }
-        let wait_handle = if return_wait {
-            Some(self.as_inner()?.instance.acquire_wait_handle()?)
-        } else {
-            None
-        };
-        let mut s = self.inner_mut()?;
-        s.commands.push(GpuCommand {
-            inner: GpuCommandInner::CpuCode(closure),
-            buffers: buffers.iter().map(|&b| b.clone()).collect(),
-            wait_handle: wait_handle.clone(),
-        });
-        s.recorded = false;
-        Ok(wait_handle)
-    }
     #[allow(unused_variables)]
     pub fn dispatch_kernel(
         &self,
         shader: Kernel<B>,
-        buffers: &[&BufferRange<B>],
+        buffers: &[&BufferSlice<B>],
         workgroup_dims: [u32; 3],
         return_wait: bool,
     ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
@@ -624,8 +676,8 @@ impl<B: hal::Backend> CommandRecorder<B> {
     pub fn dispatch_kernel_indirect(
         &self,
         shader: Kernel<B>,
-        buffers: &[&BufferRange<B>],
-        indirect_buffer: &BufferRange<B>,
+        buffers: &[&BufferSlice<B>],
+        indirect_buffer: &BufferSlice<B>,
         validate_dispatch: bool,
         return_wait: bool,
     ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
@@ -674,7 +726,13 @@ impl<B: hal::Backend> CommandRecorder<B> {
         let mut s = self.inner_mut()?;
         s.recorded = true;
         s.cleared = false;
-        todo!()
+        let _instance = s.instance.clone();
+        let mut instance = _instance.inner_mut()?;
+        if instance.inner_properties.needs_explicit_sync {
+            todo!()
+        } else {
+            todo!()
+        }
     }
 }
 impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
@@ -691,6 +749,13 @@ impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct BufferRange {
+    start: u64,
+    len: u64,
+    needs_mut: bool,
+}
+
 api_type!(Buffer, {
     #[allow(dead_code)]
     instance: Instance<B>,
@@ -698,7 +763,8 @@ api_type!(Buffer, {
     inner: B::Buffer,
     id: Id,
     #[allow(dead_code)]
-    semaphores: Vec<Id>,
+    semaphores: Vec<(Id, BufferRange)>,
+    host_using: Vec<BufferRange>,
     create_info: BufferDescriptor,
 },);
 impl<B: hal::Backend> Drop for BufferInner<B> {
@@ -718,7 +784,8 @@ impl<B: hal::Backend> Drop for BufferInner<B> {
 pub struct MappedBuffer<B: hal::Backend> {
     instance: Instance<B>,
     #[allow(dead_code)]
-    inner: B::MappedBuffer,
+    inner: *mut u8,
+    len: u64,
     buffer: Id,
     has_mut: bool,
 }
@@ -737,7 +804,7 @@ impl<B: hal::Backend> MappedBuffer<B> {
             .inner()?
             .create_info
             .contents_align;
-        let s = self.inner.readable();
+        let s = unsafe { std::slice::from_raw_parts(self.inner, self.len as usize) };
         if (s.len() % size_of::<T>()) == 0 && (s.len() as u64 % buffer_align) == 0 {
             Ok(bytemuck::cast_slice(s))
         } else {
@@ -760,7 +827,7 @@ impl<B: hal::Backend> MappedBuffer<B> {
             .inner()?
             .create_info
             .contents_align;
-        let s = self.inner.writable();
+        let s = unsafe { std::slice::from_raw_parts_mut(self.inner, self.len as usize) };
         if (s.len() % size_of::<T>()) == 0 && (s.len() as u64 % buffer_align) == 0 {
             Ok(bytemuck::cast_slice_mut(s))
         } else {

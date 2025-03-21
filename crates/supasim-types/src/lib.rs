@@ -81,8 +81,14 @@ pub enum ShaderTarget {
     Dxil { shader_model: ShaderModel },
 }
 #[derive(Clone, Copy, Debug)]
+pub enum SyncMode {
+    VulkanStyle,
+    Dag,
+    Automatic,
+}
+#[derive(Clone, Copy, Debug)]
 pub struct InstanceProperties {
-    pub needs_explicit_sync: bool,
+    pub sync_mode: SyncMode,
     pub indirect: bool,
     pub pipeline_cache: bool,
     pub shader_type: ShaderTarget,
