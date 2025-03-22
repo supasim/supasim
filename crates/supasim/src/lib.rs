@@ -8,7 +8,7 @@
 
 mod api;
 
-use hal::{BackendInstance as _, CommandRecorder as _};
+use hal::BackendInstance as _;
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -192,6 +192,7 @@ impl<B: hal::Backend> BufferSlice<B> {
     fn acquire(&self) -> SupaSimResult<B, ()> {
         let mut s = self.buffer.inner_mut()?;
         let _instance = s.instance.clone();
+        #[allow(unused_mut, unused_variables)]
         let mut instance = _instance.inner_mut()?;
 
         s.host_using.push(BufferRange {
@@ -203,6 +204,7 @@ impl<B: hal::Backend> BufferSlice<B> {
         todo!()
     }
     fn release(&self) -> SupaSimResult<B, ()> {
+        #[allow(unused_mut)]
         let mut s = self.buffer.inner_mut()?;
         let range = BufferRange {
             start: self.start,
@@ -728,6 +730,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
         s.recorded = true;
         s.cleared = false;
         let _instance = s.instance.clone();
+        #[allow(unused_mut)]
         let mut instance = _instance.inner_mut()?;
         match instance.inner_properties.sync_mode {
             SyncMode::Automatic => todo!(),
