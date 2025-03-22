@@ -15,6 +15,7 @@ use std::{
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 use thiserror::Error;
+use types::SyncMode;
 
 pub use bytemuck;
 pub use hal;
@@ -728,10 +729,10 @@ impl<B: hal::Backend> CommandRecorder<B> {
         s.cleared = false;
         let _instance = s.instance.clone();
         let mut instance = _instance.inner_mut()?;
-        if instance.inner_properties.needs_explicit_sync {
-            todo!()
-        } else {
-            todo!()
+        match instance.inner_properties.sync_mode {
+            SyncMode::Automatic => todo!(),
+            SyncMode::Dag => todo!(),
+            SyncMode::VulkanStyle => todo!(),
         }
     }
 }
