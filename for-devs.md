@@ -43,9 +43,9 @@ Cuda supports cuda-graphs, but these are only in "recent" versions of cuda. Othe
 
 ## Bindless details
 ### Cuda
-Cuda doesn't use anything like bind groups or descriptor sets.
+Cuda doesn't use anything like bind groups or descriptor sets. You specify the resources at dispatch time.
 ### Metal
-Metal uses bind groups, but there are alternatives. Also maybe something like "resource indexing"?
+Metal dispatches are similar to cuda.
 ### Vulkan
 * `VK_KHR_push_descriptor` - only in vk1.4, push all descriptors at dispatch time
 * `VK_KHR_buffer_device_address` - in vk1.2, push buffers specifically, requires modifications to shader code
