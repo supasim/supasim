@@ -1189,26 +1189,6 @@ impl VulkanCommandRecorder {
             SyncOperations::Both => vk::PipelineStageFlags::ALL_COMMANDS,
         }
     }
-    fn pipeline_barrier(
-        &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
-        before: SyncOperations,
-        after: SyncOperations,
-        cb: vk::CommandBuffer,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            instance.device.cmd_pipeline_barrier(
-                cb,
-                Self::stage_mask(before),
-                Self::stage_mask(after),
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[],
-            );
-        }
-        Ok(())
-    }
     pub fn set_event(
         &mut self,
         instance: &mut VulkanInstance,
@@ -1221,26 +1201,6 @@ impl VulkanCommandRecorder {
             instance
                 .device
                 .cmd_set_event(cb, event.inner, Self::stage_mask(wait));
-        }
-        Ok(())
-    }
-    pub fn wait_event(
-        &mut self,
-        instance: &mut VulkanInstance,
-        signal: SyncOperations,
-        event: &VulkanEvent,
-        cb: vk::CommandBuffer,
-    ) -> Result<(), VulkanError> {
-        unsafe {
-            instance.device.cmd_wait_events(
-                cb,
-                &[event.inner],
-                Self::stage_mask(event.operations.get()),
-                Self::stage_mask(signal),
-                &[],
-                &[],
-                &[],
-            );
         }
         Ok(())
     }
@@ -1296,14 +1256,17 @@ impl VulkanCommandRecorder {
                 validate_dispatches,
                 cb,
             )?,
-            BufferCommand::PipelineBarrier { before, after } => {
-                self.pipeline_barrier(instance, *before, *after, cb)?
+            BufferCommand::PipelineBarrier { .. } => {
+                todo!()
             }
             BufferCommand::SetEvent { event, wait } => {
                 self.set_event(instance, *wait, event, cb)?
             }
-            BufferCommand::WaitEvent { event, signal } => {
-                self.wait_event(instance, *signal, event, cb)?
+            BufferCommand::WaitEvent { .. } => {
+                todo!()
+            }
+            BufferCommand::MemoryBarrier { .. } => {
+                todo!()
             }
         }
         Ok(())

@@ -184,4 +184,6 @@ pub enum BufferCommand<'a, B: Backend> {
         before: SyncOperations,
         after: SyncOperations,
     },
+    /// Only for vulkan like synchronization. Will hitch a ride with the previous PipelineBarrier or WaitEvent
+    MemoryBarrier { resource: GpuResource<'a, B> },
 }
