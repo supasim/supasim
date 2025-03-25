@@ -2,8 +2,8 @@ use core::ffi;
 use std::{borrow::Cow, cell::Cell, ffi::CString, sync::Mutex};
 
 use crate::{
-    Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, CompiledKernel, Event,
-    GpuCommand, GpuResource, PipelineCache, RecorderSubmitInfo, Semaphore,
+    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, CompiledKernel,
+    Event, GpuResource, PipelineCache, RecorderSubmitInfo, Semaphore,
 };
 use ash::{Entry, khr, vk};
 use gpu_allocator::{
@@ -13,7 +13,7 @@ use gpu_allocator::{
 use log::Level;
 use thiserror::Error;
 use types::{
-    BufferDescriptor, InstanceProperties, ShaderReflectionInfo, ShaderResourceType,
+    BufferDescriptor, InstanceProperties, ShaderReflectionInfo, ShaderResourceType, SyncOperations,
     to_static_lifetime,
 };
 
@@ -988,6 +988,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     None,
                 )?
             },
+            operations: Cell::new(SyncOperations::Both),
         })
     }
 
@@ -1181,15 +1182,77 @@ impl VulkanCommandRecorder {
         // TODO: Do sync stuff
         Ok(())
     }
+    fn stage_mask(sync_ops: SyncOperations) -> vk::PipelineStageFlags {
+        match sync_ops {
+            SyncOperations::Transfer => vk::PipelineStageFlags::TRANSFER,
+            SyncOperations::ComputeDispatch => vk::PipelineStageFlags::COMPUTE_SHADER,
+            SyncOperations::Both => vk::PipelineStageFlags::ALL_COMMANDS,
+        }
+    }
+    fn pipeline_barrier(
+        &mut self,
+        instance: &mut <Vulkan as Backend>::Instance,
+        before: SyncOperations,
+        after: SyncOperations,
+        cb: vk::CommandBuffer,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            instance.device.cmd_pipeline_barrier(
+                cb,
+                Self::stage_mask(before),
+                Self::stage_mask(after),
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[],
+            );
+        }
+        Ok(())
+    }
+    pub fn set_event(
+        &mut self,
+        instance: &mut VulkanInstance,
+        wait: SyncOperations,
+        event: &VulkanEvent,
+        cb: vk::CommandBuffer,
+    ) -> Result<(), VulkanError> {
+        unsafe {
+            event.operations.set(wait);
+            instance
+                .device
+                .cmd_set_event(cb, event.inner, Self::stage_mask(wait));
+        }
+        Ok(())
+    }
+    pub fn wait_event(
+        &mut self,
+        instance: &mut VulkanInstance,
+        signal: SyncOperations,
+        event: &VulkanEvent,
+        cb: vk::CommandBuffer,
+    ) -> Result<(), VulkanError> {
+        unsafe {
+            instance.device.cmd_wait_events(
+                cb,
+                &[event.inner],
+                Self::stage_mask(event.operations.get()),
+                Self::stage_mask(signal),
+                &[],
+                &[],
+                &[],
+            );
+        }
+        Ok(())
+    }
     fn record_command(
         &mut self,
         instance: &mut VulkanInstance,
         cb: vk::CommandBuffer,
-        command: &mut GpuCommand<Vulkan>,
+        command: &mut BufferCommand<Vulkan>,
         validate_dispatches: bool,
     ) -> Result<(), VulkanError> {
         match command {
-            GpuCommand::CopyBuffer {
+            BufferCommand::CopyBuffer {
                 src_buffer,
                 dst_buffer,
                 src_offset,
@@ -1204,7 +1267,7 @@ impl VulkanCommandRecorder {
                 *size,
                 cb,
             )?,
-            GpuCommand::DispatchKernel {
+            BufferCommand::DispatchKernel {
                 shader,
                 bind_group,
                 push_constants,
@@ -1217,7 +1280,7 @@ impl VulkanCommandRecorder {
                 *workgroup_dims,
                 cb,
             )?,
-            GpuCommand::DispatchKernelIndirect {
+            BufferCommand::DispatchKernelIndirect {
                 shader,
                 bind_group,
                 push_constants,
@@ -1233,6 +1296,15 @@ impl VulkanCommandRecorder {
                 validate_dispatches,
                 cb,
             )?,
+            BufferCommand::PipelineBarrier { before, after } => {
+                self.pipeline_barrier(instance, *before, *after, cb)?
+            }
+            BufferCommand::SetEvent { event, wait } => {
+                self.set_event(instance, *wait, event, cb)?
+            }
+            BufferCommand::WaitEvent { event, signal } => {
+                self.wait_event(instance, *signal, event, cb)?
+            }
         }
         Ok(())
     }
@@ -1282,37 +1354,6 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         });
         Ok(())
     }
-    fn record_command(
-        &mut self,
-        _instance: &mut <Vulkan as Backend>::Instance,
-        _command: crate::GpuOperation<Vulkan>,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        todo!()
-    }
-    fn pipeline_barrier(
-        &mut self,
-        _instance: &mut <Vulkan as Backend>::Instance,
-        _before_sync: types::SyncOperations,
-        _after_sync: types::SyncOperations,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        todo!()
-    }
-    fn set_event(
-        &mut self,
-        _instance: &mut <Vulkan as Backend>::Instance,
-        _event: &mut <Vulkan as Backend>::Event,
-        _sync_ops: types::SyncOperations,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        todo!()
-    }
-    fn wait_event(
-        &mut self,
-        _instance: &mut <Vulkan as Backend>::Instance,
-        _event: &mut <Vulkan as Backend>::Event,
-        _sync_ops: types::SyncOperations,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        todo!()
-    }
 }
 pub struct DescriptorPoolData {
     pub pool: vk::DescriptorPool,
@@ -1346,12 +1387,13 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
 
 pub struct VulkanEvent {
     inner: vk::Event,
+    operations: Cell<SyncOperations>,
 }
 impl Event<Vulkan> for VulkanEvent {}
 
 #[cfg(test)]
 mod tests {
-    use crate::{CommandSynchronization, GpuCommand, GpuOperation};
+    use crate::{BufferCommand, CommandSynchronization, GpuOperation};
     use types::ShaderReflectionInfo;
 
     use super::*;
@@ -1427,7 +1469,7 @@ mod tests {
             .record_commands(
                 &mut instance,
                 &mut [GpuOperation {
-                    command: GpuCommand::DispatchKernel {
+                    command: BufferCommand::DispatchKernel {
                         shader: &kernel,
                         bind_group: &bind_group,
                         push_constants: &[],

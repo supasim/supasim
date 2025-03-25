@@ -122,29 +122,6 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
         instance: &mut B::Instance,
         commands: &mut [GpuOperation<B>],
     ) -> Result<(), B::Error>;
-    fn record_command(
-        &mut self,
-        instance: &mut B::Instance,
-        command: GpuOperation<B>,
-    ) -> Result<(), B::Error>;
-    fn set_event(
-        &mut self,
-        instance: &mut B::Instance,
-        event: &mut B::Event,
-        sync_ops: SyncOperations,
-    ) -> Result<(), B::Error>;
-    fn wait_event(
-        &mut self,
-        instance: &mut B::Instance,
-        event: &mut B::Event,
-        sync_ops: SyncOperations,
-    ) -> Result<(), B::Error>;
-    fn pipeline_barrier(
-        &mut self,
-        instance: &mut B::Instance,
-        before_sync: SyncOperations,
-        after_sync: SyncOperations,
-    ) -> Result<(), B::Error>;
 }
 pub trait CompiledKernel<B: Backend<Kernel = Self>> {}
 pub trait Buffer<B: Backend<Buffer = Self>> {}
@@ -167,11 +144,11 @@ pub trait Error<B: Backend<Error = Self>>: std::error::Error {
 }
 
 pub struct GpuOperation<'a, B: Backend> {
-    pub command: GpuCommand<'a, B>,
+    pub command: BufferCommand<'a, B>,
     pub sync: CommandSynchronization<'a, B>,
     pub validate_indirect: bool,
 }
-pub enum GpuCommand<'a, B: Backend> {
+pub enum BufferCommand<'a, B: Backend> {
     CopyBuffer {
         src_buffer: &'a B::Buffer,
         dst_buffer: &'a B::Buffer,
@@ -191,5 +168,20 @@ pub enum GpuCommand<'a, B: Backend> {
         push_constants: &'a [u8],
         indirect_buffer: &'a B::Buffer,
         buffer_offset: u64,
+    },
+    /// Only for vulkan like synchronization
+    SetEvent {
+        event: &'a B::Event,
+        wait: SyncOperations,
+    },
+    /// Only for vulkan like synchronization
+    WaitEvent {
+        event: &'a B::Event,
+        signal: SyncOperations,
+    },
+    /// Only for vulkan like synchronization
+    PipelineBarrier {
+        before: SyncOperations,
+        after: SyncOperations,
     },
 }
