@@ -3,6 +3,7 @@ pub mod vulkan;
 
 use types::*;
 
+/// Backend traits should not have their own destructors, as higher level operations may replace them with uninitialized memory by destructor time.
 pub trait Backend: Sized + std::fmt::Debug + Clone {
     type Instance: BackendInstance<Self>;
     type Kernel: CompiledKernel<Self>;
