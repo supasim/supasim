@@ -3,8 +3,8 @@ use supasim::{BufferSlice, shaders};
 
 pub fn main() {
     println!("Hello, world!");
-    let instance: Instance<supasim::hal::Vulkan> =
-        Instance::from_hal(supasim::hal::Vulkan::create_instance(true).unwrap());
+    let instance: Instance<supasim::hal::vulkan::Vulkan> =
+        Instance::from_hal(supasim::hal::vulkan::Vulkan::create_instance(true).unwrap());
     let buffer1 = instance
         .create_buffer(&BufferDescriptor {
             size: 16,

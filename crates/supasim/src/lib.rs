@@ -305,10 +305,6 @@ impl<B: hal::Backend> std::fmt::Display for SupaSimError<B> {
 }
 pub type SupaSimResult<B, T> = Result<T, SupaSimError<B>>;
 
-struct Fence<B: hal::Backend> {
-    inner: B::Fence,
-    in_use: bool,
-}
 #[derive(Clone, Copy, Debug)]
 pub struct InstanceProperties {
     pub supports_pipeline_cache: bool,
@@ -323,7 +319,6 @@ api_type!(Instance, {
     command_recorders: Tracker<Option<CommandRecorder<B>>>,
     buffers: Tracker<Option<Buffer<B>>>,
     wait_handles: Tracker<WaitHandle<B>>,
-    fences: Tracker<Fence<B>>,
 },);
 impl<B: hal::Backend> Instance<B> {
     pub fn from_hal(mut hal: B::Instance) -> Self {
@@ -337,7 +332,6 @@ impl<B: hal::Backend> Instance<B> {
             command_recorders: Tracker::default(),
             buffers: Tracker::default(),
             wait_handles: Tracker::default(),
-            fences: Tracker::default(),
         })
     }
     pub fn properties(&self) -> SupaSimResult<B, InstanceProperties> {
@@ -457,7 +451,7 @@ impl<B: hal::Backend> Instance<B> {
             .collect();
         self.inner_mut()?
             .inner
-            .submit_recorders(&mut recorded, None)
+            .submit_recorders(&mut recorded)
             .map_supasim()?;
         Ok(())
     }
@@ -479,19 +473,10 @@ impl<B: hal::Backend> Instance<B> {
             .map_supasim()?;
         Ok(())
     }
-    pub fn wait_for_idle(&self, timeout: f32) -> SupaSimResult<B, ()> {
+    pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
         let mut _s = self.inner_mut()?;
         let s = &mut *_s;
-        let fences: Vec<_> = s
-            .fences
-            .list
-            .iter()
-            .filter_map(|(_, a)| if a.in_use { Some(&a.inner) } else { None })
-            .collect();
-        s.inner
-            .wait_for_fences(&fences, true, timeout)
-            .map_supasim()?;
-        Ok(())
+        todo!()
     }
     pub fn do_busywork(&self) -> SupaSimResult<B, ()> {
         todo!()
@@ -558,9 +543,6 @@ impl<B: hal::Backend> Drop for InstanceInner<B> {
     fn drop(&mut self) {
         let _ = self.inner.wait_for_idle();
         self.command_recorders.list.clear(); // These will call their destructors, politely taking care of themselves
-        for (_, f) in std::mem::take(&mut self.fences.list) {
-            let _ = self.inner.destroy_fence(f.inner);
-        }
         self.wait_handles.list.clear();
         self.kernel_caches.list.clear();
         self.buffers.list.clear();

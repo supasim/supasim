@@ -80,11 +80,17 @@ pub enum ShaderTarget {
     Wgsl,
     Dxil { shader_model: ShaderModel },
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyncMode {
     VulkanStyle,
     Dag,
     Automatic,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyncOperations {
+    ComputeDispatch,
+    Transfer,
+    Both,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct InstanceProperties {

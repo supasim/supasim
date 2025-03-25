@@ -2,7 +2,7 @@ use core::ffi;
 use std::{borrow::Cow, cell::Cell, ffi::CString, sync::Mutex};
 
 use crate::{
-    Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, CompiledKernel, Fence,
+    Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, CompiledKernel, Event,
     GpuCommand, GpuResource, PipelineCache, RecorderSubmitInfo, Semaphore,
 };
 use ash::{Entry, khr, vk};
@@ -25,11 +25,11 @@ impl Backend for Vulkan {
     type Buffer = VulkanBuffer;
     type BindGroup = VulkanBindGroup;
     type CommandRecorder = VulkanCommandRecorder;
-    type Fence = VulkanFence;
     type Instance = VulkanInstance;
     type Kernel = VulkanKernel;
     type PipelineCache = VulkanPipelineCache;
     type Semaphore = VulkanSemaphore;
+    type Event = VulkanEvent;
 
     type Error = VulkanError;
 }
@@ -724,7 +724,6 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     fn submit_recorders(
         &mut self,
         infos: &mut [RecorderSubmitInfo<Vulkan>],
-        fence: Option<&mut VulkanFence>,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         let mut cbs = Vec::new();
         let mut semaphores: Vec<vk::Semaphore> = Vec::new();
@@ -847,14 +846,8 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             }
         }
         unsafe {
-            self.device.queue_submit(
-                self.queue,
-                &submits,
-                match fence {
-                    Some(f) => f.inner,
-                    None => vk::Fence::null(),
-                },
-            )?;
+            self.device
+                .queue_submit(self.queue, &submits, vk::Fence::null())?;
         }
         Ok(())
     }
@@ -924,38 +917,6 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         self.unmap_buffer(buffer, b)?;
         Ok(())
     }
-    fn create_fence(&mut self) -> std::result::Result<VulkanFence, VulkanError> {
-        unsafe {
-            Ok(VulkanFence {
-                inner: self.device.create_fence(
-                    &vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::empty()),
-                    None,
-                )?,
-            })
-        }
-    }
-    fn destroy_fence(&mut self, fence: VulkanFence) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            self.device.destroy_fence(fence.inner, None);
-            Ok(())
-        }
-    }
-    fn wait_for_fences(
-        &mut self,
-        fences: &[&<Vulkan as Backend>::Fence],
-        all: bool,
-        timeout_seconds: f32,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            let fences: Vec<_> = fences.iter().map(|f| f.inner).collect();
-            self.device.wait_for_fences(
-                &fences,
-                all,
-                (timeout_seconds * 1_000_000_000.0) as u64,
-            )?;
-            Ok(())
-        }
-    }
     fn create_semaphore(&mut self) -> std::result::Result<VulkanSemaphore, VulkanError> {
         unsafe {
             let mut next = vk::SemaphoreTypeCreateInfo::default()
@@ -1016,6 +977,27 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         self.unused_command_buffers.clear();
         self.unused_command_buffers.clear();
+        Ok(())
+    }
+
+    fn create_event(&mut self) -> Result<<Vulkan as Backend>::Event, <Vulkan as Backend>::Error> {
+        Ok(VulkanEvent {
+            inner: unsafe {
+                self.device.create_event(
+                    &vk::EventCreateInfo::default().flags(vk::EventCreateFlags::DEVICE_ONLY_KHR),
+                    None,
+                )?
+            },
+        })
+    }
+
+    fn destroy_event(
+        &mut self,
+        event: <Vulkan as Backend>::Event,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            self.device.destroy_event(event.inner, None);
+        }
         Ok(())
     }
 }
@@ -1300,6 +1282,37 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         });
         Ok(())
     }
+    fn record_command(
+        &mut self,
+        _instance: &mut <Vulkan as Backend>::Instance,
+        _command: crate::GpuOperation<Vulkan>,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        todo!()
+    }
+    fn pipeline_barrier(
+        &mut self,
+        _instance: &mut <Vulkan as Backend>::Instance,
+        _before_sync: types::SyncOperations,
+        _after_sync: types::SyncOperations,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        todo!()
+    }
+    fn set_event(
+        &mut self,
+        _instance: &mut <Vulkan as Backend>::Instance,
+        _event: &mut <Vulkan as Backend>::Event,
+        _sync_ops: types::SyncOperations,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        todo!()
+    }
+    fn wait_event(
+        &mut self,
+        _instance: &mut <Vulkan as Backend>::Instance,
+        _event: &mut <Vulkan as Backend>::Event,
+        _sync_ops: types::SyncOperations,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        todo!()
+    }
 }
 pub struct DescriptorPoolData {
     pub pool: vk::DescriptorPool,
@@ -1330,26 +1343,11 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         }
     }
 }
-pub struct VulkanFence {
-    inner: vk::Fence,
+
+pub struct VulkanEvent {
+    inner: vk::Event,
 }
-impl Fence<Vulkan> for VulkanFence {
-    fn get_signalled(
-        &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
-    ) -> Result<bool, <Vulkan as Backend>::Error> {
-        unsafe { Ok(instance.device.get_fence_status(self.inner)?) }
-    }
-    fn reset(
-        &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            instance.device.reset_fences(&[self.inner])?;
-            Ok(())
-        }
-    }
-}
+impl Event<Vulkan> for VulkanEvent {}
 
 #[cfg(test)]
 mod tests {
@@ -1379,7 +1377,6 @@ mod tests {
         env_logger::init();
         let mut instance = Vulkan::create_instance(true).unwrap();
         let mut cache = instance.create_pipeline_cache(&[]).unwrap();
-        let mut fence = instance.create_fence().unwrap();
         let fun_semaphore = instance.create_semaphore().unwrap();
         let mut kernel = instance
             .compile_kernel(
@@ -1445,16 +1442,12 @@ mod tests {
             )
             .unwrap();
         instance
-            .submit_recorders(
-                std::slice::from_mut(&mut RecorderSubmitInfo {
-                    command_recorder: &mut recorder,
-                    wait_semaphores: &mut [],
-                    signal_semaphores: &[&fun_semaphore],
-                }),
-                Some(&mut fence),
-            )
+            .submit_recorders(std::slice::from_mut(&mut RecorderSubmitInfo {
+                command_recorder: &mut recorder,
+                wait_semaphores: &mut [],
+                signal_semaphores: &[&fun_semaphore],
+            }))
             .unwrap();
-        instance.wait_for_fences(&[&fence], true, 1.0).unwrap();
         instance
             .wait_for_semaphores(&[&fun_semaphore], true, 1.0)
             .unwrap();
@@ -1470,7 +1463,6 @@ mod tests {
         instance.destroy_recorder(recorder).unwrap();
 
         instance.destroy_semaphore(fun_semaphore).unwrap();
-        instance.destroy_fence(fence).unwrap();
         instance
             .destroy_bind_group(&mut kernel, bind_group)
             .unwrap();

@@ -1,10 +1,5 @@
 #[cfg(feature = "vulkan")]
-mod vulkan;
-#[cfg(feature = "vulkan")]
-pub use vulkan::{
-    Vulkan, VulkanBindGroup, VulkanBuffer, VulkanCommandRecorder, VulkanError, VulkanFence,
-    VulkanInstance, VulkanKernel, VulkanPipelineCache, VulkanSemaphore,
-};
+pub mod vulkan;
 
 use types::*;
 
@@ -15,8 +10,8 @@ pub trait Backend: Sized + std::fmt::Debug + Clone {
     type CommandRecorder: CommandRecorder<Self>;
     type BindGroup: BindGroup<Self>;
     type PipelineCache: PipelineCache<Self>;
-    type Fence: Fence<Self>;
     type Semaphore: Semaphore<Self>;
+    type Event: Event<Self>;
 
     type Error: Error<Self>;
 }
@@ -38,11 +33,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     /// Wait for all compute work to complete on the GPU.
     fn wait_for_idle(&mut self) -> Result<(), B::Error>;
     fn create_recorder(&mut self, allow_resubmits: bool) -> Result<B::CommandRecorder, B::Error>;
-    fn submit_recorders(
-        &mut self,
-        infos: &mut [RecorderSubmitInfo<B>],
-        fence: Option<&mut B::Fence>,
-    ) -> Result<(), B::Error>;
+    fn submit_recorders(&mut self, infos: &mut [RecorderSubmitInfo<B>]) -> Result<(), B::Error>;
     fn destroy_recorder(&mut self, recorder: B::CommandRecorder) -> Result<(), B::Error>;
     fn clear_recorders(&mut self, buffers: &mut [&mut B::CommandRecorder]) -> Result<(), B::Error>;
     fn create_buffer(&mut self, alloc_info: &BufferDescriptor) -> Result<B::Buffer, B::Error>;
@@ -83,15 +74,6 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
         bind_group: B::BindGroup,
     ) -> Result<(), B::Error>;
 
-    fn create_fence(&mut self) -> Result<B::Fence, B::Error>;
-    fn destroy_fence(&mut self, fence: B::Fence) -> Result<(), B::Error>;
-    fn wait_for_fences(
-        &mut self,
-        fences: &[&B::Fence],
-        all: bool,
-        timeout_seconds: f32,
-    ) -> Result<(), B::Error>;
-
     fn create_semaphore(&mut self) -> Result<B::Semaphore, B::Error>;
     fn destroy_semaphore(&mut self, semaphore: B::Semaphore) -> Result<(), B::Error>;
     fn wait_for_semaphores(
@@ -100,6 +82,9 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
         all: bool,
         timeout: f32,
     ) -> Result<(), B::Error>;
+
+    fn create_event(&mut self) -> Result<B::Event, B::Error>;
+    fn destroy_event(&mut self, event: B::Event) -> Result<(), B::Error>;
 
     fn cleanup_cached_resources(&mut self) -> Result<(), B::Error>;
 }
@@ -136,20 +121,38 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
         instance: &mut B::Instance,
         commands: &mut [GpuOperation<B>],
     ) -> Result<(), B::Error>;
+    fn record_command(
+        &mut self,
+        instance: &mut B::Instance,
+        command: GpuOperation<B>,
+    ) -> Result<(), B::Error>;
+    fn set_event(
+        &mut self,
+        instance: &mut B::Instance,
+        event: &mut B::Event,
+        sync_ops: SyncOperations,
+    ) -> Result<(), B::Error>;
+    fn wait_event(
+        &mut self,
+        instance: &mut B::Instance,
+        event: &mut B::Event,
+        sync_ops: SyncOperations,
+    ) -> Result<(), B::Error>;
+    fn pipeline_barrier(
+        &mut self,
+        instance: &mut B::Instance,
+        before_sync: SyncOperations,
+        after_sync: SyncOperations,
+    ) -> Result<(), B::Error>;
 }
 pub trait CompiledKernel<B: Backend<Kernel = Self>> {}
 pub trait Buffer<B: Backend<Buffer = Self>> {}
 pub trait BindGroup<B: Backend<BindGroup = Self>> {}
 pub trait PipelineCache<B: Backend<PipelineCache = Self>> {}
-/// Only used for when an entire submit completes
-pub trait Fence<B: Backend<Fence = Self>> {
-    fn reset(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
-    fn get_signalled(&mut self, instance: &mut B::Instance) -> Result<bool, B::Error>;
-}
 pub trait Semaphore<B: Backend<Semaphore = Self>> {
     fn signal(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
-
+pub trait Event<B: Backend<Event = Self>> {}
 pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub command_recorder: &'a mut B::CommandRecorder,
     pub wait_semaphores: &'a [&'a B::Semaphore],
