@@ -257,7 +257,6 @@ impl crate::Error<Vulkan> for VulkanError {
         }
     }
 }
-#[allow(dead_code)]
 pub struct VulkanInstance {
     entry: ash::Entry,
     instance: ash::Instance,
