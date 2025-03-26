@@ -1184,7 +1184,14 @@ impl VulkanCommandRecorder {
             SyncOperations::Both => vk::PipelineStageFlags::ALL_COMMANDS,
         }
     }
-    pub fn set_event(
+    fn stage_mask_khr(sync_ops: SyncOperations) -> vk::PipelineStageFlags2KHR {
+        match sync_ops {
+            SyncOperations::Transfer => vk::PipelineStageFlags2KHR::TRANSFER,
+            SyncOperations::ComputeDispatch => vk::PipelineStageFlags2KHR::COMPUTE_SHADER,
+            SyncOperations::Both => vk::PipelineStageFlags2KHR::ALL_COMMANDS,
+        }
+    }
+    fn set_event(
         &mut self,
         instance: &mut VulkanInstance,
         wait: SyncOperations,
@@ -1199,12 +1206,83 @@ impl VulkanCommandRecorder {
         }
         Ok(())
     }
+    /// First command must be a pipeline barrier or wait event command. Following commands must be memory barriers
+    fn sync_command<'a>(
+        &mut self,
+        instance: &<Vulkan as Backend>::Instance,
+        cb: vk::CommandBuffer,
+        commands: impl IntoIterator<Item = &'a BufferCommand<'a, Vulkan>>,
+    ) -> Result<(), VulkanError> {
+        let mut events = Vec::new();
+        let mut is_event_wait = None; // True if event wait, false if pipeline barrier
+        let mut barriers = Vec::new();
+        let mut pre_flags = vk::PipelineStageFlags2KHR::empty();
+        let mut post_flags = vk::PipelineStageFlags2KHR::empty();
+        for command in commands {
+            match command {
+                BufferCommand::MemoryBarrier {
+                    resource:
+                        GpuResource::Buffer {
+                            buffer,
+                            offset,
+                            size,
+                        },
+                } => barriers.push(
+                    vk::BufferMemoryBarrier2KHR::default()
+                        .buffer(buffer.buffer)
+                        .offset(*offset)
+                        .size(*size)
+                        .src_queue_family_index(instance.queue_family_idx)
+                        .dst_queue_family_index(instance.queue_family_idx)
+                        .src_access_mask(
+                            vk::AccessFlags2KHR::MEMORY_READ_KHR
+                                | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
+                        )
+                        .dst_access_mask(
+                            vk::AccessFlags2KHR::MEMORY_READ_KHR
+                                | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
+                        ),
+                ),
+                BufferCommand::WaitEvent { event, signal } => {
+                    assert!(is_event_wait != Some(false));
+                    is_event_wait = Some(true);
+                    events.push(event.inner);
+                    pre_flags |= Self::stage_mask_khr(event.operations.get());
+                    post_flags |= Self::stage_mask_khr(*signal);
+                }
+                BufferCommand::PipelineBarrier { before, after } => {
+                    assert!(is_event_wait != Some(true));
+                    is_event_wait = Some(false);
+                    pre_flags |= Self::stage_mask_khr(*before);
+                    post_flags |= Self::stage_mask_khr(*after);
+                }
+                _ => unreachable!(),
+            }
+        }
+        if pre_flags.is_empty() || post_flags.is_empty() {
+            return Ok(());
+        }
+        for barrier in &mut barriers {
+            *barrier = barrier.src_stage_mask(pre_flags).dst_stage_mask(post_flags);
+        }
+        let dependency_info = vk::DependencyInfoKHR::default().buffer_memory_barriers(&barriers);
+        match is_event_wait.unwrap() {
+            false => unsafe {
+                instance.device.cmd_pipeline_barrier2(cb, &dependency_info);
+            },
+            true => unsafe {
+                let mut dependencies = Vec::new();
+                dependencies.resize(events.len(), dependency_info);
+                instance.device.cmd_wait_events2(cb, &events, &dependencies);
+            },
+        }
+        Ok(())
+    }
     fn record_command(
         &mut self,
         instance: &mut VulkanInstance,
         cb: vk::CommandBuffer,
         command: &mut BufferCommand<Vulkan>,
-        validate_dispatches: bool,
     ) -> Result<(), VulkanError> {
         match command {
             BufferCommand::CopyBuffer {
@@ -1241,6 +1319,7 @@ impl VulkanCommandRecorder {
                 push_constants,
                 indirect_buffer,
                 buffer_offset,
+                validate,
             } => self.dispatch_kernel_indirect(
                 instance,
                 shader,
@@ -1248,20 +1327,20 @@ impl VulkanCommandRecorder {
                 push_constants,
                 indirect_buffer,
                 *buffer_offset,
-                validate_dispatches,
+                *validate,
                 cb,
             )?,
-            BufferCommand::PipelineBarrier { .. } => {
-                todo!()
-            }
             BufferCommand::SetEvent { event, wait } => {
                 self.set_event(instance, *wait, event, cb)?
             }
+            BufferCommand::PipelineBarrier { .. } => {
+                unreachable!()
+            }
             BufferCommand::WaitEvent { .. } => {
-                todo!()
+                unreachable!()
             }
             BufferCommand::MemoryBarrier { .. } => {
-                todo!()
+                unreachable!()
             }
         }
         Ok(())
@@ -1272,34 +1351,34 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         &mut self,
         _instance: &mut <Vulkan as Backend>::Instance,
         _resources: &[&GpuResource<Vulkan>],
-        _dag: &mut daggy::Dag<crate::GpuOperation<Vulkan>, (usize, usize)>,
+        _dag: &mut daggy::Dag<crate::BufferCommand<Vulkan>, (usize, usize)>,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         todo!()
     }
     fn record_commands(
         &mut self,
         instance: &mut VulkanInstance,
-        commands: &mut [crate::GpuOperation<Vulkan>],
+        commands: &mut [crate::BufferCommand<Vulkan>],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         let cb = instance.get_command_buffer()?;
         self.begin(instance, cb)?;
-        for command in commands {
-            self.record_command(
-                instance,
-                cb,
-                &mut command.command,
-                command.validate_indirect,
-            )?;
-            unsafe {
-                instance.device.cmd_pipeline_barrier(
-                    cb,
-                    vk::PipelineStageFlags::ALL_COMMANDS,
-                    vk::PipelineStageFlags::ALL_COMMANDS,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[],
-                );
+        let mut pipeline_chain_start = None;
+        for i in 0..commands.len() {
+            match &commands[i] {
+                BufferCommand::MemoryBarrier { .. }
+                | BufferCommand::WaitEvent { .. }
+                | BufferCommand::PipelineBarrier { .. } => {
+                    if pipeline_chain_start.is_none() {
+                        pipeline_chain_start = Some(i);
+                    }
+                }
+                _ => {
+                    if let Some(start) = pipeline_chain_start {
+                        self.sync_command(instance, cb, &commands[start..i])?;
+                        pipeline_chain_start = None;
+                    }
+                    self.record_command(instance, cb, &mut commands[i])?;
+                }
             }
         }
         self.end(instance, cb)?;
@@ -1351,7 +1430,7 @@ impl Event<Vulkan> for VulkanEvent {}
 
 #[cfg(test)]
 mod tests {
-    use crate::{BufferCommand, CommandSynchronization, GpuOperation};
+    use crate::BufferCommand;
     use types::ShaderReflectionInfo;
 
     use super::*;
@@ -1426,18 +1505,11 @@ mod tests {
         recorder
             .record_commands(
                 &mut instance,
-                &mut [GpuOperation {
-                    command: BufferCommand::DispatchKernel {
-                        shader: &kernel,
-                        bind_group: &bind_group,
-                        push_constants: &[],
-                        workgroup_dims: [1, 1, 1],
-                    },
-                    sync: CommandSynchronization {
-                        resources_needing_sync: &mut [],
-                        out_semaphore: None,
-                    },
-                    validate_indirect: false,
+                &mut [BufferCommand::DispatchKernel {
+                    shader: &kernel,
+                    bind_group: &bind_group,
+                    push_constants: &[],
+                    workgroup_dims: [1, 1, 1],
                 }],
             )
             .unwrap();

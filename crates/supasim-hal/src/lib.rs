@@ -115,12 +115,12 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
         &mut self,
         instance: &mut B::Instance,
         resources: &[&GpuResource<B>],
-        dag: &mut daggy::Dag<GpuOperation<B>, (usize, usize)>,
+        dag: &mut daggy::Dag<BufferCommand<B>, (usize, usize)>,
     ) -> Result<(), B::Error>;
     fn record_commands(
         &mut self,
         instance: &mut B::Instance,
-        commands: &mut [GpuOperation<B>],
+        commands: &mut [BufferCommand<B>],
     ) -> Result<(), B::Error>;
 }
 pub trait CompiledKernel<B: Backend<Kernel = Self>> {}
@@ -143,11 +143,6 @@ pub trait Error<B: Backend<Error = Self>>: std::error::Error {
     fn is_timeout(&self) -> bool;
 }
 
-pub struct GpuOperation<'a, B: Backend> {
-    pub command: BufferCommand<'a, B>,
-    pub sync: CommandSynchronization<'a, B>,
-    pub validate_indirect: bool,
-}
 pub enum BufferCommand<'a, B: Backend> {
     CopyBuffer {
         src_buffer: &'a B::Buffer,
@@ -168,6 +163,7 @@ pub enum BufferCommand<'a, B: Backend> {
         push_constants: &'a [u8],
         indirect_buffer: &'a B::Buffer,
         buffer_offset: u64,
+        validate: bool,
     },
     /// Only for vulkan like synchronization
     SetEvent {
