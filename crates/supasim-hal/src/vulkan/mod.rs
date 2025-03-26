@@ -160,7 +160,7 @@ impl Vulkan {
         }
     }
     #[allow(clippy::too_many_arguments)]
-    pub fn from_existing(
+    pub unsafe fn from_existing(
         debug: bool,
         entry: ash::Entry,
         instance: ash::Instance,
@@ -299,7 +299,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             },
         }
     }
-    fn compile_kernel(
+    unsafe fn compile_kernel(
         &mut self,
         binary: &[u8],
         reflection: &ShaderReflectionInfo,
@@ -395,7 +395,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             })
         }
     }
-    fn destroy_kernel(
+    unsafe fn destroy_kernel(
         &mut self,
         kernel: <Vulkan as Backend>::Kernel,
     ) -> Result<(), <Vulkan as Backend>::Error> {
@@ -412,7 +412,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(())
         }
     }
-    fn create_buffer(
+    unsafe fn create_buffer(
         &mut self,
         alloc_info: &types::BufferDescriptor,
     ) -> Result<<Vulkan as Backend>::Buffer, <Vulkan as Backend>::Error> {
@@ -487,7 +487,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             })
         }
     }
-    fn destroy_buffer(
+    unsafe fn destroy_buffer(
         &mut self,
         buffer: <Vulkan as Backend>::Buffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
@@ -500,7 +500,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(())
         }
     }
-    fn create_pipeline_cache(
+    unsafe fn create_pipeline_cache(
         &mut self,
         initial_data: &[u8],
     ) -> Result<<Vulkan as Backend>::PipelineCache, <Vulkan as Backend>::Error> {
@@ -512,7 +512,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             })
         }
     }
-    fn destroy_pipeline_cache(
+    unsafe fn destroy_pipeline_cache(
         &mut self,
         cache: <Vulkan as Backend>::PipelineCache,
     ) -> Result<(), <Vulkan as Backend>::Error> {
@@ -526,7 +526,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(())
         }
     }
-    fn get_pipeline_cache_data(
+    unsafe fn get_pipeline_cache_data(
         &mut self,
         cache: &mut <Vulkan as Backend>::PipelineCache,
     ) -> Result<Vec<u8>, <Vulkan as Backend>::Error> {
@@ -540,7 +540,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(data)
         }
     }
-    fn create_bind_group(
+    unsafe fn create_bind_group(
         &mut self,
         kernel: &mut VulkanKernel,
         resources: &[crate::GpuResource<Vulkan>],
@@ -630,7 +630,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             }
         }
     }
-    fn update_bind_group(
+    unsafe fn update_bind_group(
         &mut self,
         bg: &mut <Vulkan as Backend>::BindGroup,
         _kernel: &mut <Vulkan as Backend>::Kernel,
@@ -684,7 +684,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
-    fn destroy_bind_group(
+    unsafe fn destroy_bind_group(
         &mut self,
         kernel: &mut <Vulkan as Backend>::Kernel,
         bind_group: VulkanBindGroup,
@@ -697,7 +697,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
-    fn create_recorder(
+    unsafe fn create_recorder(
         &mut self,
         allow_resubmits: bool,
     ) -> Result<<Vulkan as Backend>::CommandRecorder, <Vulkan as Backend>::Error> {
@@ -707,7 +707,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             used_events: Vec::new(),
         })
     }
-    fn destroy_recorder(
+    unsafe fn destroy_recorder(
         &mut self,
         recorder: <Vulkan as Backend>::CommandRecorder,
     ) -> Result<(), <Vulkan as Backend>::Error> {
@@ -716,7 +716,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             .extend(recorder.cbs.into_iter().map(|a| a.cb));
         Ok(())
     }
-    fn submit_recorders(
+    unsafe fn submit_recorders(
         &mut self,
         infos: &mut [RecorderSubmitInfo<Vulkan>],
     ) -> Result<(), <Vulkan as Backend>::Error> {
@@ -846,7 +846,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
-    fn clear_recorders(
+    unsafe fn clear_recorders(
         &mut self,
         recorders: &mut [&mut VulkanCommandRecorder],
     ) -> Result<(), VulkanError> {
@@ -860,13 +860,13 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
-    fn wait_for_idle(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn wait_for_idle(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             self.device.queue_wait_idle(self.queue)?;
             Ok(())
         }
     }
-    fn map_buffer(
+    unsafe fn map_buffer(
         &mut self,
         buffer: &<Vulkan as Backend>::Buffer,
         offset: u64,
@@ -881,38 +881,42 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .as_ptr() as *mut u8)
         }
     }
-    fn unmap_buffer(
+    unsafe fn unmap_buffer(
         &mut self,
         _buffer: &<Vulkan as Backend>::Buffer,
         _map: *mut u8,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         Ok(())
     }
-    fn write_buffer(
+    unsafe fn write_buffer(
         &mut self,
         buffer: &<Vulkan as Backend>::Buffer,
         offset: u64,
         data: &[u8],
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        let b = self.map_buffer(buffer, offset, data.len() as u64)?;
-        let slice = unsafe { std::slice::from_raw_parts_mut(b, data.len()) };
-        slice.copy_from_slice(data);
-        self.unmap_buffer(buffer, b)?;
-        Ok(())
+        unsafe {
+            let b = self.map_buffer(buffer, offset, data.len() as u64)?;
+            let slice = std::slice::from_raw_parts_mut(b, data.len());
+            slice.copy_from_slice(data);
+            self.unmap_buffer(buffer, b)?;
+            Ok(())
+        }
     }
-    fn read_buffer(
+    unsafe fn read_buffer(
         &mut self,
         buffer: &<Vulkan as Backend>::Buffer,
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        let b = self.map_buffer(buffer, offset, data.len() as u64)?;
-        let slice = unsafe { std::slice::from_raw_parts(b as *const u8, data.len()) };
-        data.copy_from_slice(slice);
-        self.unmap_buffer(buffer, b)?;
+        unsafe {
+            let b = self.map_buffer(buffer, offset, data.len() as u64)?;
+            let slice = std::slice::from_raw_parts(b as *const u8, data.len());
+            data.copy_from_slice(slice);
+            self.unmap_buffer(buffer, b)?;
+        }
         Ok(())
     }
-    fn create_semaphore(&mut self) -> std::result::Result<VulkanSemaphore, VulkanError> {
+    unsafe fn create_semaphore(&mut self) -> std::result::Result<VulkanSemaphore, VulkanError> {
         unsafe {
             let mut next = vk::SemaphoreTypeCreateInfo::default()
                 .initial_value(0)
@@ -925,7 +929,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             })
         }
     }
-    fn destroy_semaphore(
+    unsafe fn destroy_semaphore(
         &mut self,
         semaphore: VulkanSemaphore,
     ) -> Result<(), <Vulkan as Backend>::Error> {
@@ -934,7 +938,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
-    fn wait_for_semaphores(
+    unsafe fn wait_for_semaphores(
         &mut self,
         semaphores: &[&VulkanSemaphore],
         all: bool,
@@ -956,7 +960,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
-    fn cleanup_cached_resources(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         if !self.unused_command_buffers.is_empty() {
             unsafe {
                 self.device
@@ -975,7 +979,9 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         Ok(())
     }
 
-    fn create_event(&mut self) -> Result<<Vulkan as Backend>::Event, <Vulkan as Backend>::Error> {
+    unsafe fn create_event(
+        &mut self,
+    ) -> Result<<Vulkan as Backend>::Event, <Vulkan as Backend>::Error> {
         Ok(VulkanEvent {
             inner: unsafe {
                 self.device.create_event(
@@ -987,7 +993,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         })
     }
 
-    fn destroy_event(
+    unsafe fn destroy_event(
         &mut self,
         event: <Vulkan as Backend>::Event,
     ) -> Result<(), <Vulkan as Backend>::Error> {
@@ -1351,7 +1357,7 @@ impl VulkanCommandRecorder {
     }
 }
 impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
-    fn record_dag(
+    unsafe fn record_dag(
         &mut self,
         _instance: &mut <Vulkan as Backend>::Instance,
         _resources: &[&GpuResource<Vulkan>],
@@ -1359,7 +1365,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unreachable!()
     }
-    fn record_commands(
+    unsafe fn record_commands(
         &mut self,
         instance: &mut VulkanInstance,
         commands: &mut [crate::BufferCommand<Vulkan>],
@@ -1414,7 +1420,10 @@ pub struct VulkanSemaphore {
     inner: vk::Semaphore,
 }
 impl Semaphore<Vulkan> for VulkanSemaphore {
-    fn signal(&mut self, instance: &mut VulkanInstance) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn signal(
+        &mut self,
+        instance: &mut VulkanInstance,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             instance.device.signal_semaphore(
                 &vk::SemaphoreSignalInfo::default()
@@ -1438,154 +1447,158 @@ mod tests {
     use types::ShaderReflectionInfo;
 
     use super::*;
-    fn create_storage_buf(instance: &mut VulkanInstance, data: &[u8]) -> VulkanBuffer {
-        let buf = instance
-            .create_buffer(&BufferDescriptor {
-                size: data.len() as u64,
-                memory_type: types::MemoryType::UploadDownload,
-                mapped_at_creation: false,
-                visible_to_renderer: false,
-                indirect_capable: false,
-                transfer_src: false,
-                transfer_dst: false,
-                uniform: false,
-                needs_flush: true,
-            })
-            .unwrap();
-        instance.write_buffer(&buf, 0, data).unwrap();
-        buf
+    unsafe fn create_storage_buf(instance: &mut VulkanInstance, data: &[u8]) -> VulkanBuffer {
+        unsafe {
+            let buf = instance
+                .create_buffer(&BufferDescriptor {
+                    size: data.len() as u64,
+                    memory_type: types::MemoryType::UploadDownload,
+                    mapped_at_creation: false,
+                    visible_to_renderer: false,
+                    indirect_capable: false,
+                    transfer_src: false,
+                    transfer_dst: false,
+                    uniform: false,
+                    needs_flush: true,
+                })
+                .unwrap();
+            instance.write_buffer(&buf, 0, data).unwrap();
+            buf
+        }
     }
     #[test]
     fn vulkan_main_test() {
-        env_logger::init();
-        let mut instance = Vulkan::create_instance(true).unwrap();
-        let mut cache = instance.create_pipeline_cache(&[]).unwrap();
-        let fun_semaphore = instance.create_semaphore().unwrap();
-        let mut kernel = instance
-            .compile_kernel(
-                include_bytes!("test_add.spirv"),
-                &ShaderReflectionInfo {
-                    workgroup_size: [1, 1, 1],
-                    entry_name: "main".to_owned(),
-                    resources: vec![
-                        ShaderResourceType::Buffer,
-                        ShaderResourceType::Buffer,
-                        ShaderResourceType::Buffer,
+        unsafe {
+            env_logger::init();
+            let mut instance = Vulkan::create_instance(true).unwrap();
+            let mut cache = instance.create_pipeline_cache(&[]).unwrap();
+            let fun_semaphore = instance.create_semaphore().unwrap();
+            let mut kernel = instance
+                .compile_kernel(
+                    include_bytes!("test_add.spirv"),
+                    &ShaderReflectionInfo {
+                        workgroup_size: [1, 1, 1],
+                        entry_name: "main".to_owned(),
+                        resources: vec![
+                            ShaderResourceType::Buffer,
+                            ShaderResourceType::Buffer,
+                            ShaderResourceType::Buffer,
+                        ],
+                        push_constant_len: 0,
+                    },
+                    Some(&mut cache),
+                )
+                .unwrap();
+            let mut kernel2 = instance
+                .compile_kernel(
+                    include_bytes!("test_double.spirv"),
+                    &ShaderReflectionInfo {
+                        workgroup_size: [1, 1, 1],
+                        entry_name: "main".to_owned(),
+                        resources: vec![ShaderResourceType::Buffer],
+                        push_constant_len: 0,
+                    },
+                    Some(&mut cache),
+                )
+                .unwrap();
+            let uniform_buf = instance
+                .create_buffer(&BufferDescriptor {
+                    size: 16,
+                    memory_type: types::MemoryType::Upload,
+                    mapped_at_creation: false,
+                    visible_to_renderer: false,
+                    indirect_capable: false,
+                    transfer_src: false,
+                    transfer_dst: false,
+                    uniform: true,
+                    needs_flush: true,
+                })
+                .unwrap();
+            let sb1 = create_storage_buf(&mut instance, bytemuck::bytes_of(&[5u32, 0, 0, 0]));
+            let sb2 = create_storage_buf(&mut instance, bytemuck::bytes_of(&[8u32, 0, 0, 0]));
+            let sbout = create_storage_buf(&mut instance, bytemuck::bytes_of(&[2u32, 0, 0, 0]));
+            let bind_group = instance
+                .create_bind_group(
+                    &mut kernel,
+                    &[
+                        GpuResource::buffer(&sb1, 0, 16),
+                        GpuResource::buffer(&sb2, 0, 16),
+                        GpuResource::buffer(&sbout, 0, 16),
                     ],
-                    push_constant_len: 0,
-                },
-                Some(&mut cache),
-            )
-            .unwrap();
-        let mut kernel2 = instance
-            .compile_kernel(
-                include_bytes!("test_double.spirv"),
-                &ShaderReflectionInfo {
-                    workgroup_size: [1, 1, 1],
-                    entry_name: "main".to_owned(),
-                    resources: vec![ShaderResourceType::Buffer],
-                    push_constant_len: 0,
-                },
-                Some(&mut cache),
-            )
-            .unwrap();
-        let uniform_buf = instance
-            .create_buffer(&BufferDescriptor {
-                size: 16,
-                memory_type: types::MemoryType::Upload,
-                mapped_at_creation: false,
-                visible_to_renderer: false,
-                indirect_capable: false,
-                transfer_src: false,
-                transfer_dst: false,
-                uniform: true,
-                needs_flush: true,
-            })
-            .unwrap();
-        let sb1 = create_storage_buf(&mut instance, bytemuck::bytes_of(&[5u32, 0, 0, 0]));
-        let sb2 = create_storage_buf(&mut instance, bytemuck::bytes_of(&[8u32, 0, 0, 0]));
-        let sbout = create_storage_buf(&mut instance, bytemuck::bytes_of(&[2u32, 0, 0, 0]));
-        let bind_group = instance
-            .create_bind_group(
-                &mut kernel,
-                &[
-                    GpuResource::buffer(&sb1, 0, 16),
-                    GpuResource::buffer(&sb2, 0, 16),
-                    GpuResource::buffer(&sbout, 0, 16),
-                ],
-            )
-            .unwrap();
-        let bind_group2 = instance
-            .create_bind_group(&mut kernel2, &[GpuResource::buffer(&sbout, 0, 16)])
-            .unwrap();
+                )
+                .unwrap();
+            let bind_group2 = instance
+                .create_bind_group(&mut kernel2, &[GpuResource::buffer(&sbout, 0, 16)])
+                .unwrap();
 
-        let mut recorder = instance.create_recorder(false).unwrap();
+            let mut recorder = instance.create_recorder(false).unwrap();
 
-        recorder
-            .record_commands(
-                &mut instance,
-                &mut [
-                    BufferCommand::DispatchKernel {
-                        shader: &kernel,
-                        bind_group: &bind_group,
-                        push_constants: &[],
-                        workgroup_dims: [1, 1, 1],
-                    },
-                    BufferCommand::PipelineBarrier {
-                        before: SyncOperations::ComputeDispatch,
-                        after: SyncOperations::ComputeDispatch,
-                    },
-                    BufferCommand::MemoryBarrier {
-                        resource: GpuResource::Buffer {
-                            buffer: &sbout,
-                            offset: 0,
-                            size: 16,
+            recorder
+                .record_commands(
+                    &mut instance,
+                    &mut [
+                        BufferCommand::DispatchKernel {
+                            shader: &kernel,
+                            bind_group: &bind_group,
+                            push_constants: &[],
+                            workgroup_dims: [1, 1, 1],
                         },
-                    },
-                    BufferCommand::DispatchKernel {
-                        shader: &kernel2,
-                        bind_group: &bind_group2,
-                        push_constants: &[],
-                        workgroup_dims: [1, 1, 1],
-                    },
-                ],
-            )
-            .unwrap();
-        instance
-            .submit_recorders(std::slice::from_mut(&mut RecorderSubmitInfo {
-                command_recorder: &mut recorder,
-                wait_semaphores: &mut [],
-                signal_semaphores: &[&fun_semaphore],
-            }))
-            .unwrap();
-        instance
-            .wait_for_semaphores(&[&fun_semaphore], true, 1.0)
-            .unwrap();
+                        BufferCommand::PipelineBarrier {
+                            before: SyncOperations::ComputeDispatch,
+                            after: SyncOperations::ComputeDispatch,
+                        },
+                        BufferCommand::MemoryBarrier {
+                            resource: GpuResource::Buffer {
+                                buffer: &sbout,
+                                offset: 0,
+                                size: 16,
+                            },
+                        },
+                        BufferCommand::DispatchKernel {
+                            shader: &kernel2,
+                            bind_group: &bind_group2,
+                            push_constants: &[],
+                            workgroup_dims: [1, 1, 1],
+                        },
+                    ],
+                )
+                .unwrap();
+            instance
+                .submit_recorders(std::slice::from_mut(&mut RecorderSubmitInfo {
+                    command_recorder: &mut recorder,
+                    wait_semaphores: &mut [],
+                    signal_semaphores: &[&fun_semaphore],
+                }))
+                .unwrap();
+            instance
+                .wait_for_semaphores(&[&fun_semaphore], true, 1.0)
+                .unwrap();
 
-        let mut res = [3u32, 0, 0, 0];
-        instance
-            .read_buffer(&sbout, 0, bytemuck::cast_slice_mut(&mut res))
-            .unwrap();
-        if res[0] != 26 {
-            panic!("Expected 26, got {}", res[0]);
+            let mut res = [3u32, 0, 0, 0];
+            instance
+                .read_buffer(&sbout, 0, bytemuck::cast_slice_mut(&mut res))
+                .unwrap();
+            if res[0] != 26 {
+                panic!("Expected 26, got {}", res[0]);
+            }
+
+            instance.destroy_recorder(recorder).unwrap();
+
+            instance.destroy_semaphore(fun_semaphore).unwrap();
+            instance
+                .destroy_bind_group(&mut kernel, bind_group)
+                .unwrap();
+            instance
+                .destroy_bind_group(&mut kernel2, bind_group2)
+                .unwrap();
+            instance.destroy_kernel(kernel).unwrap();
+            instance.destroy_kernel(kernel2).unwrap();
+            instance.destroy_buffer(uniform_buf).unwrap();
+            instance.destroy_buffer(sb1).unwrap();
+            instance.destroy_buffer(sb2).unwrap();
+            instance.destroy_buffer(sbout).unwrap();
+            instance.destroy_pipeline_cache(cache).unwrap();
+            instance.destroy();
         }
-
-        instance.destroy_recorder(recorder).unwrap();
-
-        instance.destroy_semaphore(fun_semaphore).unwrap();
-        instance
-            .destroy_bind_group(&mut kernel, bind_group)
-            .unwrap();
-        instance
-            .destroy_bind_group(&mut kernel2, bind_group2)
-            .unwrap();
-        instance.destroy_kernel(kernel).unwrap();
-        instance.destroy_kernel(kernel2).unwrap();
-        instance.destroy_buffer(uniform_buf).unwrap();
-        instance.destroy_buffer(sb1).unwrap();
-        instance.destroy_buffer(sb2).unwrap();
-        instance.destroy_buffer(sbout).unwrap();
-        instance.destroy_pipeline_cache(cache).unwrap();
-        instance.destroy();
     }
 }

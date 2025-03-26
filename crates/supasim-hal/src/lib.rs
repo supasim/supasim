@@ -1,3 +1,5 @@
+#![allow(clippy::missing_safety_doc)]
+
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
 
@@ -18,76 +20,91 @@ pub trait Backend: Sized + std::fmt::Debug + Clone {
 }
 pub trait BackendInstance<B: Backend<Instance = Self>> {
     fn get_properties(&mut self) -> InstanceProperties;
-    fn compile_kernel(
+    unsafe fn compile_kernel(
         &mut self,
         binary: &[u8],
         reflection: &types::ShaderReflectionInfo,
         cache: Option<&mut B::PipelineCache>,
     ) -> Result<B::Kernel, B::Error>;
-    fn create_pipeline_cache(&mut self, initial_data: &[u8]) -> Result<B::PipelineCache, B::Error>;
-    fn destroy_pipeline_cache(&mut self, cache: B::PipelineCache) -> Result<(), B::Error>;
-    fn get_pipeline_cache_data(
+    unsafe fn create_pipeline_cache(
+        &mut self,
+        initial_data: &[u8],
+    ) -> Result<B::PipelineCache, B::Error>;
+    unsafe fn destroy_pipeline_cache(&mut self, cache: B::PipelineCache) -> Result<(), B::Error>;
+    unsafe fn get_pipeline_cache_data(
         &mut self,
         cache: &mut B::PipelineCache,
     ) -> Result<Vec<u8>, B::Error>;
-    fn destroy_kernel(&mut self, kernel: B::Kernel) -> Result<(), B::Error>;
+    unsafe fn destroy_kernel(&mut self, kernel: B::Kernel) -> Result<(), B::Error>;
     /// Wait for all compute work to complete on the GPU.
-    fn wait_for_idle(&mut self) -> Result<(), B::Error>;
-    fn create_recorder(&mut self, allow_resubmits: bool) -> Result<B::CommandRecorder, B::Error>;
-    fn submit_recorders(&mut self, infos: &mut [RecorderSubmitInfo<B>]) -> Result<(), B::Error>;
-    fn destroy_recorder(&mut self, recorder: B::CommandRecorder) -> Result<(), B::Error>;
-    fn clear_recorders(&mut self, buffers: &mut [&mut B::CommandRecorder]) -> Result<(), B::Error>;
-    fn create_buffer(&mut self, alloc_info: &BufferDescriptor) -> Result<B::Buffer, B::Error>;
-    fn destroy_buffer(&mut self, buffer: B::Buffer) -> Result<(), B::Error>;
-    fn write_buffer(
+    unsafe fn wait_for_idle(&mut self) -> Result<(), B::Error>;
+    unsafe fn create_recorder(
+        &mut self,
+        allow_resubmits: bool,
+    ) -> Result<B::CommandRecorder, B::Error>;
+    unsafe fn submit_recorders(
+        &mut self,
+        infos: &mut [RecorderSubmitInfo<B>],
+    ) -> Result<(), B::Error>;
+    unsafe fn destroy_recorder(&mut self, recorder: B::CommandRecorder) -> Result<(), B::Error>;
+    unsafe fn clear_recorders(
+        &mut self,
+        buffers: &mut [&mut B::CommandRecorder],
+    ) -> Result<(), B::Error>;
+    unsafe fn create_buffer(
+        &mut self,
+        alloc_info: &BufferDescriptor,
+    ) -> Result<B::Buffer, B::Error>;
+    unsafe fn destroy_buffer(&mut self, buffer: B::Buffer) -> Result<(), B::Error>;
+    unsafe fn write_buffer(
         &mut self,
         buffer: &B::Buffer,
         offset: u64,
         data: &[u8],
     ) -> Result<(), B::Error>;
-    fn read_buffer(
+    unsafe fn read_buffer(
         &mut self,
         buffer: &B::Buffer,
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), B::Error>;
-    fn map_buffer(
+    unsafe fn map_buffer(
         &mut self,
         buffer: &B::Buffer,
         offset: u64,
         size: u64,
     ) -> Result<*mut u8, B::Error>;
-    fn unmap_buffer(&mut self, buffer: &B::Buffer, map: *mut u8) -> Result<(), B::Error>;
-    fn create_bind_group(
+    unsafe fn unmap_buffer(&mut self, buffer: &B::Buffer, map: *mut u8) -> Result<(), B::Error>;
+    unsafe fn create_bind_group(
         &mut self,
         kernel: &mut B::Kernel,
         resources: &[GpuResource<B>],
     ) -> Result<B::BindGroup, B::Error>;
-    fn update_bind_group(
+    unsafe fn update_bind_group(
         &mut self,
         bg: &mut B::BindGroup,
         kernel: &mut B::Kernel,
         resources: &[GpuResource<B>],
     ) -> Result<(), B::Error>;
-    fn destroy_bind_group(
+    unsafe fn destroy_bind_group(
         &mut self,
         kernel: &mut B::Kernel,
         bind_group: B::BindGroup,
     ) -> Result<(), B::Error>;
 
-    fn create_semaphore(&mut self) -> Result<B::Semaphore, B::Error>;
-    fn destroy_semaphore(&mut self, semaphore: B::Semaphore) -> Result<(), B::Error>;
-    fn wait_for_semaphores(
+    unsafe fn create_semaphore(&mut self) -> Result<B::Semaphore, B::Error>;
+    unsafe fn destroy_semaphore(&mut self, semaphore: B::Semaphore) -> Result<(), B::Error>;
+    unsafe fn wait_for_semaphores(
         &mut self,
         semaphores: &[&B::Semaphore],
         all: bool,
         timeout: f32,
     ) -> Result<(), B::Error>;
 
-    fn create_event(&mut self) -> Result<B::Event, B::Error>;
-    fn destroy_event(&mut self, event: B::Event) -> Result<(), B::Error>;
+    unsafe fn create_event(&mut self) -> Result<B::Event, B::Error>;
+    unsafe fn destroy_event(&mut self, event: B::Event) -> Result<(), B::Error>;
 
-    fn cleanup_cached_resources(&mut self) -> Result<(), B::Error>;
+    unsafe fn cleanup_cached_resources(&mut self) -> Result<(), B::Error>;
 }
 pub enum GpuResource<'a, B: Backend> {
     Buffer {
@@ -111,13 +128,13 @@ pub struct CommandSynchronization<'a, B: Backend> {
 }
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
     /// Edges contain the start and length in resources buffer of used resources
-    fn record_dag(
+    unsafe fn record_dag(
         &mut self,
         instance: &mut B::Instance,
         resources: &[&GpuResource<B>],
         dag: &mut daggy::Dag<BufferCommand<B>, (usize, usize)>,
     ) -> Result<(), B::Error>;
-    fn record_commands(
+    unsafe fn record_commands(
         &mut self,
         instance: &mut B::Instance,
         commands: &mut [BufferCommand<B>],
@@ -128,7 +145,7 @@ pub trait Buffer<B: Backend<Buffer = Self>> {}
 pub trait BindGroup<B: Backend<BindGroup = Self>> {}
 pub trait PipelineCache<B: Backend<PipelineCache = Self>> {}
 pub trait Semaphore<B: Backend<Semaphore = Self>> {
-    fn signal(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
+    unsafe fn signal(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
 pub trait Event<B: Backend<Event = Self>> {}
 pub struct RecorderSubmitInfo<'a, B: Backend> {

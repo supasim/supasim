@@ -355,9 +355,8 @@ impl<B: hal::Backend> Instance<B> {
         };
         let mut s = self.inner_mut()?;
 
-        let kernel = s
-            .inner
-            .compile_kernel(
+        let kernel = unsafe {
+            s.inner.compile_kernel(
                 binary,
                 &reflection,
                 if let Some(lock) = cache_lock.as_mut() {
@@ -366,7 +365,8 @@ impl<B: hal::Backend> Instance<B> {
                     None
                 },
             )
-            .map_supasim()?;
+        }
+        .map_supasim()?;
         let k = Kernel::from_inner(KernelInner {
             _phantom: Default::default(),
             instance: self.clone(),
@@ -378,7 +378,7 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn create_kernel_cache(&self, data: &[u8]) -> SupaSimResult<B, KernelCache<B>> {
         let mut s = self.inner_mut()?;
-        let inner = s.inner.create_pipeline_cache(data).map_supasim()?;
+        let inner = unsafe { s.inner.create_pipeline_cache(data) }.map_supasim()?;
         let k = KernelCache::from_inner(KernelCacheInner {
             _phantom: Default::default(),
             instance: self.clone(),
@@ -406,7 +406,7 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn create_buffer(&self, desc: &BufferDescriptor) -> SupaSimResult<B, Buffer<B>> {
         let mut s = self.inner_mut()?;
-        let inner = s.inner.create_buffer(&(*desc).into()).map_supasim()?;
+        let inner = unsafe { s.inner.create_buffer(&(*desc).into()) }.map_supasim()?;
         let b = Buffer::from_inner(BufferInner {
             _phantom: Default::default(),
             instance: self.clone(),
@@ -451,9 +451,7 @@ impl<B: hal::Backend> Instance<B> {
             locks.push(handle.inner()?);
         }
         let handles: Vec<_> = locks.iter().map(|a| &a.inner).collect();
-        s.inner
-            .wait_for_semaphores(&handles, wait_for_all, timeout)
-            .map_supasim()?;
+        unsafe { s.inner.wait_for_semaphores(&handles, wait_for_all, timeout) }.map_supasim()?;
         Ok(())
     }
     pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
@@ -466,7 +464,7 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn clear_cached_resources(&self) -> SupaSimResult<B, ()> {
         let mut s = self.inner_mut()?;
-        s.inner.cleanup_cached_resources().map_supasim()?;
+        unsafe { s.inner.cleanup_cached_resources() }.map_supasim()?;
         todo!();
         //Ok(())
     }
@@ -475,7 +473,7 @@ impl<B: hal::Backend> Instance<B> {
         let idx = if let Some(idx) = s.wait_handles.unused.pop() {
             s.wait_handles.acquire(idx)
         } else {
-            let semaphore = s.inner.create_semaphore().map_supasim()?;
+            let semaphore = unsafe { s.inner.create_semaphore() }.map_supasim()?;
             let id = s.wait_handles.add(WaitHandle::from_inner(WaitHandleInner {
                 instance: self.clone(),
                 _phantom: Default::default(),
@@ -500,11 +498,13 @@ impl<B: hal::Backend> Instance<B> {
             b.acquire()?;
             let buffer = b.buffer.inner()?;
             let _instance = buffer.instance.clone();
-            let ptr = _instance
-                .inner_mut()?
-                .inner
-                .map_buffer(&buffer.inner, b.start, b.len)
-                .map_supasim()?;
+            let ptr = unsafe {
+                _instance
+                    .inner_mut()?
+                    .inner
+                    .map_buffer(&buffer.inner, b.start, b.len)
+            }
+            .map_supasim()?;
             let mapped = MappedBuffer {
                 instance: self.clone(),
                 inner: ptr,
@@ -524,7 +524,7 @@ impl<B: hal::Backend> Instance<B> {
 }
 impl<B: hal::Backend> Drop for InstanceInner<B> {
     fn drop(&mut self) {
-        let _ = self.inner.wait_for_idle();
+        let _ = unsafe { self.inner.wait_for_idle() };
         self.command_recorders.list.clear(); // These will call their destructors, politely taking care of themselves
         self.wait_handles.list.clear();
         self.kernel_caches.list.clear();
@@ -542,12 +542,7 @@ impl<B: hal::Backend> Drop for KernelInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
             instance.kernels.remove(self.id, Some(None));
-            let _ = instance
-                .inner
-                .destroy_kernel(std::mem::replace(&mut self.inner, unsafe {
-                    #[allow(clippy::uninit_assumed_init)]
-                    std::mem::MaybeUninit::uninit().assume_init()
-                }));
+            let _ = unsafe { instance.inner.destroy_kernel(std::ptr::read(&self.inner)) };
         }
     }
 }
@@ -560,11 +555,13 @@ impl<B: hal::Backend> KernelCache<B> {
     pub fn get_data(self) -> SupaSimResult<B, Vec<u8>> {
         let mut inner = self.inner_mut()?;
         let instance = inner.instance.clone();
-        let data = instance
-            .inner_mut()?
-            .inner
-            .get_pipeline_cache_data(&mut inner.inner)
-            .map_supasim()?;
+        let data = unsafe {
+            instance
+                .inner_mut()?
+                .inner
+                .get_pipeline_cache_data(&mut inner.inner)
+        }
+        .map_supasim()?;
         Ok(data)
     }
 }
@@ -572,13 +569,11 @@ impl<B: hal::Backend> Drop for KernelCacheInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
             instance.kernel_caches.remove(self.id, Some(None));
-            let _ =
+            let _ = unsafe {
                 instance
                     .inner
-                    .destroy_pipeline_cache(std::mem::replace(&mut self.inner, unsafe {
-                        #[allow(clippy::uninit_assumed_init)]
-                        std::mem::MaybeUninit::uninit().assume_init()
-                    }));
+                    .destroy_pipeline_cache(std::ptr::read(&self.inner))
+            };
         }
     }
 }
@@ -746,12 +741,7 @@ impl<B: hal::Backend> Drop for BufferInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
             instance.buffers.remove(self.id, Some(None));
-            let _ = instance
-                .inner
-                .destroy_buffer(std::mem::replace(&mut self.inner, unsafe {
-                    #[allow(clippy::uninit_assumed_init)]
-                    std::mem::MaybeUninit::uninit().assume_init()
-                }));
+            let _ = unsafe { instance.inner.destroy_buffer(std::ptr::read(&self.inner)) };
         }
     }
 }
@@ -819,12 +809,11 @@ impl<B: hal::Backend> Drop for WaitHandleInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
             instance.wait_handles.remove(self.id, None);
-            let _ = instance
-                .inner
-                .destroy_semaphore(std::mem::replace(&mut self.inner, unsafe {
-                    #[allow(clippy::uninit_assumed_init)]
-                    std::mem::MaybeUninit::uninit().assume_init()
-                }));
+            let _ = unsafe {
+                instance
+                    .inner
+                    .destroy_semaphore(std::ptr::read(&self.inner))
+            };
         }
     }
 }
