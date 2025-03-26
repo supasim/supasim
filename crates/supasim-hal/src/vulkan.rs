@@ -155,7 +155,6 @@ impl Vulkan {
                 phyd,
                 queue,
                 queue_family_idx,
-                None,
                 Some(debug_callback),
             )
         }
@@ -169,7 +168,6 @@ impl Vulkan {
         phyd: vk::PhysicalDevice,
         queue: vk::Queue,
         queue_family_idx: u32,
-        renderer_queue_family_idx: Option<u32>,
         debug_callback: Option<vk::DebugUtilsMessengerEXT>,
     ) -> Result<VulkanInstance, VulkanError> {
         unsafe {
@@ -197,15 +195,14 @@ impl Vulkan {
                 None,
             )?;
             Ok(VulkanInstance {
-                sync2_dev: khr::synchronization2::Device::new(&instance, &device),
+                _sync2_dev: khr::synchronization2::Device::new(&instance, &device),
                 entry,
                 instance,
                 device,
-                phyd,
+                _phyd: phyd,
                 alloc: Mutex::new(alloc),
                 queue,
                 queue_family_idx,
-                renderer_queue_family_idx,
                 command_pool: pool,
                 unused_command_buffers: Vec::new(),
                 unused_events: Vec::new(),
@@ -261,16 +258,15 @@ pub struct VulkanInstance {
     entry: ash::Entry,
     instance: ash::Instance,
     device: ash::Device,
-    phyd: vk::PhysicalDevice,
+    _phyd: vk::PhysicalDevice,
     alloc: Mutex<Allocator>,
     queue: vk::Queue,
     queue_family_idx: u32,
-    renderer_queue_family_idx: Option<u32>,
     command_pool: vk::CommandPool,
     unused_command_buffers: Vec<vk::CommandBuffer>,
     unused_events: Vec<vk::Event>,
     debug: Option<vk::DebugUtilsMessengerEXT>,
-    sync2_dev: khr::synchronization2::Device,
+    _sync2_dev: khr::synchronization2::Device,
 }
 impl VulkanInstance {
     pub fn get_command_buffer(&mut self) -> Result<vk::CommandBuffer, VulkanError> {

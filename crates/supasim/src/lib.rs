@@ -192,7 +192,7 @@ impl<B: hal::Backend> BufferSlice<B> {
     fn acquire(&self) -> SupaSimResult<B, ()> {
         let mut s = self.buffer.inner_mut()?;
         let _instance = s.instance.clone();
-        let mut instance = _instance.inner_mut()?;
+        let _instance = _instance.inner_mut()?;
 
         s.host_using.push(BufferRange {
             start: self.start,
@@ -203,7 +203,7 @@ impl<B: hal::Backend> BufferSlice<B> {
         todo!()
     }
     fn release(&self) -> SupaSimResult<B, ()> {
-        let mut s = self.buffer.inner_mut()?;
+        let s = self.buffer.inner_mut()?;
         let range = BufferRange {
             start: self.start,
             len: self.len,
@@ -394,8 +394,7 @@ impl<B: hal::Backend> Instance<B> {
             instance: self.clone(),
             inner,
             id: Default::default(),
-            current_fence: None,
-            used_buffers: Vec::new(),
+            _used_buffers: Vec::new(),
             recorded: false,
             cleared: true,
             commands: Vec::new(),
@@ -411,7 +410,7 @@ impl<B: hal::Backend> Instance<B> {
             instance: self.clone(),
             inner,
             id: Default::default(),
-            semaphores: Vec::new(),
+            _semaphores: Vec::new(),
             host_using: Vec::new(),
             create_info: *desc,
         });
@@ -473,7 +472,7 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
         let mut _s = self.inner_mut()?;
-        let s = &mut *_s;
+        let _s = &mut *_s;
         todo!()
     }
     pub fn do_busywork(&self) -> SupaSimResult<B, ()> {
@@ -597,11 +596,15 @@ impl<B: hal::Backend> Drop for KernelCacheInner<B> {
         }
     }
 }
+/// This will be used eventually, remove the #[allow(dead_code)]
+#[allow(dead_code)]
 struct GpuCommand<B: hal::Backend> {
     inner: GpuCommandInner<B>,
     buffers: Vec<BufferSlice<B>>,
     wait_handle: Option<WaitHandle<B>>,
 }
+/// This will be used eventually, remove the #[allow(dead_code)]
+#[allow(dead_code)]
 enum GpuCommandInner<B: hal::Backend> {
     /// Kernel, workgroup size
     KernelDispatch(Kernel<B>, [u32; 3]),
@@ -612,8 +615,7 @@ api_type!(CommandRecorder, {
     instance: Instance<B>,
     inner: B::CommandRecorder,
     id: Id,
-    current_fence: Option<Id>,
-    used_buffers: Vec<Id>,
+    _used_buffers: Vec<Id>,
     recorded: bool,
     cleared: bool,
     commands: Vec<GpuCommand<B>>,
@@ -698,7 +700,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
         s.recorded = true;
         s.cleared = false;
         let _instance = s.instance.clone();
-        let mut instance = _instance.inner_mut()?;
+        let instance = _instance.inner_mut()?;
         match instance.inner_properties.sync_mode {
             SyncMode::Automatic => todo!(),
             SyncMode::Dag => todo!(),
@@ -731,7 +733,7 @@ api_type!(Buffer, {
     instance: Instance<B>,
     inner: B::Buffer,
     id: Id,
-    semaphores: Vec<(Id, BufferRange)>,
+    _semaphores: Vec<(Id, BufferRange)>,
     host_using: Vec<BufferRange>,
     create_info: BufferDescriptor,
 },);
