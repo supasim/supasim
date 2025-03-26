@@ -195,7 +195,7 @@ impl Vulkan {
                 None,
             )?;
             Ok(VulkanInstance {
-                _sync2_dev: khr::synchronization2::Device::new(&instance, &device),
+                sync2_dev: khr::synchronization2::Device::new(&instance, &device),
                 entry,
                 instance,
                 device,
@@ -266,7 +266,7 @@ pub struct VulkanInstance {
     unused_command_buffers: Vec<vk::CommandBuffer>,
     unused_events: Vec<vk::Event>,
     debug: Option<vk::DebugUtilsMessengerEXT>,
-    _sync2_dev: khr::synchronization2::Device,
+    sync2_dev: khr::synchronization2::Device,
 }
 impl VulkanInstance {
     pub fn get_command_buffer(&mut self) -> Result<vk::CommandBuffer, VulkanError> {
@@ -1268,12 +1268,16 @@ impl VulkanCommandRecorder {
         let dependency_info = vk::DependencyInfoKHR::default().buffer_memory_barriers(&barriers);
         match is_event_wait.unwrap() {
             false => unsafe {
-                instance.device.cmd_pipeline_barrier2(cb, &dependency_info);
+                instance
+                    .sync2_dev
+                    .cmd_pipeline_barrier2(cb, &dependency_info);
             },
             true => unsafe {
                 let mut dependencies = Vec::new();
                 dependencies.resize(events.len(), dependency_info);
-                instance.device.cmd_wait_events2(cb, &events, &dependencies);
+                instance
+                    .sync2_dev
+                    .cmd_wait_events2(cb, &events, &dependencies);
             },
         }
         Ok(())
@@ -1459,7 +1463,7 @@ mod tests {
         let fun_semaphore = instance.create_semaphore().unwrap();
         let mut kernel = instance
             .compile_kernel(
-                include_bytes!("test.spirv"),
+                include_bytes!("test_add.spirv"),
                 &ShaderReflectionInfo {
                     workgroup_size: [1, 1, 1],
                     entry_name: "main".to_owned(),
@@ -1468,6 +1472,18 @@ mod tests {
                         ShaderResourceType::Buffer,
                         ShaderResourceType::Buffer,
                     ],
+                    push_constant_len: 0,
+                },
+                Some(&mut cache),
+            )
+            .unwrap();
+        let mut kernel2 = instance
+            .compile_kernel(
+                include_bytes!("test_double.spirv"),
+                &ShaderReflectionInfo {
+                    workgroup_size: [1, 1, 1],
+                    entry_name: "main".to_owned(),
+                    resources: vec![ShaderResourceType::Buffer],
                     push_constant_len: 0,
                 },
                 Some(&mut cache),
@@ -1499,18 +1515,40 @@ mod tests {
                 ],
             )
             .unwrap();
+        let bind_group2 = instance
+            .create_bind_group(&mut kernel2, &[GpuResource::buffer(&sbout, 0, 16)])
+            .unwrap();
 
         let mut recorder = instance.create_recorder(false).unwrap();
 
         recorder
             .record_commands(
                 &mut instance,
-                &mut [BufferCommand::DispatchKernel {
-                    shader: &kernel,
-                    bind_group: &bind_group,
-                    push_constants: &[],
-                    workgroup_dims: [1, 1, 1],
-                }],
+                &mut [
+                    BufferCommand::DispatchKernel {
+                        shader: &kernel,
+                        bind_group: &bind_group,
+                        push_constants: &[],
+                        workgroup_dims: [1, 1, 1],
+                    },
+                    BufferCommand::PipelineBarrier {
+                        before: SyncOperations::ComputeDispatch,
+                        after: SyncOperations::ComputeDispatch,
+                    },
+                    BufferCommand::MemoryBarrier {
+                        resource: GpuResource::Buffer {
+                            buffer: &sbout,
+                            offset: 0,
+                            size: 16,
+                        },
+                    },
+                    BufferCommand::DispatchKernel {
+                        shader: &kernel2,
+                        bind_group: &bind_group2,
+                        push_constants: &[],
+                        workgroup_dims: [1, 1, 1],
+                    },
+                ],
             )
             .unwrap();
         instance
@@ -1528,8 +1566,8 @@ mod tests {
         instance
             .read_buffer(&sbout, 0, bytemuck::cast_slice_mut(&mut res))
             .unwrap();
-        if res[0] != 13 {
-            panic!("Expected 13, got {}", res[0]);
+        if res[0] != 26 {
+            panic!("Expected 26, got {}", res[0]);
         }
 
         instance.destroy_recorder(recorder).unwrap();
@@ -1538,7 +1576,11 @@ mod tests {
         instance
             .destroy_bind_group(&mut kernel, bind_group)
             .unwrap();
+        instance
+            .destroy_bind_group(&mut kernel2, bind_group2)
+            .unwrap();
         instance.destroy_kernel(kernel).unwrap();
+        instance.destroy_kernel(kernel2).unwrap();
         instance.destroy_buffer(uniform_buf).unwrap();
         instance.destroy_buffer(sb1).unwrap();
         instance.destroy_buffer(sb2).unwrap();
