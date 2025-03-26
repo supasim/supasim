@@ -398,6 +398,8 @@ impl<B: hal::Backend> Instance<B> {
             cleared: true,
             commands: Vec::new(),
             _reusable: reusable,
+            used_buffers: Vec::new(),
+            current_iteration: 0,
         });
         r.inner_mut()?.id = s.command_recorders.add(Some(r.clone()));
         Ok(r)
@@ -602,6 +604,9 @@ api_type!(CommandRecorder, {
     recorded: bool,
     cleared: bool,
     commands: Vec<BufferCommand<B>>,
+    /// Used for tracking if the command recorder is cleared so previously used resources don't need to wait
+    current_iteration: u64,
+    used_buffers: Vec<BufferSlice<B>>,
     _reusable: bool,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
@@ -614,6 +619,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
     ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
         for b in buffers {
             b.validate()?;
+            self.inner_mut()?.used_buffers.push((*b).clone());
         }
         let wait_handle = if return_wait {
             Some(self.as_inner()?.instance.acquire_wait_handle()?)
@@ -640,6 +646,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
     ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
         for b in buffers {
             b.validate()?;
+            self.inner_mut()?.used_buffers.push((*b).clone());
         }
         indirect_buffer.validate()?;
         if (indirect_buffer.start % 4) != 0 || indirect_buffer.len != 12 {
@@ -674,6 +681,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
     ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
         for b in buffers {
             b.validate()?;
+            self.inner_mut()?.used_buffers.push((*b).clone());
         }
         let wait_handle = if return_wait {
             Some(self.as_inner()?.instance.acquire_wait_handle()?)
@@ -694,6 +702,8 @@ impl<B: hal::Backend> CommandRecorder<B> {
         s.commands.clear();
         s.recorded = false;
         s.cleared = true;
+        s.current_iteration += 1;
+        s.used_buffers.clear();
         Ok(())
     }
     fn record(&self) -> SupaSimResult<B, ()> {
