@@ -1353,7 +1353,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         _resources: &[&GpuResource<Vulkan>],
         _dag: &mut daggy::Dag<crate::BufferCommand<Vulkan>, (usize, usize)>,
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        todo!()
+        unreachable!()
     }
     fn record_commands(
         &mut self,
