@@ -24,6 +24,8 @@ pub use types::{
     MemoryType, ShaderModel, ShaderReflectionInfo, ShaderResourceType, ShaderTarget, SpirvVersion,
 };
 
+pub type UserBufferAccessClosure<B> = Box<dyn FnOnce(&mut [MappedBuffer<B>]) -> anyhow::Result<()>>;
+
 /// Contains the index, and a certain "random" value to check if a destroyed thing has been replaced
 #[derive(Clone, Copy, Debug)]
 struct Id(u32, u32);
@@ -388,16 +390,14 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn create_recorder(&self, reusable: bool) -> SupaSimResult<B, CommandRecorder<B>> {
         let mut s = self.inner_mut()?;
-        let inner = s.inner.create_recorder(reusable).map_supasim()?;
         let r = CommandRecorder::from_inner(CommandRecorderInner {
             _phantom: Default::default(),
             instance: self.clone(),
-            inner,
             id: Default::default(),
-            _used_buffers: Vec::new(),
             recorded: false,
             cleared: true,
             commands: Vec::new(),
+            _reusable: reusable,
         });
         r.inner_mut()?.id = s.command_recorders.add(Some(r.clone()));
         Ok(r)
@@ -419,14 +419,10 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn submit_commands(&self, recorders: &[CommandRecorder<B>]) -> SupaSimResult<B, ()> {
         for recorder_ref in recorders {
-            let mut recorder = recorder_ref.inner_mut()?;
+            let recorder = recorder_ref.inner_mut()?;
             let _instance = recorder.instance.clone();
-            let mut instance = _instance.inner_mut()?;
             if !recorder.cleared && !recorder.recorded {
-                instance
-                    .inner
-                    .clear_recorders(&mut [&mut recorder.inner])
-                    .map_supasim()?;
+                todo!()
             }
             let needs_record = !recorder.recorded;
             drop(recorder);
@@ -438,18 +434,6 @@ impl<B: hal::Backend> Instance<B> {
         for recorder in recorders {
             recorded_locks.push(recorder.inner_mut()?);
         }
-        let mut recorded: Vec<_> = recorded_locks
-            .iter_mut()
-            .map(|a| hal::RecorderSubmitInfo {
-                command_recorder: &mut a.inner,
-                wait_semaphores: &[],
-                signal_semaphores: &[],
-            })
-            .collect();
-        self.inner_mut()?
-            .inner
-            .submit_recorders(&mut recorded)
-            .map_supasim()?;
         Ok(())
     }
     pub fn wait(
@@ -505,7 +489,7 @@ impl<B: hal::Backend> Instance<B> {
     #[allow(clippy::type_complexity)]
     pub fn access_buffers(
         &self,
-        closure: Box<dyn FnOnce(&mut [MappedBuffer<B>]) -> anyhow::Result<()>>,
+        closure: UserBufferAccessClosure<B>,
         buffers: &[&BufferSlice<B>],
     ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
         let mut mapped_buffers = Vec::new();
@@ -598,27 +582,27 @@ impl<B: hal::Backend> Drop for KernelCacheInner<B> {
 }
 /// This will be used eventually, remove the #[allow(dead_code)]
 #[allow(dead_code)]
-struct GpuCommand<B: hal::Backend> {
-    inner: GpuCommandInner<B>,
+struct BufferCommand<B: hal::Backend> {
+    inner: BufferCommandInner<B>,
     buffers: Vec<BufferSlice<B>>,
     wait_handle: Option<WaitHandle<B>>,
 }
 /// This will be used eventually, remove the #[allow(dead_code)]
 #[allow(dead_code)]
-enum GpuCommandInner<B: hal::Backend> {
+enum BufferCommandInner<B: hal::Backend> {
     /// Kernel, workgroup size
     KernelDispatch(Kernel<B>, [u32; 3]),
     /// Kernel, buffer and offset, needs validation
     KernelDispatchIndirect(Kernel<B>, BufferSlice<B>, bool),
+    CpuCode(UserBufferAccessClosure<B>),
 }
 api_type!(CommandRecorder, {
     instance: Instance<B>,
-    inner: B::CommandRecorder,
     id: Id,
-    _used_buffers: Vec<Id>,
     recorded: bool,
     cleared: bool,
-    commands: Vec<GpuCommand<B>>,
+    commands: Vec<BufferCommand<B>>,
+    _reusable: bool,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
     pub fn dispatch_kernel(
@@ -637,8 +621,8 @@ impl<B: hal::Backend> CommandRecorder<B> {
             None
         };
         let mut s = self.inner_mut()?;
-        s.commands.push(GpuCommand {
-            inner: GpuCommandInner::KernelDispatch(shader, workgroup_dims),
+        s.commands.push(BufferCommand {
+            inner: BufferCommandInner::KernelDispatch(shader, workgroup_dims),
             buffers: buffers.iter().map(|&b| b.clone()).collect(),
             wait_handle: wait_handle.clone(),
         });
@@ -670,8 +654,8 @@ impl<B: hal::Backend> CommandRecorder<B> {
             return Err(SupaSimError::ValidateIndirectUnsupported);
         }
         let mut s = self.inner_mut()?;
-        s.commands.push(GpuCommand {
-            inner: GpuCommandInner::KernelDispatchIndirect(
+        s.commands.push(BufferCommand {
+            inner: BufferCommandInner::KernelDispatchIndirect(
                 shader,
                 indirect_buffer.clone(),
                 validate_dispatch,
@@ -682,15 +666,32 @@ impl<B: hal::Backend> CommandRecorder<B> {
         s.recorded = false;
         Ok(wait_handle)
     }
+    pub fn cpu_code(
+        &self,
+        closure: UserBufferAccessClosure<B>,
+        buffers: &[&BufferSlice<B>],
+        return_wait: bool,
+    ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
+        for b in buffers {
+            b.validate()?;
+        }
+        let wait_handle = if return_wait {
+            Some(self.as_inner()?.instance.acquire_wait_handle()?)
+        } else {
+            None
+        };
+        let mut s = self.inner_mut()?;
+        s.commands.push(BufferCommand {
+            inner: BufferCommandInner::CpuCode(closure),
+            buffers: buffers.iter().map(|&b| b.clone()).collect(),
+            wait_handle: wait_handle.clone(),
+        });
+        s.recorded = false;
+        Ok(wait_handle)
+    }
     pub fn clear(&self) -> SupaSimResult<B, ()> {
         let mut s = self.inner_mut()?;
         s.commands.clear();
-        s.instance
-            .clone()
-            .inner_mut()?
-            .inner
-            .clear_recorders(&mut [&mut s.inner])
-            .map_supasim()?;
         s.recorded = false;
         s.cleared = true;
         Ok(())
@@ -712,12 +713,6 @@ impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
             instance.command_recorders.remove(self.id, Some(None));
-            let _ = instance
-                .inner
-                .destroy_recorder(std::mem::replace(&mut self.inner, unsafe {
-                    #[allow(clippy::uninit_assumed_init)]
-                    std::mem::MaybeUninit::uninit().assume_init()
-                }));
         }
     }
 }
