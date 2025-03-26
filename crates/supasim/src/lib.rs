@@ -192,7 +192,6 @@ impl<B: hal::Backend> BufferSlice<B> {
     fn acquire(&self) -> SupaSimResult<B, ()> {
         let mut s = self.buffer.inner_mut()?;
         let _instance = s.instance.clone();
-        #[allow(unused_mut, unused_variables)]
         let mut instance = _instance.inner_mut()?;
 
         s.host_using.push(BufferRange {
@@ -204,14 +203,13 @@ impl<B: hal::Backend> BufferSlice<B> {
         todo!()
     }
     fn release(&self) -> SupaSimResult<B, ()> {
-        #[allow(unused_mut)]
         let mut s = self.buffer.inner_mut()?;
         let range = BufferRange {
             start: self.start,
             len: self.len,
             needs_mut: self.needs_mut,
         };
-        // I don't understand clippy's recommendation here
+        // I don't understand clippy's recommendation here. It gives invalid code that is nonsensical
         #[allow(clippy::unnecessary_filter_map)]
         s.host_using
             .iter()
@@ -600,38 +598,27 @@ impl<B: hal::Backend> Drop for KernelCacheInner<B> {
     }
 }
 struct GpuCommand<B: hal::Backend> {
-    #[allow(dead_code)]
     inner: GpuCommandInner<B>,
-    #[allow(dead_code)]
     buffers: Vec<BufferSlice<B>>,
-    #[allow(dead_code)]
     wait_handle: Option<WaitHandle<B>>,
 }
 enum GpuCommandInner<B: hal::Backend> {
     /// Kernel, workgroup size
-    #[allow(dead_code)]
     KernelDispatch(Kernel<B>, [u32; 3]),
     /// Kernel, buffer and offset, needs validation
-    #[allow(dead_code)]
     KernelDispatchIndirect(Kernel<B>, BufferSlice<B>, bool),
 }
 api_type!(CommandRecorder, {
-    #[allow(dead_code)]
     instance: Instance<B>,
     inner: B::CommandRecorder,
     id: Id,
-    #[allow(dead_code)]
     current_fence: Option<Id>,
-    #[allow(dead_code)]
     used_buffers: Vec<Id>,
-    #[allow(dead_code)]
     recorded: bool,
-    #[allow(dead_code)]
     cleared: bool,
     commands: Vec<GpuCommand<B>>,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
-    #[allow(unused_variables)]
     pub fn dispatch_kernel(
         &self,
         shader: Kernel<B>,
@@ -657,7 +644,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
         Ok(wait_handle)
     }
     #[allow(clippy::too_many_arguments)]
-    #[allow(unused_variables)]
     pub fn dispatch_kernel_indirect(
         &self,
         shader: Kernel<B>,
@@ -712,7 +698,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
         s.recorded = true;
         s.cleared = false;
         let _instance = s.instance.clone();
-        #[allow(unused_mut)]
         let mut instance = _instance.inner_mut()?;
         match instance.inner_properties.sync_mode {
             SyncMode::Automatic => todo!(),
@@ -743,12 +728,9 @@ struct BufferRange {
 }
 
 api_type!(Buffer, {
-    #[allow(dead_code)]
     instance: Instance<B>,
-    #[allow(dead_code)]
     inner: B::Buffer,
     id: Id,
-    #[allow(dead_code)]
     semaphores: Vec<(Id, BufferRange)>,
     host_using: Vec<BufferRange>,
     create_info: BufferDescriptor,
@@ -769,7 +751,6 @@ impl<B: hal::Backend> Drop for BufferInner<B> {
 
 pub struct MappedBuffer<B: hal::Backend> {
     instance: Instance<B>,
-    #[allow(dead_code)]
     inner: *mut u8,
     len: u64,
     buffer: Id,
@@ -823,10 +804,8 @@ impl<B: hal::Backend> MappedBuffer<B> {
 }
 
 api_type!(WaitHandle, {
-    #[allow(dead_code)]
     instance: Instance<B>,
     inner: B::Semaphore,
-    #[allow(dead_code)]
     id: Id,
 },);
 impl<B: hal::Backend> Drop for WaitHandleInner<B> {
