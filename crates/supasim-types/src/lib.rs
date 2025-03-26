@@ -133,3 +133,5 @@ pub struct ShaderReflectionInfo {
     pub resources: Vec<ShaderResourceType>,
     pub push_constant_len: u32,
 }
+
+pub type Dag<T> = daggy::Dag<T, (usize, usize)>;

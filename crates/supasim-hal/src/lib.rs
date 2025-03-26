@@ -132,7 +132,7 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
         &mut self,
         instance: &mut B::Instance,
         resources: &[&GpuResource<B>],
-        dag: &mut daggy::Dag<BufferCommand<B>, (usize, usize)>,
+        dag: &mut Dag<BufferCommand<B>>,
     ) -> Result<(), B::Error>;
     unsafe fn record_commands(
         &mut self,

@@ -13,8 +13,8 @@ use gpu_allocator::{
 use log::Level;
 use thiserror::Error;
 use types::{
-    BufferDescriptor, InstanceProperties, ShaderReflectionInfo, ShaderResourceType, SyncOperations,
-    to_static_lifetime,
+    BufferDescriptor, Dag, InstanceProperties, ShaderReflectionInfo, ShaderResourceType,
+    SyncOperations, to_static_lifetime,
 };
 
 use scopeguard::defer;
@@ -1361,7 +1361,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         &mut self,
         _instance: &mut <Vulkan as Backend>::Instance,
         _resources: &[&GpuResource<Vulkan>],
-        _dag: &mut daggy::Dag<crate::BufferCommand<Vulkan>, (usize, usize)>,
+        _dag: &mut Dag<crate::BufferCommand<Vulkan>>,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unreachable!()
     }

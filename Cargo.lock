@@ -1414,7 +1414,6 @@ dependencies = [
  "anyhow",
  "ash",
  "bytemuck",
- "daggy",
  "env_logger",
  "gpu-allocator",
  "log",
@@ -1465,6 +1464,7 @@ dependencies = [
 name = "supasim-types"
 version = "0.0.1"
 dependencies = [
+ "daggy",
  "serde",
 ]
 
