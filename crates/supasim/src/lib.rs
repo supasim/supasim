@@ -451,10 +451,12 @@ impl<B: hal::Backend> Instance<B> {
             recorded: false,
             cleared: true,
             commands: Vec::new(),
-            _reusable: reusable,
+            reusable,
             used_buffers: Vec::new(),
             current_iteration: 0,
             command_buffers: Vec::new(),
+            num_semaphores: 0,
+            semaphores: Vec::new(),
         });
         r.inner_mut()?.id = s.command_recorders.add(Some(r.clone()));
         Ok(r)
@@ -476,12 +478,15 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn submit_commands(&self, recorders: &[CommandRecorder<B>]) -> SupaSimResult<B, ()> {
         for recorder_ref in recorders {
-            let recorder = recorder_ref.inner_mut()?;
+            let mut recorder = recorder_ref.inner_mut()?;
             let _instance = recorder.instance.clone();
             if !recorder.cleared && !recorder.recorded {
                 todo!()
             }
             let needs_record = !recorder.recorded;
+            if !recorder.reusable {
+                recorder.recorded = false;
+            }
             drop(recorder);
             if needs_record {
                 recorder_ref.record()?;
@@ -491,6 +496,8 @@ impl<B: hal::Backend> Instance<B> {
         for recorder in recorders {
             recorded_locks.push(recorder.inner_mut()?);
         }
+        // TODO:
+        // Acquire semaphores, submit things
         Ok(())
     }
     pub fn wait(
@@ -649,6 +656,11 @@ enum BufferCommandInner<B: hal::Backend> {
     CpuCode(UserBufferAccessClosure<B>),
     Dummy,
 }
+struct CommandBufferData<B: hal::Backend> {
+    inner: B::CommandRecorder,
+    out_semaphore: u32,
+    wait_semaphores: Vec<u32>,
+}
 api_type!(CommandRecorder, {
     instance: Instance<B>,
     id: Id<CommandRecorder<B>>,
@@ -658,8 +670,10 @@ api_type!(CommandRecorder, {
     /// Used for tracking if the command recorder is cleared so previously used resources don't need to wait
     current_iteration: u64,
     used_buffers: Vec<BufferSlice<B>>,
-    command_buffers: Vec<(B::CommandRecorder, Id<WaitHandle<B>>)>,
-    _reusable: bool,
+    command_buffers: Vec<CommandBufferData<B>>,
+    reusable: bool,
+    num_semaphores: u32,
+    semaphores: Vec<Id<WaitHandle<B>>>,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
     pub fn dispatch_kernel(
@@ -756,6 +770,18 @@ impl<B: hal::Backend> CommandRecorder<B> {
         s.cleared = true;
         s.current_iteration += 1;
         s.used_buffers.clear();
+        s.num_semaphores = 0;
+        let instance = s.instance.clone();
+        for cb in &mut s.command_buffers {
+            unsafe {
+                instance
+                    .inner_mut()?
+                    .inner
+                    .clear_recorders(&mut [&mut cb.inner])
+                    .map_supasim()?;
+            };
+        }
+        todo!(); // Return command recorders, semaphores to pool
         Ok(())
     }
     fn record(&self) -> SupaSimResult<B, ()> {

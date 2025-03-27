@@ -97,10 +97,16 @@ pub enum SyncOperations {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct InstanceProperties {
+    /// What synchronization requirements the backend has
     pub sync_mode: SyncMode,
+    /// Whether the backend supports indirect dispatch
     pub indirect: bool,
+    /// Whether the backend supports pipeline caches
     pub pipeline_cache: bool,
+    /// What shader langauge the backend takes
     pub shader_type: ShaderTarget,
+    /// Whether the backend supports bind groups that are updated while commands are already recorded. This makes bind groups far cheaper to use
+    pub easily_update_bind_groups: bool,
 }
 /// # Safety
 /// This is undefined behavior lol

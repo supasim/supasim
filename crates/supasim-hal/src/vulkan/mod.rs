@@ -297,6 +297,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             shader_type: types::ShaderTarget::Spirv {
                 version: types::SpirvVersion::V1_0,
             },
+            easily_update_bind_groups: false,
         }
     }
     unsafe fn compile_kernel(
