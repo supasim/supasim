@@ -1,6 +1,6 @@
 use std::collections::{HashMap, hash_map::Entry};
 
-use types::{Dag, NodeIndex, SyncOperations, toposort};
+use types::{Dag, NodeIndex, SyncOperations};
 
 use crate::{
     Buffer, BufferCommand, BufferCommandInner, BufferRange, CommandRecorderInner, Event, Id,
@@ -111,23 +111,22 @@ pub fn assemble_dag<B: hal::Backend>(
     Ok(dag)
 }
 pub fn record_dag<B: hal::Backend>(
-    dag: &CommandDag<B>,
-    cr: &mut CommandRecorderInner<B>,
+    _dag: &CommandDag<B>,
+    _cr: &mut CommandRecorderInner<B>,
 ) -> SupaSimResult<B, ()> {
     // TODO: work on this when cuda support lands
     todo!()
 }
 pub fn dag_to_command_streams<B: hal::Backend>(
-    dag: &CommandDag<B>,
-    vulkan_style: bool,
+    _dag: &CommandDag<B>,
+    _vulkan_style: bool,
 ) -> SupaSimResult<B, StreamingCommands<B>> {
-    let sorted = toposort(dag, None).unwrap();
     // TODO: priority
     todo!()
 }
 pub fn record_command_streams<B: hal::Backend>(
-    streams: &StreamingCommands<B>,
-    cr: &mut CommandRecorderInner<B>,
+    _streams: &StreamingCommands<B>,
+    _cr: &mut CommandRecorderInner<B>,
 ) -> SupaSimResult<B, ()> {
     // TODO: priority
     todo!()

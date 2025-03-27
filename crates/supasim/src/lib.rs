@@ -6,6 +6,8 @@
 //! * Lazy operations
 //! * Combine/optimize allocations and creation of things
 
+#![allow(dead_code)]
+
 mod sync;
 
 use hal::{BackendInstance as _, RecorderSubmitInfo};
@@ -669,14 +671,12 @@ impl<B: hal::Backend> Drop for KernelCacheInner<B> {
     }
 }
 /// This will be used eventually, remove the #[allow(dead_code)]
-#[allow(dead_code)]
 struct BufferCommand<B: hal::Backend> {
     inner: BufferCommandInner<B>,
     buffers: Vec<BufferSlice<B>>,
     wait_handle: Option<WaitHandle<B>>,
 }
 /// This will be used eventually, remove the #[allow(dead_code)]
-#[allow(dead_code)]
 enum BufferCommandInner<B: hal::Backend> {
     /// Kernel, workgroup size
     KernelDispatch(Kernel<B>, [u32; 3]),
@@ -811,7 +811,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
             };
         }
         todo!(); // Return command recorders, semaphores to pool
-        Ok(())
     }
     fn record(&self) -> SupaSimResult<B, ()> {
         let mut s = self.inner_mut()?;
