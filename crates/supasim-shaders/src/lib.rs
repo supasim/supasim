@@ -318,6 +318,7 @@ impl GlobalState {
         let mut _stringcode = String::new();
         let mut _other_blob = Vec::<u8>::new();
 
+        #[allow(unused_mut)] // In case no features, so this doesn't get flagged
         let mut data = bytecode.as_slice();
 
         #[cfg(feature = "opt-valid")]
