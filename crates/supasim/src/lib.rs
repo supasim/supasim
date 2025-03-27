@@ -11,6 +11,7 @@ mod sync;
 
 use hal::BackendInstance as _;
 use std::{
+    hash::Hash,
     marker::PhantomData,
     ops::{Deref, DerefMut},
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
@@ -28,12 +29,47 @@ pub use types::{
 pub type UserBufferAccessClosure<B> = Box<dyn FnOnce(&mut [MappedBuffer<B>]) -> anyhow::Result<()>>;
 
 /// Contains the index, and a certain "random" value to check if a destroyed thing has been replaced
-#[derive(Clone, Copy, Debug)]
-struct Id(u32, u32);
-impl Default for Id {
+struct Id<T>(u32, u32, PhantomData<T>);
+impl<T> Default for Id<T> {
     fn default() -> Self {
-        Self(u32::MAX, 0)
+        Self(u32::MAX, 0, Default::default())
     }
+}
+impl<T> Clone for Id<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T> Copy for Id<T> {}
+impl<T> std::fmt::Debug for Id<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("()")
+    }
+}
+impl<T> From<Id<T>> for Id<Option<T>> {
+    fn from(value: Id<T>) -> Self {
+        Self(value.0, value.1, Default::default())
+    }
+}
+impl<T> From<Id<Option<T>>> for Id<T> {
+    fn from(value: Id<Option<T>>) -> Self {
+        Self(value.0, value.1, Default::default())
+    }
+}
+impl<T> PartialEq for Id<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 && self.1 == other.1
+    }
+}
+impl<T> Eq for Id<T> {}
+impl<T> Hash for Id<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u32(self.0);
+        state.write_u32(self.1);
+    }
+}
+pub(crate) fn convert_id<A, B>(id: Id<A>) -> Id<B> {
+    Id(id.0, id.1, Default::default())
 }
 struct Tracker<T> {
     list: Vec<(u32, T)>,
@@ -50,21 +86,26 @@ impl<T> Default for Tracker<T> {
     }
 }
 impl<T> Tracker<T> {
-    pub fn get(&self, id: Id) -> Option<&T> {
+    pub fn get(&self, id: impl Into<Id<T>>) -> Option<&T> {
+        let id = id.into();
         let value = &self.list[id.0 as usize];
         if value.0 != id.1 {
             return None;
         }
         Some(&value.1)
     }
-    pub fn get_mut(&mut self, id: Id) -> Option<&mut T> {
+    pub fn get_mut(&mut self, id: impl Into<Id<T>>) -> Option<&mut T> {
+        let id = id.into();
         let value = &mut self.list[id.0 as usize];
         if value.0 != id.1 {
             return None;
         }
         Some(&mut value.1)
     }
-    pub fn add(&mut self, value: T) -> Id {
+    pub fn add<O>(&mut self, value: T) -> Id<O>
+    where
+        Id<O>: From<Id<T>>,
+    {
         // TODO: currently this overwrites the previous value. Make it soemtimes preserve if that is desired
         let identifier = self.current_identifier;
         self.current_identifier = self.current_identifier.wrapping_add(1);
@@ -78,9 +119,10 @@ impl<T> Tracker<T> {
                 self.list.len() as u32 - 1
             }
         };
-        Id(idx, identifier)
+        Id(idx, identifier, Default::default())
     }
-    pub fn remove(&mut self, id: Id, replace_with: Option<T>) {
+    pub fn remove(&mut self, id: impl Into<Id<T>>, replace_with: Option<T>) {
+        let id = id.into();
         let value = &mut self.list[id.0 as usize];
         if value.0 == id.1 {
             value.0 = u32::MAX;
@@ -89,11 +131,14 @@ impl<T> Tracker<T> {
             }
         }
     }
-    pub fn acquire(&mut self, idx: u32) -> Id {
+    pub fn acquire<O>(&mut self, idx: u32) -> Id<O>
+    where
+        Id<O>: From<Id<T>>,
+    {
         let v = self.current_identifier;
         self.current_identifier += 1;
         self.list[idx as usize].0 = v;
-        Id(idx, v)
+        Id(idx, v, Default::default())
     }
 }
 
@@ -225,6 +270,7 @@ impl<B: hal::Backend> BufferSlice<B> {
     }
 }
 
+/// The size must be >0 or equality comparison is undefined
 macro_rules! api_type {
     ($name: ident, { $($field:tt)* }, $($attr: meta),*) => {
         paste::paste! {
@@ -274,9 +320,16 @@ macro_rules! api_type {
                     Ok(())
                 }
             }
+            impl<B: hal::Backend> PartialEq for $name <B> {
+                fn eq(&self, other: &Self) -> bool {
+                    std::ptr::eq(self.0.as_ref(), other.0.as_ref())
+                }
+            }
+            impl<B: hal::Backend> Eq for $name <B> {}
         }
     };
 }
+#[must_use]
 #[derive(Error, Debug)]
 pub enum SupaSimError<B: hal::Backend> {
     // Rust thinks that B::Error could be SupaSimError. Nevermind that this would be a recursive definition
@@ -401,6 +454,7 @@ impl<B: hal::Backend> Instance<B> {
             _reusable: reusable,
             used_buffers: Vec::new(),
             current_iteration: 0,
+            command_buffers: Vec::new(),
         });
         r.inner_mut()?.id = s.command_recorders.add(Some(r.clone()));
         Ok(r)
@@ -536,7 +590,7 @@ impl<B: hal::Backend> Drop for InstanceInner<B> {
 api_type!(Kernel, {
     instance: Instance<B>,
     inner: B::Kernel,
-    id: Id,
+    id: Id<Kernel<B>>,
 },);
 impl<B: hal::Backend> Kernel<B> {}
 impl<B: hal::Backend> Drop for KernelInner<B> {
@@ -550,7 +604,7 @@ impl<B: hal::Backend> Drop for KernelInner<B> {
 api_type!(KernelCache, {
     instance: Instance<B>,
     inner: B::PipelineCache,
-    id: Id,
+    id: Id<KernelCache<B>>,
 },);
 impl<B: hal::Backend> KernelCache<B> {
     pub fn get_data(self) -> SupaSimResult<B, Vec<u8>> {
@@ -593,16 +647,18 @@ enum BufferCommandInner<B: hal::Backend> {
     /// Kernel, buffer and offset, needs validation
     KernelDispatchIndirect(Kernel<B>, BufferSlice<B>, bool),
     CpuCode(UserBufferAccessClosure<B>),
+    Dummy,
 }
 api_type!(CommandRecorder, {
     instance: Instance<B>,
-    id: Id,
+    id: Id<CommandRecorder<B>>,
     recorded: bool,
     cleared: bool,
     commands: Vec<BufferCommand<B>>,
     /// Used for tracking if the command recorder is cleared so previously used resources don't need to wait
     current_iteration: u64,
     used_buffers: Vec<BufferSlice<B>>,
+    command_buffers: Vec<(B::CommandRecorder, Id<WaitHandle<B>>)>,
     _reusable: bool,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
@@ -709,10 +765,17 @@ impl<B: hal::Backend> CommandRecorder<B> {
         let _instance = s.instance.clone();
         let instance = _instance.inner_mut()?;
         match instance.inner_properties.sync_mode {
-            SyncMode::Automatic => todo!(),
-            SyncMode::Dag => todo!(),
-            SyncMode::VulkanStyle => todo!(),
+            SyncMode::Dag => todo!(), // We will work on this when cuda lands with cuda graphs
+            SyncMode::Automatic | SyncMode::VulkanStyle => {
+                let dag = sync::assemble_dag(&mut s)?;
+                let streams = sync::dag_to_command_streams(
+                    &dag,
+                    instance.inner_properties.sync_mode == SyncMode::VulkanStyle,
+                )?;
+                sync::record_command_streams(&streams, &mut s)?;
+            }
         }
+        Ok(())
     }
 }
 impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
@@ -729,12 +792,28 @@ struct BufferRange {
     len: u64,
     needs_mut: bool,
 }
+impl<B: hal::Backend> From<&BufferSlice<B>> for BufferRange {
+    fn from(s: &BufferSlice<B>) -> Self {
+        Self {
+            start: s.start,
+            len: s.len,
+            needs_mut: s.needs_mut,
+        }
+    }
+}
+impl BufferRange {
+    pub fn overlaps(&self, other: &Self) -> bool {
+        self.start < other.start + other.len
+            && other.start < self.start + self.len
+            && (self.needs_mut || other.needs_mut)
+    }
+}
 
 api_type!(Buffer, {
     instance: Instance<B>,
     inner: B::Buffer,
-    id: Id,
-    _semaphores: Vec<(Id, BufferRange)>,
+    id: Id<Buffer<B>>,
+    _semaphores: Vec<(Id<WaitHandle<B>>, BufferRange)>,
     host_using: Vec<BufferRange>,
     create_info: BufferDescriptor,
 },);
@@ -751,7 +830,7 @@ pub struct MappedBuffer<B: hal::Backend> {
     instance: Instance<B>,
     inner: *mut u8,
     len: u64,
-    buffer: Id,
+    buffer: Id<Buffer<B>>,
     has_mut: bool,
 }
 impl<B: hal::Backend> MappedBuffer<B> {
@@ -804,7 +883,7 @@ impl<B: hal::Backend> MappedBuffer<B> {
 api_type!(WaitHandle, {
     instance: Instance<B>,
     inner: B::Semaphore,
-    id: Id,
+    id: Id<WaitHandle<B>>,
 },);
 impl<B: hal::Backend> Drop for WaitHandleInner<B> {
     fn drop(&mut self) {
@@ -817,4 +896,8 @@ impl<B: hal::Backend> Drop for WaitHandleInner<B> {
             };
         }
     }
+}
+struct Event<B: hal::Backend> {
+    id: Id<Self>,
+    inner: B::Event,
 }

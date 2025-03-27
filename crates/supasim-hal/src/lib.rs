@@ -1,7 +1,9 @@
 #![allow(clippy::missing_safety_doc)]
 
+pub mod dummy;
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
+pub use dummy::DummyBackend as Dummy;
 
 use types::*;
 

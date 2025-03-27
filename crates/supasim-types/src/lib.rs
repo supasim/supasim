@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+pub use daggy::petgraph::algo::toposort;
+pub use daggy::petgraph::graph::NodeIndex;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MemoryType {
     /// Driver decides
@@ -134,4 +137,4 @@ pub struct ShaderReflectionInfo {
     pub push_constant_len: u32,
 }
 
-pub type Dag<T> = daggy::Dag<T, (usize, usize)>;
+pub type Dag<T> = daggy::Dag<T, ()>;
