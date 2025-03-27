@@ -2,8 +2,8 @@ use core::ffi;
 use std::{borrow::Cow, cell::Cell, ffi::CString, sync::Mutex};
 
 use crate::{
-    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, CompiledKernel,
-    Event, GpuResource, PipelineCache, RecorderSubmitInfo, Semaphore,
+    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, Event,
+    GpuResource, Kernel, KernelCache, RecorderSubmitInfo, Semaphore,
 };
 use ash::{Entry, khr, vk};
 use gpu_allocator::{
@@ -27,7 +27,7 @@ impl Backend for Vulkan {
     type CommandRecorder = VulkanCommandRecorder;
     type Instance = VulkanInstance;
     type Kernel = VulkanKernel;
-    type PipelineCache = VulkanPipelineCache;
+    type KernelCache = VulkanPipelineCache;
     type Semaphore = VulkanSemaphore;
     type Event = VulkanEvent;
 
@@ -298,6 +298,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 version: types::SpirvVersion::V1_0,
             },
             easily_update_bind_groups: false,
+            supports_recorder_reuse: true,
         }
     }
     unsafe fn compile_kernel(
@@ -503,7 +504,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     unsafe fn create_pipeline_cache(
         &mut self,
         initial_data: &[u8],
-    ) -> Result<<Vulkan as Backend>::PipelineCache, <Vulkan as Backend>::Error> {
+    ) -> Result<<Vulkan as Backend>::KernelCache, <Vulkan as Backend>::Error> {
         unsafe {
             let create_info = vk::PipelineCacheCreateInfo::default().initial_data(initial_data);
             let pc = self.device.create_pipeline_cache(&create_info, None)?;
@@ -514,7 +515,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     unsafe fn destroy_pipeline_cache(
         &mut self,
-        cache: <Vulkan as Backend>::PipelineCache,
+        cache: <Vulkan as Backend>::KernelCache,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             let lock = cache
@@ -528,7 +529,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     unsafe fn get_pipeline_cache_data(
         &mut self,
-        cache: &mut <Vulkan as Backend>::PipelineCache,
+        cache: &mut <Vulkan as Backend>::KernelCache,
     ) -> Result<Vec<u8>, <Vulkan as Backend>::Error> {
         unsafe {
             let lock = cache
@@ -1028,7 +1029,7 @@ pub struct VulkanKernel {
     pub pipeline_layout: vk::PipelineLayout,
     pub descriptor_pools: Vec<DescriptorPoolData>,
 }
-impl CompiledKernel<Vulkan> for VulkanKernel {}
+impl Kernel<Vulkan> for VulkanKernel {}
 pub struct VulkanBuffer {
     pub buffer: vk::Buffer,
     pub allocation: Allocation,
@@ -1412,7 +1413,7 @@ impl BindGroup<Vulkan> for VulkanBindGroup {}
 pub struct VulkanPipelineCache {
     inner: Mutex<vk::PipelineCache>,
 }
-impl PipelineCache<Vulkan> for VulkanPipelineCache {}
+impl KernelCache<Vulkan> for VulkanPipelineCache {}
 pub struct VulkanSemaphore {
     inner: vk::Semaphore,
 }

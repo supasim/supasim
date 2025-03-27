@@ -3,18 +3,21 @@
 pub mod dummy;
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
-pub use dummy::DummyBackend as Dummy;
+#[cfg(feature = "wgpu")]
+pub mod wgpu;
+pub use dummy::Dummy;
+pub use vulkan::Vulkan;
 
 use types::*;
 
 /// Backend traits should not have their own destructors, as higher level operations may replace them with uninitialized memory by destructor time.
 pub trait Backend: Sized + std::fmt::Debug + Clone {
     type Instance: BackendInstance<Self>;
-    type Kernel: CompiledKernel<Self>;
+    type Kernel: Kernel<Self>;
     type Buffer: Buffer<Self>;
     type CommandRecorder: CommandRecorder<Self>;
     type BindGroup: BindGroup<Self>;
-    type PipelineCache: PipelineCache<Self>;
+    type KernelCache: KernelCache<Self>;
     type Semaphore: Semaphore<Self>;
     type Event: Event<Self>;
 
@@ -26,16 +29,16 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
         &mut self,
         binary: &[u8],
         reflection: &types::ShaderReflectionInfo,
-        cache: Option<&mut B::PipelineCache>,
+        cache: Option<&mut B::KernelCache>,
     ) -> Result<B::Kernel, B::Error>;
     unsafe fn create_pipeline_cache(
         &mut self,
         initial_data: &[u8],
-    ) -> Result<B::PipelineCache, B::Error>;
-    unsafe fn destroy_pipeline_cache(&mut self, cache: B::PipelineCache) -> Result<(), B::Error>;
+    ) -> Result<B::KernelCache, B::Error>;
+    unsafe fn destroy_pipeline_cache(&mut self, cache: B::KernelCache) -> Result<(), B::Error>;
     unsafe fn get_pipeline_cache_data(
         &mut self,
-        cache: &mut B::PipelineCache,
+        cache: &mut B::KernelCache,
     ) -> Result<Vec<u8>, B::Error>;
     unsafe fn destroy_kernel(&mut self, kernel: B::Kernel) -> Result<(), B::Error>;
     /// Wait for all compute work to complete on the GPU.
@@ -142,10 +145,10 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
         commands: &mut [BufferCommand<B>],
     ) -> Result<(), B::Error>;
 }
-pub trait CompiledKernel<B: Backend<Kernel = Self>> {}
+pub trait Kernel<B: Backend<Kernel = Self>> {}
 pub trait Buffer<B: Backend<Buffer = Self>> {}
 pub trait BindGroup<B: Backend<BindGroup = Self>> {}
-pub trait PipelineCache<B: Backend<PipelineCache = Self>> {}
+pub trait KernelCache<B: Backend<KernelCache = Self>> {}
 pub trait Semaphore<B: Backend<Semaphore = Self>> {
     unsafe fn signal(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }

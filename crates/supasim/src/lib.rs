@@ -365,6 +365,7 @@ pub struct InstanceProperties {
     pub supports_pipeline_cache: bool,
     pub supports_indirect_dispatch: bool,
     pub shader_type: types::ShaderTarget,
+    pub supports_recorder_reuse: bool,
 }
 api_type!(Instance, {
     inner: B::Instance,
@@ -395,6 +396,7 @@ impl<B: hal::Backend> Instance<B> {
             supports_pipeline_cache: v.pipeline_cache,
             supports_indirect_dispatch: v.indirect,
             shader_type: v.shader_type,
+            supports_recorder_reuse: v.supports_recorder_reuse,
         })
     }
     pub fn compile_kernel(
@@ -641,7 +643,7 @@ impl<B: hal::Backend> Drop for KernelInner<B> {
 }
 api_type!(KernelCache, {
     instance: Instance<B>,
-    inner: B::PipelineCache,
+    inner: B::KernelCache,
     id: Id<KernelCache<B>>,
 },);
 impl<B: hal::Backend> KernelCache<B> {
