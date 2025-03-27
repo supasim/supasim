@@ -134,7 +134,7 @@ impl Vulkan {
                 vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
             let mut sync2 =
                 vk::PhysicalDeviceSynchronization2FeaturesKHR::default().synchronization2(true);
-            // TODO: multiple queues. currently we only use a general queue, but this could potentially be optimized by using special compute queues and special transfer queues
+            // TODO: investigate multiple queues. currently we only use a general queue, but this could potentially be optimized by using special compute queues and special transfer queues
             let queue_priority = 1.0;
             let queue_create_info = vk::DeviceQueueCreateInfo::default()
                 .queue_priorities(std::slice::from_ref(&queue_priority))
@@ -473,7 +473,6 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             let alloc_ptr = &mut allocation as *mut Allocation;
             defer! {
                 if err.get() {
-                    // TODO: is this undefined behavior? Lets find out!
                     self.alloc.lock().unwrap().free(std::mem::take(&mut *alloc_ptr)).unwrap();
                 }
             }
@@ -638,7 +637,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         resources: &[GpuResource<Vulkan>],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         let mut writes = Vec::with_capacity(resources.len());
-        let mut buffer_infos = Vec::new();
+        let mut buffer_infos = Vec::with_capacity(resources.len());
         for (i, resource) in resources.iter().enumerate() {
             let mut write = vk::WriteDescriptorSet::default()
                 .dst_set(bg.inner)
@@ -1098,7 +1097,6 @@ impl VulkanCommandRecorder {
                     .size(size)],
             );
         }
-        // TODO: Do sync stuff
         Ok(())
     }
     fn dispatch_kernel(
@@ -1138,7 +1136,6 @@ impl VulkanCommandRecorder {
                 workgroup_dims[2],
             );
         }
-        // TODO: Do sync stuff
         Ok(())
     }
     #[allow(clippy::too_many_arguments)]
@@ -1181,7 +1178,6 @@ impl VulkanCommandRecorder {
                 .device
                 .cmd_dispatch_indirect(cb, indirect_buffer.buffer, buffer_offset);
         }
-        // TODO: Do sync stuff
         Ok(())
     }
     fn stage_mask(sync_ops: SyncOperations) -> vk::PipelineStageFlags {

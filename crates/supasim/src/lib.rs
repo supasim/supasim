@@ -6,7 +6,6 @@
 //! * Lazy operations
 //! * Combine/optimize allocations and creation of things
 
-mod api;
 mod sync;
 
 use hal::{BackendInstance as _, RecorderSubmitInfo};
