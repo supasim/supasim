@@ -9,7 +9,7 @@
 mod api;
 mod sync;
 
-use hal::BackendInstance as _;
+use hal::{BackendInstance as _, RecorderSubmitInfo};
 use std::{
     hash::Hash,
     marker::PhantomData,
@@ -454,7 +454,7 @@ impl<B: hal::Backend> Instance<B> {
             reusable,
             used_buffers: Vec::new(),
             current_iteration: 0,
-            command_buffers: Vec::new(),
+            command_recorders: Vec::new(),
             num_semaphores: 0,
             semaphores: Vec::new(),
         });
@@ -496,8 +496,38 @@ impl<B: hal::Backend> Instance<B> {
         for recorder in recorders {
             recorded_locks.push(recorder.inner_mut()?);
         }
-        // TODO:
-        // Acquire semaphores, submit things
+        let mut recorders = Vec::new();
+        let mut semaphore_locks = Vec::new();
+        let mut submit_infos: Vec<RecorderSubmitInfo<'_, B>> = Vec::new();
+        {
+            for recorder in &mut recorded_locks {
+                let mut recorder_semaphores = Vec::new();
+                for _ in 0..recorder.num_semaphores {
+                    recorder_semaphores.push(self.acquire_wait_handle()?);
+                    semaphore_locks.push(recorder_semaphores.last().unwrap().as_inner()?);
+                }
+                for cb in &mut recorder.command_recorders {
+                    // More semaphore magic
+                    recorders.push(cb);
+                    submit_infos.push(RecorderSubmitInfo {
+                        #[allow(invalid_value)]
+                        command_recorder: unsafe { std::mem::zeroed() },
+                        wait_semaphores: &[],
+                        signal_semaphores: &[],
+                    });
+                }
+            }
+            for (i, r) in recorders.iter_mut().enumerate() {
+                submit_infos[i].command_recorder = &mut r.inner;
+            }
+            // TODO: finish this by working with semaphores
+        }
+        unsafe {
+            self.inner_mut()?
+                .inner
+                .submit_recorders(&mut submit_infos)
+                .map_supasim()?;
+        }
         Ok(())
     }
     pub fn wait(
@@ -530,7 +560,7 @@ impl<B: hal::Backend> Instance<B> {
         todo!();
         //Ok(())
     }
-    fn acquire_wait_handle(&mut self) -> SupaSimResult<B, WaitHandle<B>> {
+    fn acquire_wait_handle(&self) -> SupaSimResult<B, WaitHandle<B>> {
         let mut s = self.inner_mut()?;
         let idx = if let Some(idx) = s.wait_handles.unused.pop() {
             s.wait_handles.acquire(idx)
@@ -656,7 +686,7 @@ enum BufferCommandInner<B: hal::Backend> {
     CpuCode(UserBufferAccessClosure<B>),
     Dummy,
 }
-struct CommandBufferData<B: hal::Backend> {
+struct CommandRecorderData<B: hal::Backend> {
     inner: B::CommandRecorder,
     out_semaphore: u32,
     wait_semaphores: Vec<u32>,
@@ -670,7 +700,7 @@ api_type!(CommandRecorder, {
     /// Used for tracking if the command recorder is cleared so previously used resources don't need to wait
     current_iteration: u64,
     used_buffers: Vec<BufferSlice<B>>,
-    command_buffers: Vec<CommandBufferData<B>>,
+    command_recorders: Vec<CommandRecorderData<B>>,
     reusable: bool,
     num_semaphores: u32,
     semaphores: Vec<Id<WaitHandle<B>>>,
@@ -772,7 +802,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
         s.used_buffers.clear();
         s.num_semaphores = 0;
         let instance = s.instance.clone();
-        for cb in &mut s.command_buffers {
+        for cb in &mut s.command_recorders {
             unsafe {
                 instance
                     .inner_mut()?
