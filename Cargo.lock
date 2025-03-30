@@ -1008,6 +1008,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
+
+[[package]]
 name = "portable-atomic"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1417,6 +1423,7 @@ dependencies = [
  "env_logger",
  "gpu-allocator",
  "log",
+ "pollster",
  "scopeguard",
  "supasim-shaders",
  "supasim-types",
@@ -1713,6 +1720,7 @@ dependencies = [
  "arrayvec",
  "bit-vec",
  "bitflags 2.9.0",
+ "bytemuck",
  "cfg_aliases",
  "document-features",
  "indexmap",

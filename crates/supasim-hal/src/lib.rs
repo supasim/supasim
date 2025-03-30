@@ -5,6 +5,10 @@ pub mod dummy;
 pub mod vulkan;
 #[cfg(feature = "wgpu")]
 pub mod wgpu;
+
+#[cfg(test)]
+mod tests;
+
 pub use dummy::Dummy;
 pub use vulkan::Vulkan;
 
@@ -73,13 +77,8 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), B::Error>;
-    unsafe fn map_buffer(
-        &mut self,
-        buffer: &B::Buffer,
-        offset: u64,
-        size: u64,
-    ) -> Result<*mut u8, B::Error>;
-    unsafe fn unmap_buffer(&mut self, buffer: &B::Buffer, map: *mut u8) -> Result<(), B::Error>;
+    unsafe fn map_buffer(&mut self, buffer: &B::Buffer) -> Result<*mut u8, B::Error>;
+    unsafe fn unmap_buffer(&mut self, buffer: &B::Buffer) -> Result<(), B::Error>;
     unsafe fn create_bind_group(
         &mut self,
         kernel: &mut B::Kernel,
@@ -110,6 +109,8 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     unsafe fn destroy_event(&mut self, event: B::Event) -> Result<(), B::Error>;
 
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), B::Error>;
+
+    unsafe fn destroy(self) -> Result<(), B::Error>;
 }
 pub enum GpuResource<'a, B: Backend> {
     Buffer {

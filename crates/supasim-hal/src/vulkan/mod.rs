@@ -289,6 +289,23 @@ impl VulkanInstance {
     }
 }
 impl BackendInstance<Vulkan> for VulkanInstance {
+    unsafe fn destroy(mut self) -> Result<(), VulkanError> {
+        unsafe {
+            self.alloc
+                .get_mut()
+                .unwrap()
+                .report_memory_leaks(log::Level::Error);
+            drop(self.alloc);
+            self.device.destroy_command_pool(self.command_pool, None);
+            self.device.destroy_device(None);
+            if let Some(debug) = self.debug {
+                ash::ext::debug_utils::Instance::new(&self.entry, &self.instance)
+                    .destroy_debug_utils_messenger(debug, None);
+            }
+            self.instance.destroy_instance(None);
+        }
+        Ok(())
+    }
     fn get_properties(&mut self) -> InstanceProperties {
         InstanceProperties {
             sync_mode: types::SyncMode::VulkanStyle,
@@ -434,7 +451,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .queue_family_indices(&queue_family_indices)
                 .usage({
                     use vk::BufferUsageFlags as F;
-                    let mut flags = F::STORAGE_BUFFER;
+                    let mut flags = F::empty();
                     if alloc_info.transfer_src {
                         flags |= F::TRANSFER_SRC
                     };
@@ -444,6 +461,11 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     if alloc_info.indirect_capable {
                         flags |= F::INDIRECT_BUFFER
                     }
+                    if alloc_info.uniform {
+                        flags |= F::UNIFORM_BUFFER
+                    } else {
+                        flags |= F::STORAGE_BUFFER
+                    };
                     flags
                 });
             let buffer = self.device.create_buffer(&create_info, None)?;
@@ -870,22 +892,12 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     unsafe fn map_buffer(
         &mut self,
         buffer: &<Vulkan as Backend>::Buffer,
-        offset: u64,
-        _size: u64,
     ) -> Result<*mut u8, <Vulkan as Backend>::Error> {
-        unsafe {
-            Ok(buffer
-                .allocation
-                .mapped_ptr()
-                .unwrap()
-                .add(offset as usize)
-                .as_ptr() as *mut u8)
-        }
+        Ok(buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8)
     }
     unsafe fn unmap_buffer(
         &mut self,
         _buffer: &<Vulkan as Backend>::Buffer,
-        _map: *mut u8,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         Ok(())
     }
@@ -896,10 +908,10 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         data: &[u8],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            let b = self.map_buffer(buffer, offset, data.len() as u64)?;
+            let b = self.map_buffer(buffer)?.add(offset as usize);
             let slice = std::slice::from_raw_parts_mut(b, data.len());
             slice.copy_from_slice(data);
-            self.unmap_buffer(buffer, b)?;
+            self.unmap_buffer(buffer)?;
             Ok(())
         }
     }
@@ -910,10 +922,10 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         data: &mut [u8],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            let b = self.map_buffer(buffer, offset, data.len() as u64)?;
+            let b = self.map_buffer(buffer)?.add(offset as usize);
             let slice = std::slice::from_raw_parts(b as *const u8, data.len());
             data.copy_from_slice(slice);
-            self.unmap_buffer(buffer, b)?;
+            self.unmap_buffer(buffer)?;
         }
         Ok(())
     }
@@ -1002,24 +1014,6 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             self.device.destroy_event(event.inner, None);
         }
         Ok(())
-    }
-}
-impl VulkanInstance {
-    pub fn destroy(mut self) {
-        unsafe {
-            self.alloc
-                .get_mut()
-                .unwrap()
-                .report_memory_leaks(log::Level::Error);
-            drop(self.alloc);
-            self.device.destroy_command_pool(self.command_pool, None);
-            self.device.destroy_device(None);
-            if let Some(debug) = self.debug {
-                ash::ext::debug_utils::Instance::new(&self.entry, &self.instance)
-                    .destroy_debug_utils_messenger(debug, None);
-            }
-            self.instance.destroy_instance(None);
-        }
     }
 }
 pub struct VulkanKernel {
@@ -1438,165 +1432,3 @@ pub struct VulkanEvent {
     operations: Cell<SyncOperations>,
 }
 impl Event<Vulkan> for VulkanEvent {}
-
-#[cfg(test)]
-mod tests {
-    use crate::BufferCommand;
-    use types::ShaderReflectionInfo;
-
-    use super::*;
-    unsafe fn create_storage_buf(instance: &mut VulkanInstance, data: &[u8]) -> VulkanBuffer {
-        unsafe {
-            let buf = instance
-                .create_buffer(&BufferDescriptor {
-                    size: data.len() as u64,
-                    memory_type: types::MemoryType::UploadDownload,
-                    mapped_at_creation: false,
-                    visible_to_renderer: false,
-                    indirect_capable: false,
-                    transfer_src: false,
-                    transfer_dst: false,
-                    uniform: false,
-                    needs_flush: true,
-                })
-                .unwrap();
-            instance.write_buffer(&buf, 0, data).unwrap();
-            buf
-        }
-    }
-    #[test]
-    fn vulkan_main_test() {
-        unsafe {
-            env_logger::init();
-            let mut instance = Vulkan::create_instance(true).unwrap();
-            let mut cache = instance.create_pipeline_cache(&[]).unwrap();
-            let fun_semaphore = instance.create_semaphore().unwrap();
-            let mut kernel = instance
-                .compile_kernel(
-                    include_bytes!("test_add.spirv"),
-                    &ShaderReflectionInfo {
-                        workgroup_size: [1, 1, 1],
-                        entry_name: "main".to_owned(),
-                        resources: vec![
-                            ShaderResourceType::Buffer,
-                            ShaderResourceType::Buffer,
-                            ShaderResourceType::Buffer,
-                        ],
-                        push_constant_len: 0,
-                    },
-                    Some(&mut cache),
-                )
-                .unwrap();
-            let mut kernel2 = instance
-                .compile_kernel(
-                    include_bytes!("test_double.spirv"),
-                    &ShaderReflectionInfo {
-                        workgroup_size: [1, 1, 1],
-                        entry_name: "main".to_owned(),
-                        resources: vec![ShaderResourceType::Buffer],
-                        push_constant_len: 0,
-                    },
-                    Some(&mut cache),
-                )
-                .unwrap();
-            let uniform_buf = instance
-                .create_buffer(&BufferDescriptor {
-                    size: 16,
-                    memory_type: types::MemoryType::Upload,
-                    mapped_at_creation: false,
-                    visible_to_renderer: false,
-                    indirect_capable: false,
-                    transfer_src: false,
-                    transfer_dst: false,
-                    uniform: true,
-                    needs_flush: true,
-                })
-                .unwrap();
-            let sb1 = create_storage_buf(&mut instance, bytemuck::bytes_of(&[5u32, 0, 0, 0]));
-            let sb2 = create_storage_buf(&mut instance, bytemuck::bytes_of(&[8u32, 0, 0, 0]));
-            let sbout = create_storage_buf(&mut instance, bytemuck::bytes_of(&[2u32, 0, 0, 0]));
-            let bind_group = instance
-                .create_bind_group(
-                    &mut kernel,
-                    &[
-                        GpuResource::buffer(&sb1, 0, 16),
-                        GpuResource::buffer(&sb2, 0, 16),
-                        GpuResource::buffer(&sbout, 0, 16),
-                    ],
-                )
-                .unwrap();
-            let bind_group2 = instance
-                .create_bind_group(&mut kernel2, &[GpuResource::buffer(&sbout, 0, 16)])
-                .unwrap();
-
-            let mut recorder = instance.create_recorder(false).unwrap();
-
-            recorder
-                .record_commands(
-                    &mut instance,
-                    &mut [
-                        BufferCommand::DispatchKernel {
-                            shader: &kernel,
-                            bind_group: &bind_group,
-                            push_constants: &[],
-                            workgroup_dims: [1, 1, 1],
-                        },
-                        BufferCommand::PipelineBarrier {
-                            before: SyncOperations::ComputeDispatch,
-                            after: SyncOperations::ComputeDispatch,
-                        },
-                        BufferCommand::MemoryBarrier {
-                            resource: GpuResource::Buffer {
-                                buffer: &sbout,
-                                offset: 0,
-                                size: 16,
-                            },
-                        },
-                        BufferCommand::DispatchKernel {
-                            shader: &kernel2,
-                            bind_group: &bind_group2,
-                            push_constants: &[],
-                            workgroup_dims: [1, 1, 1],
-                        },
-                    ],
-                )
-                .unwrap();
-            instance
-                .submit_recorders(std::slice::from_mut(&mut RecorderSubmitInfo {
-                    command_recorder: &mut recorder,
-                    wait_semaphores: &mut [],
-                    signal_semaphores: &[&fun_semaphore],
-                }))
-                .unwrap();
-            instance
-                .wait_for_semaphores(&[&fun_semaphore], true, 1.0)
-                .unwrap();
-
-            let mut res = [3u32, 0, 0, 0];
-            instance
-                .read_buffer(&sbout, 0, bytemuck::cast_slice_mut(&mut res))
-                .unwrap();
-            if res[0] != 26 {
-                panic!("Expected 26, got {}", res[0]);
-            }
-
-            instance.destroy_recorder(recorder).unwrap();
-
-            instance.destroy_semaphore(fun_semaphore).unwrap();
-            instance
-                .destroy_bind_group(&mut kernel, bind_group)
-                .unwrap();
-            instance
-                .destroy_bind_group(&mut kernel2, bind_group2)
-                .unwrap();
-            instance.destroy_kernel(kernel).unwrap();
-            instance.destroy_kernel(kernel2).unwrap();
-            instance.destroy_buffer(uniform_buf).unwrap();
-            instance.destroy_buffer(sb1).unwrap();
-            instance.destroy_buffer(sb2).unwrap();
-            instance.destroy_buffer(sbout).unwrap();
-            instance.destroy_pipeline_cache(cache).unwrap();
-            instance.destroy();
-        }
-    }
-}

@@ -597,9 +597,10 @@ impl<B: hal::Backend> Instance<B> {
                 _instance
                     .inner_mut()?
                     .inner
-                    .map_buffer(&buffer.inner, b.start, b.len)
-            }
-            .map_supasim()?;
+                    .map_buffer(&buffer.inner)
+                    .map_supasim()?
+                    .add(b.start as usize)
+            };
             let mapped = MappedBuffer {
                 instance: self.clone(),
                 inner: ptr,

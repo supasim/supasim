@@ -9,11 +9,11 @@ keywords.workspace = true
 license.workspace = true
 
 [features]
-default = ["vulkan", "cuda", "wgpu"]
+default = ["vulkan", "wgpu"]
 cuda = [
     # "cust"
 ] # Potential cuda libraries: cust, cudarc
-wgpu = ["dep:wgpu"]
+wgpu = ["dep:wgpu", "pollster"]
 vulkan = ["ash", "gpu-allocator"]
 
 [dependencies]
@@ -32,7 +32,8 @@ ash = { version = "0.38", optional = true }
 gpu-allocator = { version = "0.27", optional = true, features = ["vulkan"] }
 
 # WGPU dependencies
-wgpu = { version = "24.0", optional = true }
+wgpu = { version = "24.0", optional = true, features = ["spirv"] }
+pollster = { version = "0.4", optional = true }
 
 # Cuda dependencies
 # cust = { version = "0.3", optional = true }

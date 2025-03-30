@@ -126,8 +126,6 @@ impl BackendInstance<Dummy> for DummyResource {
     unsafe fn map_buffer(
         &mut self,
         buffer: &<Dummy as Backend>::Buffer,
-        offset: u64,
-        size: u64,
     ) -> Result<*mut u8, <Dummy as Backend>::Error> {
         unreachable!()
     }
@@ -135,7 +133,6 @@ impl BackendInstance<Dummy> for DummyResource {
     unsafe fn unmap_buffer(
         &mut self,
         buffer: &<Dummy as Backend>::Buffer,
-        map: *mut u8,
     ) -> Result<(), <Dummy as Backend>::Error> {
         unreachable!()
     }
@@ -201,6 +198,9 @@ impl BackendInstance<Dummy> for DummyResource {
     }
 
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Dummy as Backend>::Error> {
+        unreachable!()
+    }
+    unsafe fn destroy(self) -> Result<(), <Dummy as Backend>::Error> {
         unreachable!()
     }
 }
