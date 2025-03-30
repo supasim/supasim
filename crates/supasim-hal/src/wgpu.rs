@@ -55,13 +55,11 @@ impl Wgpu {
             },
             None,
         ))?;
-        let first_submission = queue.submit(std::iter::empty());
         Ok(WgpuInstance {
             instance,
             adapter,
             device,
             queue,
-            first_submission,
         })
     }
 }
@@ -71,7 +69,6 @@ pub struct WgpuInstance {
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    first_submission: wgpu::SubmissionIndex,
 }
 impl BackendInstance<Wgpu> for WgpuInstance {
     fn get_properties(&mut self) -> InstanceProperties {
@@ -338,9 +335,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             None => {
                 let slice = buffer.inner.slice(..);
                 slice.map_async(wgpu::MapMode::Write, |_| ());
-                self.device.poll(wgpu::Maintain::WaitForSubmissionIndex(
-                    self.first_submission.clone(),
-                ));
+                self.device.poll(wgpu::Maintain::Poll);
                 slice.get_mapped_range_mut().as_mut_ptr()
             }
         };
