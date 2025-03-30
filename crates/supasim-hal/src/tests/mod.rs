@@ -27,7 +27,7 @@ unsafe fn create_storage_buf<B: Backend>(
 fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Result<(), B::Error> {
     unsafe {
         info!("Starting test");
-        let mut cache = instance.create_pipeline_cache(&[])?;
+        let mut cache = instance.create_kernel_cache(&[])?;
         let fun_semaphore = instance.create_semaphore()?;
         let mut kernel = instance.compile_kernel(
             include_bytes!("test_add.spirv"),
@@ -138,7 +138,7 @@ fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Resul
         instance.destroy_buffer(sb1)?;
         instance.destroy_buffer(sb2)?;
         instance.destroy_buffer(sbout)?;
-        instance.destroy_pipeline_cache(cache)?;
+        instance.destroy_kernel_cache(cache)?;
         instance.destroy()?;
         info!("Destroyed");
         Ok(())

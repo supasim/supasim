@@ -132,7 +132,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         })
     }
 
-    unsafe fn create_pipeline_cache(
+    unsafe fn create_kernel_cache(
         &mut self,
         initial_data: &[u8],
     ) -> Result<<Wgpu as Backend>::KernelCache, <Wgpu as Backend>::Error> {
@@ -152,7 +152,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         }
     }
 
-    unsafe fn destroy_pipeline_cache(
+    unsafe fn destroy_kernel_cache(
         &mut self,
         cache: <Wgpu as Backend>::KernelCache,
     ) -> Result<(), <Wgpu as Backend>::Error> {
@@ -160,7 +160,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 
-    unsafe fn get_pipeline_cache_data(
+    unsafe fn get_kernel_cache_data(
         &mut self,
         cache: &mut <Wgpu as Backend>::KernelCache,
     ) -> Result<Vec<u8>, <Wgpu as Backend>::Error> {

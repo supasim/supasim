@@ -45,21 +45,21 @@ impl BackendInstance<Dummy> for DummyResource {
         Ok(DummyResource)
     }
 
-    unsafe fn create_pipeline_cache(
+    unsafe fn create_kernel_cache(
         &mut self,
         initial_data: &[u8],
     ) -> Result<<Dummy as Backend>::KernelCache, <Dummy as Backend>::Error> {
         Ok(DummyResource)
     }
 
-    unsafe fn destroy_pipeline_cache(
+    unsafe fn destroy_kernel_cache(
         &mut self,
         cache: <Dummy as Backend>::KernelCache,
     ) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
     }
 
-    unsafe fn get_pipeline_cache_data(
+    unsafe fn get_kernel_cache_data(
         &mut self,
         cache: &mut <Dummy as Backend>::KernelCache,
     ) -> Result<Vec<u8>, <Dummy as Backend>::Error> {

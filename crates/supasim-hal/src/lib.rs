@@ -1,5 +1,3 @@
-#![allow(clippy::missing_safety_doc)]
-
 pub mod dummy;
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
@@ -32,75 +30,125 @@ pub trait Backend: Sized + std::fmt::Debug + Clone {
 }
 pub trait BackendInstance<B: Backend<Instance = Self>> {
     fn get_properties(&mut self) -> InstanceProperties;
+    /// # Safety
+    /// * The shader code must be valid
+    /// * The reflection info must match exactly with the shader
+    /// * The cache must be valid
     unsafe fn compile_kernel(
         &mut self,
         binary: &[u8],
         reflection: &types::ShaderReflectionInfo,
         cache: Option<&mut B::KernelCache>,
     ) -> Result<B::Kernel, B::Error>;
-    unsafe fn create_pipeline_cache(
+    /// # Safety
+    /// * Initial data must be either empty or valid
+    ///   * The data must be from the same backend
+    unsafe fn create_kernel_cache(
         &mut self,
         initial_data: &[u8],
     ) -> Result<B::KernelCache, B::Error>;
-    unsafe fn destroy_pipeline_cache(&mut self, cache: B::KernelCache) -> Result<(), B::Error>;
-    unsafe fn get_pipeline_cache_data(
+    /// # Safety
+    /// * All kernels in the cache must've been destroyed
+    unsafe fn destroy_kernel_cache(&mut self, cache: B::KernelCache) -> Result<(), B::Error>;
+    /// # Safety
+    /// Currently no safety requirements. This is subject to change
+    unsafe fn get_kernel_cache_data(
         &mut self,
         cache: &mut B::KernelCache,
     ) -> Result<Vec<u8>, B::Error>;
+    /// # Safety
+    /// * All command recorders using this kernel must've been cleared
+    /// * All bind groups using this kernel must've been destroyed
     unsafe fn destroy_kernel(&mut self, kernel: B::Kernel) -> Result<(), B::Error>;
-    /// Wait for all compute work to complete on the GPU.
+    /// # Safety
+    /// Currently no safety requirements. This is subject to change
     unsafe fn wait_for_idle(&mut self) -> Result<(), B::Error>;
+    /// # Safety
+    /// * `allow_resubmits` must only be set if the instance supports it
     unsafe fn create_recorder(
         &mut self,
         allow_resubmits: bool,
     ) -> Result<B::CommandRecorder, B::Error>;
+    /// # Safety
+    /// * For each recorder submitted, if it is a resubmit, all previous submits must have completed, and it must've been created with flags that indicate support for reuse
+    /// * For each recorder submitted, if it is not a resubmit, it must have had __exactly__ one record command called on it since being cleared or created
     unsafe fn submit_recorders(
         &mut self,
         infos: &mut [RecorderSubmitInfo<B>],
     ) -> Result<(), B::Error>;
+    /// # Safety
+    /// * All submissions using this recorder must have completed
     unsafe fn destroy_recorder(&mut self, recorder: B::CommandRecorder) -> Result<(), B::Error>;
+    /// # Safety
+    /// * All submissions using any of these recorders must have completed
     unsafe fn clear_recorders(
         &mut self,
         buffers: &mut [&mut B::CommandRecorder],
     ) -> Result<(), B::Error>;
+    /// # Safety
+    /// * Indirect must only be set if the instance supports it
     unsafe fn create_buffer(
         &mut self,
         alloc_info: &BufferDescriptor,
     ) -> Result<B::Buffer, B::Error>;
+    /// # Safety
+    /// * All mappings to this buffer are invalidated
+    /// * All bind groups using this buffer must have been updated or destroyed
     unsafe fn destroy_buffer(&mut self, buffer: B::Buffer) -> Result<(), B::Error>;
+    /// # Safety
+    /// All submitted command recorders using this buffer must have completed
     unsafe fn write_buffer(
         &mut self,
         buffer: &B::Buffer,
         offset: u64,
         data: &[u8],
     ) -> Result<(), B::Error>;
+    /// # Safety
+    /// * All submitted command recorders using this buffer mutably must have completed
     unsafe fn read_buffer(
         &mut self,
         buffer: &B::Buffer,
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), B::Error>;
+    /// # Safety
+    /// * If this map is to be used mutably, all submitted command recorders using this buffer must have completed
+    /// * All submitted command recorders using this buffer mutably must have completed
     unsafe fn map_buffer(&mut self, buffer: &B::Buffer) -> Result<*mut u8, B::Error>;
+    /// # Safety
+    /// * All pointers to this mapped buffer are invalidated
     unsafe fn unmap_buffer(&mut self, buffer: &B::Buffer) -> Result<(), B::Error>;
+    /// # Safety
+    /// * The resources must correspond with the kernel and its layout
     unsafe fn create_bind_group(
         &mut self,
         kernel: &mut B::Kernel,
         resources: &[GpuResource<B>],
     ) -> Result<B::BindGroup, B::Error>;
+    /// # Safety
+    /// * If the backend doesn't support easily updatable bind groups, all command recorders using this bind group must've been cleared
     unsafe fn update_bind_group(
         &mut self,
         bg: &mut B::BindGroup,
         kernel: &mut B::Kernel,
         resources: &[GpuResource<B>],
     ) -> Result<(), B::Error>;
+    /// # Safety
+    /// * All command recorders using this bind group must've been cleared
     unsafe fn destroy_bind_group(
         &mut self,
         kernel: &mut B::Kernel,
         bind_group: B::BindGroup,
     ) -> Result<(), B::Error>;
 
+    /// # Safety
+    /// * All command recorders using this event must've been cleared
     unsafe fn create_semaphore(&mut self) -> Result<B::Semaphore, B::Error>;
+    /// # Safety
+    /// * All command recorders using this semaphore must've been cleared
     unsafe fn destroy_semaphore(&mut self, semaphore: B::Semaphore) -> Result<(), B::Error>;
+    /// # Safety
+    /// Currently no safety requirements. This is subject to change
     unsafe fn wait_for_semaphores(
         &mut self,
         semaphores: &[&B::Semaphore],
@@ -108,11 +156,21 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
         timeout: f32,
     ) -> Result<(), B::Error>;
 
+    /// # Safety
+    /// Currently no safety requirements. This is subject to change
     unsafe fn create_event(&mut self) -> Result<B::Event, B::Error>;
+
+    /// # Safety
+    /// * All command recorders using this event must've completed
     unsafe fn destroy_event(&mut self, event: B::Event) -> Result<(), B::Error>;
 
+    /// # Safety
+    /// Currently no safety requirements. This is subject to change
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), B::Error>;
 
+    /// # Safety
+    /// * All associated resources must be destroyed
+    /// * All device work must be completed
     unsafe fn destroy(self) -> Result<(), B::Error>;
 }
 pub enum GpuResource<'a, B: Backend> {
@@ -136,13 +194,16 @@ pub struct CommandSynchronization<'a, B: Backend> {
     pub out_semaphore: Option<(&'a mut B::Semaphore, u64)>,
 }
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
-    /// Edges contain the start and length in resources buffer of used resources
+    /// # Safety
+    /// * Must only be called on instances with `SyncMode::Dag`
     unsafe fn record_dag(
         &mut self,
         instance: &mut B::Instance,
         resources: &[&GpuResource<B>],
         dag: &mut Dag<BufferCommand<B>>,
     ) -> Result<(), B::Error>;
+    /// # Safety
+    /// * Must only be called on instances with `SyncMode` of `Automatic` or `VulkanStyle`
     unsafe fn record_commands(
         &mut self,
         instance: &mut B::Instance,
@@ -154,6 +215,8 @@ pub trait Buffer<B: Backend<Buffer = Self>> {}
 pub trait BindGroup<B: Backend<BindGroup = Self>> {}
 pub trait KernelCache<B: Backend<KernelCache = Self>> {}
 pub trait Semaphore<B: Backend<Semaphore = Self>> {
+    /// # Safety
+    /// Instance, semaphore must be valid.
     unsafe fn signal(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
 pub trait Event<B: Backend<Event = Self>> {}

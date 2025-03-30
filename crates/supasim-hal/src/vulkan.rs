@@ -119,9 +119,7 @@ impl Vulkan {
                         .iter()
                         .enumerate()
                         .find_map(|(i, q)| {
-                            if q.queue_flags
-                                .contains(vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER)
-                            {
+                            if q.queue_flags.contains(vk::QueueFlags::COMPUTE) {
                                 Some(i)
                             } else {
                                 None
@@ -159,6 +157,15 @@ impl Vulkan {
             )
         }
     }
+    /// # Safety
+    /// * Queue family must support `COMPUTE`
+    /// * Queue must be of the given queue family, and belong to the given device
+    /// * Vulkan instance must have version 1.2 or higher, and must be created from the given entry
+    /// * Phyd must be from the given vulkan instance
+    /// * Device must be from the given physical device, and must support timeline semaphores and synchronization 2
+    /// * The queue must not be used outside of this hal instance
+    /// * All resources belonging to the vulkan instance must be destroyed before the hal instance
+    /// * The instance and all resources will be destroyed when the hal instance is destroyed
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn from_existing(
         debug: bool,
@@ -523,7 +530,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(())
         }
     }
-    unsafe fn create_pipeline_cache(
+    unsafe fn create_kernel_cache(
         &mut self,
         initial_data: &[u8],
     ) -> Result<<Vulkan as Backend>::KernelCache, <Vulkan as Backend>::Error> {
@@ -535,7 +542,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             })
         }
     }
-    unsafe fn destroy_pipeline_cache(
+    unsafe fn destroy_kernel_cache(
         &mut self,
         cache: <Vulkan as Backend>::KernelCache,
     ) -> Result<(), <Vulkan as Backend>::Error> {
@@ -549,7 +556,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(())
         }
     }
-    unsafe fn get_pipeline_cache_data(
+    unsafe fn get_kernel_cache_data(
         &mut self,
         cache: &mut <Vulkan as Backend>::KernelCache,
     ) -> Result<Vec<u8>, <Vulkan as Backend>::Error> {

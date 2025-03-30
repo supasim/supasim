@@ -435,7 +435,7 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn create_kernel_cache(&self, data: &[u8]) -> SupaSimResult<B, KernelCache<B>> {
         let mut s = self.inner_mut()?;
-        let inner = unsafe { s.inner.create_pipeline_cache(data) }.map_supasim()?;
+        let inner = unsafe { s.inner.create_kernel_cache(data) }.map_supasim()?;
         let k = KernelCache::from_inner(KernelCacheInner {
             _phantom: Default::default(),
             instance: self.clone(),
@@ -655,7 +655,7 @@ impl<B: hal::Backend> KernelCache<B> {
             instance
                 .inner_mut()?
                 .inner
-                .get_pipeline_cache_data(&mut inner.inner)
+                .get_kernel_cache_data(&mut inner.inner)
         }
         .map_supasim()?;
         Ok(data)
@@ -668,7 +668,7 @@ impl<B: hal::Backend> Drop for KernelCacheInner<B> {
             let _ = unsafe {
                 instance
                     .inner
-                    .destroy_pipeline_cache(std::ptr::read(&self.inner))
+                    .destroy_kernel_cache(std::ptr::read(&self.inner))
             };
         }
     }
