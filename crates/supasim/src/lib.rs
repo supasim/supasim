@@ -521,7 +521,12 @@ impl<B: hal::Backend> Instance<B> {
                 }
             }
             for (i, r) in recorders.iter_mut().enumerate() {
-                submit_infos[i].command_recorder = &mut r.inner;
+                unsafe {
+                    std::ptr::write(
+                        &mut submit_infos[i].command_recorder as *mut _,
+                        &mut r.inner,
+                    )
+                };
             }
             // TODO: finish this by working with semaphores
         }
@@ -673,13 +678,11 @@ impl<B: hal::Backend> Drop for KernelCacheInner<B> {
         }
     }
 }
-/// This will be used eventually, remove the #[allow(dead_code)]
 struct BufferCommand<B: hal::Backend> {
     inner: BufferCommandInner<B>,
     buffers: Vec<BufferSlice<B>>,
     wait_handle: Option<WaitHandle<B>>,
 }
-/// This will be used eventually, remove the #[allow(dead_code)]
 enum BufferCommandInner<B: hal::Backend> {
     /// Kernel, workgroup size
     KernelDispatch(Kernel<B>, [u32; 3]),
