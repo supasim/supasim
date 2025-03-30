@@ -10,7 +10,10 @@ pub mod wgpu;
 mod tests;
 
 pub use dummy::Dummy;
+#[cfg(feature = "vulkan")]
 pub use vulkan::Vulkan;
+#[cfg(feature = "wgpu")]
+pub use wgpu::Wgpu;
 
 use types::*;
 

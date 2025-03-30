@@ -24,7 +24,7 @@ unsafe fn create_storage_buf<B: Backend>(
         Ok(buf)
     }
 }
-fn main_test<B: Backend>(mut instance: B::Instance) -> Result<(), B::Error> {
+fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Result<(), B::Error> {
     unsafe {
         info!("Starting test");
         let mut cache = instance.create_pipeline_cache(&[])?;
@@ -121,7 +121,7 @@ fn main_test<B: Backend>(mut instance: B::Instance) -> Result<(), B::Error> {
 
         let mut res = [3u32, 0, 0, 0];
         instance.read_buffer(&sbout, 0, bytemuck::cast_slice_mut(&mut res))?;
-        if res[0] != 26 {
+        if check_result && res[0] != 26 {
             panic!("Expected 26, got {}", res[0]);
         }
 
@@ -155,7 +155,7 @@ pub fn vulkan_test() {
     info!("Vulkan test");
     let instance = Vulkan::create_instance(true).unwrap();
     info!("Created vulkan instance");
-    main_test::<Vulkan>(instance).unwrap();
+    main_test::<Vulkan>(instance, true).unwrap();
 }
 #[cfg(feature = "wgpu")]
 #[test]
@@ -167,5 +167,16 @@ pub fn wgpu_test() {
     info!("Wgpu test");
     let instance = Wgpu::create_instance(true).unwrap();
     info!("Created wgpu instance");
-    main_test::<Wgpu>(instance).unwrap();
+    main_test::<Wgpu>(instance, true).unwrap();
+}
+#[test]
+pub fn dummy_test() {
+    use crate::dummy::Dummy;
+    let _ = env_logger::builder()
+        .filter_level(log::LevelFilter::Info)
+        .try_init();
+    info!("Dummy test");
+    let instance = Dummy::create_instance();
+    info!("Created dummy instance");
+    main_test::<Dummy>(instance, false).unwrap();
 }
