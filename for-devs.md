@@ -12,6 +12,9 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+## Testing info
+Run the command `cargo test -- --nocapture --test-threads=1`. The `--nocapture` allows logs to be sent(though this is quite verbose, particularly for wgpu). More importantly, `--test-threads=1` means that `wgpu` and `vulkan` will not be fighting over the entry in parallel, which currently results in a SEGSEGV on linux.
+
 ## Synchronization things
 ### Metal
 Metal supports similar synchronization to vulkan, except the different primitives are named differently(fences instead of semaphores and the like). It also supports automatic synchronization of certain resources, depending on how they are allocated. Resources allocated directly from a device default to synchronized, while resources allocated from an explicit memory heap must have an additional flag at creation time.
