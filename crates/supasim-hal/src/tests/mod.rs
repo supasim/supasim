@@ -78,7 +78,7 @@ fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Resul
         let bind_group2 =
             instance.create_bind_group(&mut kernel2, &[GpuResource::buffer(&sbout, 0, 16)])?;
 
-        let mut recorder = instance.create_recorder(false)?;
+        let mut recorder = instance.create_recorder()?;
 
         info!("Created things");
 

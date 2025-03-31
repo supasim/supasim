@@ -83,7 +83,6 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                 version: SpirvVersion::V1_0,
             },
             easily_update_bind_groups: false,
-            supports_recorder_reuse: false,
         }
     }
 
@@ -182,7 +181,6 @@ impl BackendInstance<Wgpu> for WgpuInstance {
 
     unsafe fn create_recorder(
         &mut self,
-        allow_resubmits: bool,
     ) -> Result<<Wgpu as Backend>::CommandRecorder, <Wgpu as Backend>::Error> {
         let encoder = self
             .device
@@ -236,7 +234,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             let r = match b {
                 WgpuCommandRecorder::Recorded(b) => unsafe {
                     std::ptr::read(b as *const _); // Call destructor
-                    self.create_recorder(false)?
+                    self.create_recorder()?
                 },
                 WgpuCommandRecorder::Unrecorded(r) => {
                     WgpuCommandRecorder::Unrecorded(unsafe { std::ptr::read(r as *const _) })

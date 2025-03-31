@@ -65,10 +65,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     unsafe fn wait_for_idle(&mut self) -> Result<(), B::Error>;
     /// # Safety
     /// * `allow_resubmits` must only be set if the instance supports it
-    unsafe fn create_recorder(
-        &mut self,
-        allow_resubmits: bool,
-    ) -> Result<B::CommandRecorder, B::Error>;
+    unsafe fn create_recorder(&mut self) -> Result<B::CommandRecorder, B::Error>;
     /// # Safety
     /// * For each recorder submitted, if it is a resubmit, all previous submits must have completed, and it must've been created with flags that indicate support for reuse
     /// * For each recorder submitted, if it is not a resubmit, it must have had __exactly__ one record command called on it since being cleared or created

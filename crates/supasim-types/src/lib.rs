@@ -107,8 +107,6 @@ pub struct InstanceProperties {
     pub shader_type: ShaderTarget,
     /// Whether the backend supports bind groups that are updated while commands are already recorded. This makes bind groups far cheaper to use
     pub easily_update_bind_groups: bool,
-    /// Whether or not command recorders can be reused
-    pub supports_recorder_reuse: bool,
 }
 /// # Safety
 /// This is undefined behavior lol

@@ -32,7 +32,6 @@ impl BackendInstance<Dummy> for DummyResource {
                 version: SpirvVersion::V1_0,
             },
             easily_update_bind_groups: true,
-            supports_recorder_reuse: true,
         }
     }
 
@@ -79,7 +78,6 @@ impl BackendInstance<Dummy> for DummyResource {
 
     unsafe fn create_recorder(
         &mut self,
-        allow_resubmits: bool,
     ) -> Result<<Dummy as Backend>::CommandRecorder, <Dummy as Backend>::Error> {
         Ok(DummyResource)
     }

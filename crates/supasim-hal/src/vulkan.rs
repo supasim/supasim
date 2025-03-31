@@ -322,7 +322,6 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 version: types::SpirvVersion::V1_0,
             },
             easily_update_bind_groups: false,
-            supports_recorder_reuse: true,
         }
     }
     unsafe fn compile_kernel(
@@ -729,11 +728,9 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     unsafe fn create_recorder(
         &mut self,
-        allow_resubmits: bool,
     ) -> Result<<Vulkan as Backend>::CommandRecorder, <Vulkan as Backend>::Error> {
         Ok(VulkanCommandRecorder {
             cbs: Vec::new(),
-            allow_resubmits,
             used_events: Vec::new(),
         })
     }
@@ -1047,7 +1044,6 @@ struct CommandBufferSubmit {
 pub struct VulkanCommandRecorder {
     cbs: Vec<CommandBufferSubmit>,
     used_events: Vec<vk::Event>,
-    allow_resubmits: bool,
 }
 impl VulkanCommandRecorder {
     fn begin(
@@ -1058,11 +1054,8 @@ impl VulkanCommandRecorder {
         unsafe {
             instance.device.begin_command_buffer(
                 cb,
-                &vk::CommandBufferBeginInfo::default().flags(if self.allow_resubmits {
-                    vk::CommandBufferUsageFlags::empty()
-                } else {
-                    vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT
-                }),
+                &vk::CommandBufferBeginInfo::default()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
             )?;
             Ok(())
         }
