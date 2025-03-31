@@ -64,11 +64,10 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     /// Currently no safety requirements. This is subject to change
     unsafe fn wait_for_idle(&mut self) -> Result<(), B::Error>;
     /// # Safety
-    /// * `allow_resubmits` must only be set if the instance supports it
+    /// Currently no safety requirements. This is subject to change
     unsafe fn create_recorder(&mut self) -> Result<B::CommandRecorder, B::Error>;
     /// # Safety
-    /// * For each recorder submitted, if it is a resubmit, all previous submits must have completed, and it must've been created with flags that indicate support for reuse
-    /// * For each recorder submitted, if it is not a resubmit, it must have had __exactly__ one record command called on it since being cleared or created
+    /// * For each recorder submitted, it must have had __exactly__ one record command called on it since being cleared or created
     unsafe fn submit_recorders(
         &mut self,
         infos: &mut [RecorderSubmitInfo<B>],
@@ -193,6 +192,7 @@ pub struct CommandSynchronization<'a, B: Backend> {
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
     /// # Safety
     /// * Must only be called on instances with `SyncMode::Dag`
+    /// * The recorder must not have had any record command since being created or cleared
     unsafe fn record_dag(
         &mut self,
         instance: &mut B::Instance,
@@ -201,6 +201,7 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
     ) -> Result<(), B::Error>;
     /// # Safety
     /// * Must only be called on instances with `SyncMode` of `Automatic` or `VulkanStyle`
+    /// * The recorder must not have had any record command since being created or cleared
     unsafe fn record_commands(
         &mut self,
         instance: &mut B::Instance,
@@ -211,11 +212,7 @@ pub trait Kernel<B: Backend<Kernel = Self>> {}
 pub trait Buffer<B: Backend<Buffer = Self>> {}
 pub trait BindGroup<B: Backend<BindGroup = Self>> {}
 pub trait KernelCache<B: Backend<KernelCache = Self>> {}
-pub trait Semaphore<B: Backend<Semaphore = Self>> {
-    /// # Safety
-    /// Instance, semaphore must be valid.
-    unsafe fn signal(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
-}
+pub trait Semaphore<B: Backend<Semaphore = Self>> {}
 pub trait Event<B: Backend<Event = Self>> {}
 pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub command_recorder: &'a mut B::CommandRecorder,

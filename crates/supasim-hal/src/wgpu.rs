@@ -561,14 +561,7 @@ impl KernelCache<Wgpu> for WgpuKernelCache {}
 pub struct WgpuSemaphore {
     inner: Cell<Option<wgpu::SubmissionIndex>>,
 }
-impl Semaphore<Wgpu> for WgpuSemaphore {
-    unsafe fn signal(
-        &mut self,
-        instance: &mut <Wgpu as Backend>::Instance,
-    ) -> Result<(), <Wgpu as Backend>::Error> {
-        unreachable!()
-    }
-}
+impl Semaphore<Wgpu> for WgpuSemaphore {}
 pub struct WgpuEvent;
 impl Event<Wgpu> for WgpuEvent {}
 #[derive(thiserror::Error, Debug)]

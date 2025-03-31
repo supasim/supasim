@@ -237,14 +237,7 @@ impl CommandRecorder<Dummy> for DummyResource {
 }
 impl KernelCache<Dummy> for DummyResource {}
 impl BindGroup<Dummy> for DummyResource {}
-impl Semaphore<Dummy> for DummyResource {
-    unsafe fn signal(
-        &mut self,
-        instance: &mut <Dummy as Backend>::Instance,
-    ) -> Result<(), <Dummy as Backend>::Error> {
-        unreachable!()
-    }
-}
+impl Semaphore<Dummy> for DummyResource {}
 impl Event<Dummy> for DummyResource {}
 impl Error<Dummy> for DummyResource {
     // Error will never be constructed

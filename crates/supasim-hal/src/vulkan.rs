@@ -1411,21 +1411,7 @@ impl KernelCache<Vulkan> for VulkanPipelineCache {}
 pub struct VulkanSemaphore {
     inner: vk::Semaphore,
 }
-impl Semaphore<Vulkan> for VulkanSemaphore {
-    unsafe fn signal(
-        &mut self,
-        instance: &mut VulkanInstance,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            instance.device.signal_semaphore(
-                &vk::SemaphoreSignalInfo::default()
-                    .semaphore(self.inner)
-                    .value(1),
-            )?;
-            Ok(())
-        }
-    }
-}
+impl Semaphore<Vulkan> for VulkanSemaphore {}
 
 pub struct VulkanEvent {
     inner: vk::Event,
