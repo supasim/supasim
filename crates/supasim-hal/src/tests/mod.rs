@@ -114,7 +114,7 @@ fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Resul
         info!("Recorded commands");
         instance.submit_recorders(std::slice::from_mut(&mut RecorderSubmitInfo {
             command_recorder: &mut recorder,
-            wait_semaphores: &mut [],
+            wait_semaphore: None,
             signal_semaphore: Some(&fun_semaphore),
         }))?;
         info!("Submitted recorders");

@@ -83,6 +83,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                 version: SpirvVersion::V1_0,
             },
             easily_update_bind_groups: false,
+            semaphore_signal: true,
         }
     }
 
@@ -568,6 +569,12 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
         } else {
             Ok(true)
         }
+    }
+    unsafe fn signal(
+        &mut self,
+        instance: &mut <Wgpu as Backend>::Instance,
+    ) -> Result<(), <Wgpu as Backend>::Error> {
+        unreachable!()
     }
 }
 pub struct WgpuEvent;

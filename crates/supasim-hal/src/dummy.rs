@@ -32,6 +32,7 @@ impl BackendInstance<Dummy> for DummyResource {
                 version: SpirvVersion::V1_0,
             },
             easily_update_bind_groups: true,
+            semaphore_signal: true,
         }
     }
 
@@ -240,6 +241,12 @@ impl Semaphore<Dummy> for DummyResource {
         instance: &mut <Dummy as Backend>::Instance,
     ) -> Result<bool, <Dummy as Backend>::Error> {
         Ok(false)
+    }
+    unsafe fn signal(
+        &mut self,
+        instance: &mut <Dummy as Backend>::Instance,
+    ) -> Result<(), <Dummy as Backend>::Error> {
+        Ok(())
     }
 }
 impl Event<Dummy> for DummyResource {}

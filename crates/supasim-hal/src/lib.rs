@@ -68,6 +68,8 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     unsafe fn create_recorder(&mut self) -> Result<B::CommandRecorder, B::Error>;
     /// # Safety
     /// * For each recorder submitted, it must have had __exactly__ one record command called on it since being cleared or created
+    /// * For each wait semaphore, the semaphore must be signalled at some point on the CPU side only
+    /// * For each signal semaphore, the semaphore must be used only by CPU side wait commands
     unsafe fn submit_recorders(
         &mut self,
         infos: &mut [RecorderSubmitInfo<B>],
@@ -211,11 +213,14 @@ pub trait Semaphore<B: Backend<Semaphore = Self>> {
     /// # Safety
     /// Currently no safety requirements. This is subject to change
     unsafe fn is_signalled(&mut self, instance: &mut B::Instance) -> Result<bool, B::Error>;
+    /// # Safety
+    /// * The semaphore must not be waited on by any CPU side wait command
+    unsafe fn signal(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
 pub trait Event<B: Backend<Event = Self>> {}
 pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub command_recorder: &'a mut B::CommandRecorder,
-    pub wait_semaphores: &'a [&'a B::Semaphore],
+    pub wait_semaphore: Option<&'a B::Semaphore>,
     pub signal_semaphore: Option<&'a B::Semaphore>,
 }
 #[must_use]

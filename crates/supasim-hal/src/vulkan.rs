@@ -322,6 +322,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 version: types::SpirvVersion::V1_0,
             },
             easily_update_bind_groups: false,
+            semaphore_signal: true,
         }
     }
     unsafe fn compile_kernel(
@@ -784,7 +785,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 cbs.push(a.cb);
                 let num_wait_semaphores = a.wait_semaphores.len()
                     + if a.is_head {
-                        info.wait_semaphores.len()
+                        info.wait_semaphore.is_some() as usize
                     } else {
                         0
                     };
@@ -801,7 +802,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     semaphores.push(s);
                 }
                 if a.is_head {
-                    semaphores.extend(info.wait_semaphores.iter().map(|a| a.inner));
+                    semaphores.extend(info.wait_semaphore.map(|a| a.inner));
                 }
                 for &s in &a.signal_semaphores {
                     semaphores.push(s);
@@ -815,7 +816,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             for a in &info.command_recorder.cbs {
                 let num_wait_semaphores = a.wait_semaphores.len()
                     + if a.is_head {
-                        info.wait_semaphores.len()
+                        info.wait_semaphore.is_some() as usize
                     } else {
                         0
                     };
@@ -840,7 +841,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 for cb in &info.command_recorder.cbs {
                     let num_wait_semaphores = cb.wait_semaphores.len()
                         + if cb.is_head {
-                            info.wait_semaphores.len()
+                            info.wait_semaphore.is_some() as usize
                         } else {
                             0
                         };
@@ -1409,6 +1410,19 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         instance: &mut <Vulkan as Backend>::Instance,
     ) -> Result<bool, <Vulkan as Backend>::Error> {
         Ok(unsafe { instance.device.get_semaphore_counter_value(self.inner)? } != 0)
+    }
+    unsafe fn signal(
+        &mut self,
+        instance: &mut <Vulkan as Backend>::Instance,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            instance.device.signal_semaphore(
+                &vk::SemaphoreSignalInfo::default()
+                    .semaphore(self.inner)
+                    .value(1),
+            )?;
+        }
+        Ok(())
     }
 }
 

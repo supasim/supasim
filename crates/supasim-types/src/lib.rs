@@ -107,6 +107,8 @@ pub struct InstanceProperties {
     pub shader_type: ShaderTarget,
     /// Whether the backend supports bind groups that are updated while commands are already recorded. This makes bind groups far cheaper to use
     pub easily_update_bind_groups: bool,
+    /// Whether the backend supports CPU->GPU communication using semaphore signalling.
+    pub semaphore_signal: bool,
 }
 /// # Safety
 /// This is undefined behavior lol

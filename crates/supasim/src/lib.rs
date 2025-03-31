@@ -513,7 +513,7 @@ impl<B: hal::Backend> Instance<B> {
                     submit_infos.push(RecorderSubmitInfo {
                         #[allow(invalid_value)]
                         command_recorder: unsafe { std::mem::zeroed() },
-                        wait_semaphores: &[],
+                        wait_semaphore: None,
                         signal_semaphore: None,
                     });
                 }
