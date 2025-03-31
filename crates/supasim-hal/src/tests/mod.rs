@@ -1,5 +1,6 @@
 use crate::{
     Backend, BackendInstance, BufferCommand, CommandRecorder, GpuResource, RecorderSubmitInfo,
+    Semaphore,
 };
 use log::info;
 use types::{BufferDescriptor, ShaderReflectionInfo, ShaderResourceType, SyncOperations};
@@ -28,7 +29,7 @@ fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Resul
     unsafe {
         info!("Starting test");
         let mut cache = instance.create_kernel_cache(&[])?;
-        let fun_semaphore = instance.create_semaphore()?;
+        let mut fun_semaphore = instance.create_semaphore()?;
         let mut kernel = instance.compile_kernel(
             include_bytes!("test_add.spirv"),
             &ShaderReflectionInfo {
@@ -114,10 +115,10 @@ fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Resul
         instance.submit_recorders(std::slice::from_mut(&mut RecorderSubmitInfo {
             command_recorder: &mut recorder,
             wait_semaphores: &mut [],
-            signal_semaphores: &[&fun_semaphore],
+            signal_semaphore: Some(&fun_semaphore),
         }))?;
         info!("Submitted recorders");
-        instance.wait_for_semaphores(&[&fun_semaphore], true, 1.0)?;
+        fun_semaphore.wait(&mut instance)?;
 
         let mut res = [3u32, 0, 0, 0];
         instance.read_buffer(&sbout, 0, bytemuck::cast_slice_mut(&mut res))?;

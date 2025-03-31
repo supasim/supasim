@@ -777,7 +777,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             if num_tails == 0 {
                 return Ok(());
             }
-            if num_tails > 1 && !info.signal_semaphores.is_empty() {
+            if num_tails > 1 && info.signal_semaphore.is_some() {
                 return Err(VulkanError::SemaphoreSignalInDag);
             }
             for a in &info.command_recorder.cbs {
@@ -790,7 +790,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     };
                 let num_signal_semaphores = a.signal_semaphores.len()
                     + if a.is_tail {
-                        info.signal_semaphores.len()
+                        info.signal_semaphore.is_some() as usize
                     } else {
                         0
                     };
@@ -807,7 +807,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     semaphores.push(s);
                 }
                 if a.is_tail {
-                    semaphores.extend(info.signal_semaphores.iter().map(|a| a.inner));
+                    semaphores.extend(info.signal_semaphore.iter().map(|a| a.inner));
                 }
             }
         }
@@ -821,7 +821,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     };
                 let num_signal_semaphores = a.signal_semaphores.len()
                     + if a.is_tail {
-                        info.signal_semaphores.len()
+                        info.signal_semaphore.is_some() as usize
                     } else {
                         0
                     };
@@ -846,7 +846,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                         };
                     let num_signal_semaphores = cb.signal_semaphores.len()
                         + if cb.is_tail {
-                            info.signal_semaphores.len()
+                            info.signal_semaphore.is_some() as usize
                         } else {
                             0
                         };
@@ -952,28 +952,6 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             self.device.destroy_semaphore(semaphore.inner, None);
-        }
-        Ok(())
-    }
-    unsafe fn wait_for_semaphores(
-        &mut self,
-        semaphores: &[&VulkanSemaphore],
-        all: bool,
-        timeout: f32,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        let sems: Vec<_> = semaphores.iter().map(|a| a.inner).collect();
-        let values: Vec<_> = Vec::from_iter(std::iter::repeat_n(1, semaphores.len()));
-        let wait_info = vk::SemaphoreWaitInfo::default()
-            .flags(if all {
-                vk::SemaphoreWaitFlags::empty()
-            } else {
-                vk::SemaphoreWaitFlags::ANY
-            })
-            .semaphores(&sems)
-            .values(&values);
-        unsafe {
-            self.device
-                .wait_semaphores(&wait_info, (timeout * 1_000_000_000.0) as u64)?;
         }
         Ok(())
     }
@@ -1411,7 +1389,28 @@ impl KernelCache<Vulkan> for VulkanPipelineCache {}
 pub struct VulkanSemaphore {
     inner: vk::Semaphore,
 }
-impl Semaphore<Vulkan> for VulkanSemaphore {}
+impl Semaphore<Vulkan> for VulkanSemaphore {
+    unsafe fn wait(
+        &mut self,
+        instance: &mut VulkanInstance,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            instance.device.wait_semaphores(
+                &vk::SemaphoreWaitInfo::default()
+                    .semaphores(std::slice::from_ref(&self.inner))
+                    .values(&[1]),
+                u64::MAX,
+            )?;
+        }
+        Ok(())
+    }
+    unsafe fn is_signalled(
+        &mut self,
+        instance: &mut <Vulkan as Backend>::Instance,
+    ) -> Result<bool, <Vulkan as Backend>::Error> {
+        Ok(unsafe { instance.device.get_semaphore_counter_value(self.inner)? } != 0)
+    }
+}
 
 pub struct VulkanEvent {
     inner: vk::Event,

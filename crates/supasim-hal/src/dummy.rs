@@ -187,15 +187,6 @@ impl BackendInstance<Dummy> for DummyResource {
         Ok(())
     }
 
-    unsafe fn wait_for_semaphores(
-        &mut self,
-        semaphores: &[&<Dummy as Backend>::Semaphore],
-        all: bool,
-        timeout: f32,
-    ) -> Result<(), <Dummy as Backend>::Error> {
-        Ok(())
-    }
-
     unsafe fn create_event(
         &mut self,
     ) -> Result<<Dummy as Backend>::Event, <Dummy as Backend>::Error> {
@@ -237,7 +228,20 @@ impl CommandRecorder<Dummy> for DummyResource {
 }
 impl KernelCache<Dummy> for DummyResource {}
 impl BindGroup<Dummy> for DummyResource {}
-impl Semaphore<Dummy> for DummyResource {}
+impl Semaphore<Dummy> for DummyResource {
+    unsafe fn wait(
+        &mut self,
+        instance: &mut <Dummy as Backend>::Instance,
+    ) -> Result<(), <Dummy as Backend>::Error> {
+        Ok(())
+    }
+    unsafe fn is_signalled(
+        &mut self,
+        instance: &mut <Dummy as Backend>::Instance,
+    ) -> Result<bool, <Dummy as Backend>::Error> {
+        Ok(false)
+    }
+}
 impl Event<Dummy> for DummyResource {}
 impl Error<Dummy> for DummyResource {
     // Error will never be constructed

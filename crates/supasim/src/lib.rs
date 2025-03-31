@@ -10,7 +10,7 @@
 
 mod sync;
 
-use hal::{BackendInstance as _, RecorderSubmitInfo};
+use hal::{BackendInstance as _, RecorderSubmitInfo, Semaphore};
 use std::{
     hash::Hash,
     marker::PhantomData,
@@ -514,7 +514,7 @@ impl<B: hal::Backend> Instance<B> {
                         #[allow(invalid_value)]
                         command_recorder: unsafe { std::mem::zeroed() },
                         wait_semaphores: &[],
-                        signal_semaphores: &[],
+                        signal_semaphore: None,
                     });
                 }
             }
@@ -534,22 +534,6 @@ impl<B: hal::Backend> Instance<B> {
                 .submit_recorders(&mut submit_infos)
                 .map_supasim()?;
         }
-        Ok(())
-    }
-    pub fn wait(
-        &self,
-        wait_handles: &[WaitHandle<B>],
-        wait_for_all: bool,
-        timeout: f32,
-    ) -> SupaSimResult<B, ()> {
-        let mut s = self.inner_mut()?;
-        let mut locks = Vec::new();
-
-        for handle in wait_handles {
-            locks.push(handle.inner()?);
-        }
-        let handles: Vec<_> = locks.iter().map(|a| &a.inner).collect();
-        unsafe { s.inner.wait_for_semaphores(&handles, wait_for_all, timeout) }.map_supasim()?;
         Ok(())
     }
     pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
@@ -963,6 +947,15 @@ impl<B: hal::Backend> Drop for WaitHandleInner<B> {
                     .destroy_semaphore(std::ptr::read(&self.inner))
             };
         }
+    }
+}
+impl<B: hal::Backend> WaitHandle<B> {
+    pub fn wait(&self) -> SupaSimResult<B, ()> {
+        let mut s = self.inner_mut()?;
+        let _i = s.instance.clone();
+        let mut instance = _i.inner_mut()?;
+        unsafe { s.inner.wait(&mut instance.inner).map_supasim()? }
+        Ok(())
     }
 }
 struct Event<B: hal::Backend> {

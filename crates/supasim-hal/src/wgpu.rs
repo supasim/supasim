@@ -211,7 +211,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             }
         }));
         for info in infos {
-            for signal in info.signal_semaphores {
+            if let Some(signal) = info.signal_semaphore {
                 signal.inner.set(Some(idx.clone()));
             }
         }
@@ -416,21 +416,6 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 
-    unsafe fn wait_for_semaphores(
-        &mut self,
-        semaphores: &[&<Wgpu as Backend>::Semaphore],
-        all: bool,
-        timeout: f32,
-    ) -> Result<(), <Wgpu as Backend>::Error> {
-        for s in semaphores {
-            if let Some(idx) = unsafe { &*s.inner.as_ptr() } {
-                self.device
-                    .poll(wgpu::Maintain::WaitForSubmissionIndex(idx.clone()));
-            }
-        }
-        Ok(())
-    }
-
     unsafe fn create_event(
         &mut self,
     ) -> Result<<Wgpu as Backend>::Event, <Wgpu as Backend>::Error> {
@@ -561,7 +546,30 @@ impl KernelCache<Wgpu> for WgpuKernelCache {}
 pub struct WgpuSemaphore {
     inner: Cell<Option<wgpu::SubmissionIndex>>,
 }
-impl Semaphore<Wgpu> for WgpuSemaphore {}
+impl Semaphore<Wgpu> for WgpuSemaphore {
+    unsafe fn wait(
+        &mut self,
+        instance: &mut <Wgpu as Backend>::Instance,
+    ) -> Result<(), <Wgpu as Backend>::Error> {
+        if let Some(a) = self.inner.get_mut() {
+            instance
+                .device
+                .poll(wgpu::Maintain::WaitForSubmissionIndex(a.clone()));
+        }
+        self.inner.set(None);
+        Ok(())
+    }
+    unsafe fn is_signalled(
+        &mut self,
+        instance: &mut <Wgpu as Backend>::Instance,
+    ) -> Result<bool, <Wgpu as Backend>::Error> {
+        if self.inner.get_mut().is_some() {
+            Ok(instance.device.poll(wgpu::Maintain::Poll).is_queue_empty())
+        } else {
+            Ok(true)
+        }
+    }
+}
 pub struct WgpuEvent;
 impl Event<Wgpu> for WgpuEvent {}
 #[derive(thiserror::Error, Debug)]

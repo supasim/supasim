@@ -143,14 +143,6 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     /// # Safety
     /// * All command recorders using this semaphore must've been cleared
     unsafe fn destroy_semaphore(&mut self, semaphore: B::Semaphore) -> Result<(), B::Error>;
-    /// # Safety
-    /// Currently no safety requirements. This is subject to change
-    unsafe fn wait_for_semaphores(
-        &mut self,
-        semaphores: &[&B::Semaphore],
-        all: bool,
-        timeout: f32,
-    ) -> Result<(), B::Error>;
 
     /// # Safety
     /// Currently no safety requirements. This is subject to change
@@ -212,12 +204,19 @@ pub trait Kernel<B: Backend<Kernel = Self>> {}
 pub trait Buffer<B: Backend<Buffer = Self>> {}
 pub trait BindGroup<B: Backend<BindGroup = Self>> {}
 pub trait KernelCache<B: Backend<KernelCache = Self>> {}
-pub trait Semaphore<B: Backend<Semaphore = Self>> {}
+pub trait Semaphore<B: Backend<Semaphore = Self>> {
+    /// # Safety
+    /// * The semaphore must be signalled by some already submitted command recorder
+    unsafe fn wait(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
+    /// # Safety
+    /// Currently no safety requirements. This is subject to change
+    unsafe fn is_signalled(&mut self, instance: &mut B::Instance) -> Result<bool, B::Error>;
+}
 pub trait Event<B: Backend<Event = Self>> {}
 pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub command_recorder: &'a mut B::CommandRecorder,
     pub wait_semaphores: &'a [&'a B::Semaphore],
-    pub signal_semaphores: &'a [&'a B::Semaphore],
+    pub signal_semaphore: Option<&'a B::Semaphore>,
 }
 #[must_use]
 pub trait Error<B: Backend<Error = Self>>: std::error::Error {
