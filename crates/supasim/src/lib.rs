@@ -47,16 +47,6 @@ impl<T> std::fmt::Debug for Id<T> {
         f.write_str("()")
     }
 }
-impl<T> From<Id<T>> for Id<Option<T>> {
-    fn from(value: Id<T>) -> Self {
-        Self(value.0, value.1, Default::default())
-    }
-}
-impl<T> From<Id<Option<T>>> for Id<T> {
-    fn from(value: Id<Option<T>>) -> Self {
-        Self(value.0, value.1, Default::default())
-    }
-}
 impl<T> PartialEq for Id<T> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0 && self.1 == other.1
@@ -87,26 +77,21 @@ impl<T> Default for Tracker<T> {
     }
 }
 impl<T> Tracker<T> {
-    pub fn get(&self, id: impl Into<Id<T>>) -> Option<&T> {
-        let id = id.into();
+    pub fn get<O: AsId<T>>(&self, id: Id<O>) -> Option<&T> {
         let value = &self.list[id.0 as usize];
         if value.0 != id.1 {
             return None;
         }
         Some(&value.1)
     }
-    pub fn get_mut(&mut self, id: impl Into<Id<T>>) -> Option<&mut T> {
-        let id = id.into();
+    pub fn get_mut<O: AsId<T>>(&mut self, id: Id<O>) -> Option<&mut T> {
         let value = &mut self.list[id.0 as usize];
         if value.0 != id.1 {
             return None;
         }
         Some(&mut value.1)
     }
-    pub fn add<O>(&mut self, value: T) -> Id<O>
-    where
-        Id<O>: From<Id<T>>,
-    {
+    pub fn add<O: AsId<T>>(&mut self, value: T) -> Id<O> {
         // TODO: currently this overwrites the previous value. Make it soemtimes preserve if that is desired
         let identifier = self.current_identifier;
         self.current_identifier = self.current_identifier.wrapping_add(1);
@@ -122,8 +107,7 @@ impl<T> Tracker<T> {
         };
         Id(idx, identifier, Default::default())
     }
-    pub fn remove(&mut self, id: impl Into<Id<T>>, replace_with: Option<T>) {
-        let id = id.into();
+    pub fn remove<O: AsId<T>>(&mut self, id: Id<O>, replace_with: Option<T>) {
         let value = &mut self.list[id.0 as usize];
         if value.0 == id.1 {
             value.0 = u32::MAX;
@@ -132,10 +116,7 @@ impl<T> Tracker<T> {
             }
         }
     }
-    pub fn acquire<O>(&mut self, idx: u32) -> Id<O>
-    where
-        Id<O>: From<Id<T>>,
-    {
+    pub fn acquire<O: AsId<T>>(&mut self, idx: u32) -> Id<O> {
         let v = self.current_identifier;
         self.current_identifier += 1;
         self.list[idx as usize].0 = v;
@@ -271,6 +252,7 @@ impl<B: hal::Backend> BufferSlice<B> {
     }
 }
 
+trait AsId<T> {}
 /// The size must be >0 or equality comparison is undefined
 macro_rules! api_type {
     ($name: ident, { $($field:tt)* }, $($attr: meta),*) => {
@@ -279,6 +261,15 @@ macro_rules! api_type {
             pub(crate) struct [<$name Inner>] <B: hal::Backend> {
                 _phantom: PhantomData<B>, // Ensures B is always used
                 $($field)*
+            }
+
+            #[derive(Clone)]
+            pub(crate) struct [<$name Weak>] <B: hal::Backend>(std::sync::Weak<RwLock<Option<[<$name Inner>]<B>>>>);
+            #[allow(dead_code)]
+            impl<B: hal::Backend> [<$name Weak>] <B> {
+                pub(crate) fn upgrade(&self) -> SupaSimResult<B, $name<B>> {
+                    Ok($name(self.0.upgrade().ok_or(SupaSimError::AlreadyDestroyed)?))
+                }
             }
 
             // Outer type, with some helper methods
@@ -320,6 +311,9 @@ macro_rules! api_type {
                     *self.0.write().map_err(|e| SupaSimError::Poison(e.to_string()))? = None;
                     Ok(())
                 }
+                pub(crate) fn downgrade(&self) -> [<$name Weak>]<B> {
+                    [<$name Weak>](Arc::downgrade(&self.0))
+                }
             }
             impl<B: hal::Backend> PartialEq for $name <B> {
                 fn eq(&self, other: &Self) -> bool {
@@ -327,6 +321,12 @@ macro_rules! api_type {
                 }
             }
             impl<B: hal::Backend> Eq for $name <B> {}
+            impl<B: hal::Backend> AsId<$name <B>> for [<$name Inner>] <B> {}
+            impl<B: hal::Backend> AsId<[<$name Inner>] <B>> for $name <B> {}
+            impl<B: hal::Backend> AsId<$name <B>> for [<$name Weak>] <B> {}
+            impl<B: hal::Backend> AsId<[<$name Weak>] <B>> for $name <B> {}
+            impl<B: hal::Backend> AsId<$name <B>> for Option<[<$name Weak>] <B>> {}
+            impl<B: hal::Backend> AsId<Option<[<$name Weak>] <B>>> for $name <B> {}
         }
     };
 }
@@ -370,11 +370,11 @@ pub struct InstanceProperties {
 api_type!(Instance, {
     inner: B::Instance,
     inner_properties: types::InstanceProperties,
-    kernels: Tracker<Option<Kernel<B>>>,
-    kernel_caches: Tracker<Option<KernelCache<B>>>,
-    command_recorders: Tracker<Option<CommandRecorder<B>>>,
-    buffers: Tracker<Option<Buffer<B>>>,
-    wait_handles: Tracker<WaitHandle<B>>,
+    kernels: Tracker<Option<KernelWeak<B>>>,
+    kernel_caches: Tracker<Option<KernelCacheWeak<B>>>,
+    command_recorders: Tracker<Option<CommandRecorderWeak<B>>>,
+    buffers: Tracker<Option<BufferWeak<B>>>,
+    wait_handles: Tracker<WaitHandleWeak<B>>,
 },);
 impl<B: hal::Backend> Instance<B> {
     pub fn from_hal(mut hal: B::Instance) -> Self {
@@ -430,7 +430,7 @@ impl<B: hal::Backend> Instance<B> {
             inner: kernel,
             id: Default::default(),
         });
-        k.inner_mut()?.id = s.kernels.add(Some(k.clone()));
+        k.inner_mut()?.id = s.kernels.add(Some(k.downgrade()));
         Ok(k)
     }
     pub fn create_kernel_cache(&self, data: &[u8]) -> SupaSimResult<B, KernelCache<B>> {
@@ -442,7 +442,7 @@ impl<B: hal::Backend> Instance<B> {
             inner,
             id: Default::default(),
         });
-        k.inner_mut()?.id = s.kernel_caches.add(Some(k.clone()));
+        k.inner_mut()?.id = s.kernel_caches.add(Some(k.downgrade()));
         Ok(k)
     }
     pub fn create_recorder(&self, reusable: bool) -> SupaSimResult<B, CommandRecorder<B>> {
@@ -461,7 +461,7 @@ impl<B: hal::Backend> Instance<B> {
             num_semaphores: 0,
             semaphores: Vec::new(),
         });
-        r.inner_mut()?.id = s.command_recorders.add(Some(r.clone()));
+        r.inner_mut()?.id = s.command_recorders.add(Some(r.downgrade()));
         Ok(r)
     }
     pub fn create_buffer(&self, desc: &BufferDescriptor) -> SupaSimResult<B, Buffer<B>> {
@@ -476,7 +476,7 @@ impl<B: hal::Backend> Instance<B> {
             host_using: Vec::new(),
             create_info: *desc,
         });
-        b.inner_mut()?.id = s.buffers.add(Some(b.clone()));
+        b.inner_mut()?.id = s.buffers.add(Some(b.downgrade()));
         Ok(b)
     }
     pub fn submit_commands(&self, recorders: &[CommandRecorder<B>]) -> SupaSimResult<B, ()> {
@@ -574,16 +574,24 @@ impl<B: hal::Backend> Instance<B> {
             s.wait_handles.acquire(idx)
         } else {
             let semaphore = unsafe { s.inner.create_semaphore() }.map_supasim()?;
-            let id = s.wait_handles.add(WaitHandle::from_inner(WaitHandleInner {
-                instance: self.clone(),
-                _phantom: Default::default(),
-                inner: semaphore,
-                id: Id::default(),
-            }));
-            s.wait_handles.get_mut(id).unwrap().inner_mut()?.id = id;
+            let id: Id<WaitHandle<B>> = s.wait_handles.add(
+                WaitHandle::from_inner(WaitHandleInner {
+                    instance: self.clone(),
+                    _phantom: Default::default(),
+                    inner: semaphore,
+                    id: Id::default(),
+                })
+                .downgrade(),
+            );
+            s.wait_handles
+                .get_mut(id)
+                .unwrap()
+                .upgrade()?
+                .inner_mut()?
+                .id = id;
             id
         };
-        Ok(s.wait_handles.get(idx).unwrap().clone())
+        s.wait_handles.get(idx).unwrap().upgrade()
     }
 
     #[allow(clippy::type_complexity)]
@@ -905,6 +913,7 @@ impl<B: hal::Backend> MappedBuffer<B> {
             .ok_or(SupaSimError::AlreadyDestroyed)?
             .as_ref()
             .ok_or(SupaSimError::AlreadyDestroyed)?
+            .upgrade()?
             .inner()?
             .create_info
             .contents_align;
@@ -928,6 +937,7 @@ impl<B: hal::Backend> MappedBuffer<B> {
             .ok_or(SupaSimError::AlreadyDestroyed)?
             .as_ref()
             .ok_or(SupaSimError::AlreadyDestroyed)?
+            .upgrade()?
             .inner()?
             .create_info
             .contents_align;

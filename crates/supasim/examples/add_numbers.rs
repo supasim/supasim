@@ -76,6 +76,7 @@ pub fn main() {
     recorder
         .dispatch_kernel(kernel.clone(), &buffers, [1, 1, 1], false)
         .unwrap();
+    instance.submit_commands(&[recorder]).unwrap();
     instance
         .access_buffers(
             Box::new(|buffers| {
@@ -85,8 +86,6 @@ pub fn main() {
             &buffers,
         )
         .unwrap();
-    instance.submit_commands(&[recorder]).unwrap();
-    instance.wait_for_idle(1.0).unwrap();
     // If all goes well, these will be cleaned up
 
     instance.destroy().unwrap();
