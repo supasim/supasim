@@ -374,6 +374,8 @@ api_type!(Instance, {
     command_recorders: Tracker<Option<CommandRecorderWeak<B>>>,
     buffers: Tracker<Option<BufferWeak<B>>>,
     wait_handles: Tracker<WaitHandleWeak<B>>,
+    hal_command_recorders: Vec<B::CommandRecorder>,
+    hal_bind_groups: Vec<B::BindGroup>,
 },);
 impl<B: hal::Backend> Instance<B> {
     pub fn from_hal(mut hal: B::Instance) -> Self {
@@ -387,6 +389,8 @@ impl<B: hal::Backend> Instance<B> {
             command_recorders: Tracker::default(),
             buffers: Tracker::default(),
             wait_handles: Tracker::default(),
+            hal_command_recorders: Vec::new(),
+            hal_bind_groups: Vec::new(),
         })
     }
     pub fn properties(&self) -> SupaSimResult<B, InstanceProperties> {
@@ -805,6 +809,9 @@ impl<B: hal::Backend> CommandRecorder<B> {
                     .clear_recorders(&mut [&mut cb.inner])
                     .map_supasim()?;
             };
+        }
+        while let Some(cr) = s.command_recorders.pop() {
+            instance.inner_mut()?.hal_command_recorders.push(cr.inner);
         }
         todo!(); // Return command recorders, semaphores to pool
     }

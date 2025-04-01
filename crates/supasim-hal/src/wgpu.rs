@@ -482,7 +482,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                     );
                 }
                 BufferCommand::DispatchKernel {
-                    shader,
+                    kernel: shader,
                     bind_group,
                     push_constants,
                     workgroup_dims,
@@ -500,7 +500,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                     );
                 }
                 BufferCommand::DispatchKernelIndirect {
-                    shader,
+                    kernel: shader,
                     bind_group,
                     push_constants,
                     indirect_buffer,
@@ -517,6 +517,13 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                     pass.set_pipeline(&shader.pipeline);
                     pass.set_bind_group(0, &bind_group.inner, &[]);
                     pass.dispatch_workgroups_indirect(&indirect_buffer.inner, *buffer_offset);
+                }
+                BufferCommand::UpdateBindGroup {
+                    bg,
+                    kernel,
+                    resources,
+                } => {
+                    unreachable!()
                 }
                 BufferCommand::MemoryBarrier { .. }
                 | BufferCommand::PipelineBarrier { .. }

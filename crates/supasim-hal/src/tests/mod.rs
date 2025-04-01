@@ -87,7 +87,7 @@ fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Resul
             &mut instance,
             &mut [
                 BufferCommand::DispatchKernel {
-                    shader: &kernel,
+                    kernel: &kernel,
                     bind_group: &bind_group,
                     push_constants: &[],
                     workgroup_dims: [1, 1, 1],
@@ -104,7 +104,7 @@ fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Resul
                     },
                 },
                 BufferCommand::DispatchKernel {
-                    shader: &kernel2,
+                    kernel: &kernel2,
                     bind_group: &bind_group2,
                     push_constants: &[],
                     workgroup_dims: [1, 1, 1],

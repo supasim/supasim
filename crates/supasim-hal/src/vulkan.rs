@@ -1282,7 +1282,7 @@ impl VulkanCommandRecorder {
                 cb,
             )?,
             BufferCommand::DispatchKernel {
-                shader,
+                kernel: shader,
                 bind_group,
                 push_constants,
                 workgroup_dims,
@@ -1295,7 +1295,7 @@ impl VulkanCommandRecorder {
                 cb,
             )?,
             BufferCommand::DispatchKernelIndirect {
-                shader,
+                kernel: shader,
                 bind_group,
                 push_constants,
                 indirect_buffer,
@@ -1323,6 +1323,7 @@ impl VulkanCommandRecorder {
             BufferCommand::MemoryBarrier { .. } => {
                 unreachable!()
             }
+            BufferCommand::UpdateBindGroup { .. } => unreachable!(),
         }
         Ok(())
     }

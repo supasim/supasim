@@ -1,10 +1,11 @@
 use std::collections::{HashMap, hash_map::Entry};
 
+use hal::{BackendInstance, CommandRecorder, Dummy, dummy::DummyResource};
 use types::{Dag, NodeIndex, SyncOperations};
 
 use crate::{
     Buffer, BufferCommand, BufferCommandInner, BufferRange, CommandRecorderInner, Event, Id,
-    Kernel, SupaSimResult, UserBufferAccessClosure,
+    Kernel, MapSupasimError, SupaSimError, SupaSimResult, UserBufferAccessClosure, convert_id,
 };
 
 pub type CommandDag<B> = Dag<BufferCommand<B>>;
@@ -18,14 +19,14 @@ pub enum HalCommandBuilder {
         size: u64,
     },
     DispatchKernel {
-        shader: Id<Kernel<hal::Dummy>>,
-        bind_group: Vec<Id<Buffer<hal::Dummy>>>,
+        kernel: Id<Kernel<hal::Dummy>>,
+        bg: u32,
         push_constants: Vec<u8>,
         workgroup_dims: [u32; 3],
     },
     DispatchKernelIndirect {
-        shader: Id<Kernel<hal::Dummy>>,
-        bind_group: Vec<Id<Buffer<hal::Dummy>>>,
+        kernel: Id<Kernel<hal::Dummy>>,
+        bg: u32,
         push_constants: Vec<u8>,
         indirect_buffer: Id<Buffer<hal::Dummy>>,
         buffer_offset: u64,
@@ -48,6 +49,11 @@ pub enum HalCommandBuilder {
     },
     /// Only for vulkan like synchronization. Will hitch a ride with the previous PipelineBarrier or WaitEvent
     MemoryBarrier { resource: Id<Buffer<hal::Dummy>> },
+    UpdateBindGroup {
+        bg: Id<DummyResource>,
+        kernel: Id<Kernel<Dummy>>,
+        resources: Vec<Id<Buffer<Dummy>>>,
+    },
 }
 
 pub struct CommandStream {
@@ -62,6 +68,8 @@ pub struct CpuOperation<B: hal::Backend> {
 }
 pub struct StreamingCommands<B: hal::Backend> {
     pub num_semaphores: u32,
+    #[allow(clippy::type_complexity)] // Clippy's right but I'm lazy
+    pub bindgroups: Vec<(Id<Kernel<B>>, Vec<(Id<Buffer<B>>, BufferRange)>)>,
     pub streams: Vec<CommandStream>,
     pub cpu_ops: Vec<CpuOperation<B>>,
 }
@@ -125,9 +133,145 @@ pub fn dag_to_command_streams<B: hal::Backend>(
     todo!()
 }
 pub fn record_command_streams<B: hal::Backend>(
-    _streams: &StreamingCommands<B>,
-    _cr: &mut CommandRecorderInner<B>,
+    streams: &StreamingCommands<B>,
+    cr: &mut CommandRecorderInner<B>,
 ) -> SupaSimResult<B, ()> {
+    let mut instance = cr.instance.inner_mut()?;
+    let _supports_signal = instance.inner_properties.semaphore_signal;
+    let mut semaphores = Vec::new();
+    for _ in 0..streams.num_semaphores {
+        semaphores.push(cr.instance.acquire_wait_handle()?);
+    }
+    let mut bindgroups = Vec::new();
+    for bg in &streams.bindgroups {
+        let _k = instance
+            .kernels
+            .get(bg.0)
+            .ok_or(SupaSimError::AlreadyDestroyed)?
+            .as_ref()
+            .ok_or(SupaSimError::AlreadyDestroyed)?
+            .upgrade()?;
+        let mut kernel = _k.inner_mut()?;
+        let mut resources_a = Vec::new();
+        for res in &bg.1 {
+            resources_a.push(
+                instance
+                    .buffers
+                    .get(res.0)
+                    .ok_or(SupaSimError::AlreadyDestroyed)?
+                    .as_ref()
+                    .ok_or(SupaSimError::AlreadyDestroyed)?
+                    .upgrade()?,
+            );
+        }
+        let mut resource_locks = Vec::new();
+        for res in &resources_a {
+            resource_locks.push(res.as_inner()?);
+        }
+        let mut resources = Vec::new();
+        for (i, res) in resource_locks.iter().enumerate() {
+            let range = bg.1[i].1;
+            resources.push(hal::GpuResource::Buffer {
+                buffer: &res.inner,
+                offset: range.start,
+                size: range.len,
+            });
+        }
+        let bg = if let Some(mut bg) = instance.hal_bind_groups.pop() {
+            unsafe {
+                instance
+                    .inner
+                    .update_bind_group(&mut bg, &mut kernel.inner, &resources)
+                    .map_supasim()?
+            }
+            bg
+        } else {
+            unsafe {
+                instance
+                    .inner
+                    .create_bind_group(&mut kernel.inner, &resources)
+                    .map_supasim()?
+            }
+        };
+        bindgroups.push(bg);
+    }
+    if !streams.cpu_ops.is_empty() {
+        unimplemented!()
+    }
+    cr.command_recorders.clear();
+    for stream in &streams.streams {
+        let mut cr = match instance.hal_command_recorders.pop() {
+            Some(a) => a,
+            None => unsafe { instance.inner.create_recorder().map_supasim()? },
+        };
+        let mut buffer_locks = Vec::new();
+        let mut kernel_locks = Vec::new();
+        for cmd in &stream.commands {
+            match cmd {
+                HalCommandBuilder::CopyBuffer {
+                    src_buffer,
+                    dst_buffer,
+                    ..
+                } => {
+                    buffer_locks.push(
+                        instance
+                            .buffers
+                            .get::<Buffer<B>>(convert_id(*src_buffer))
+                            .ok_or(SupaSimError::AlreadyDestroyed)?,
+                    );
+                    buffer_locks.push(
+                        instance
+                            .buffers
+                            .get::<Buffer<B>>(convert_id(*dst_buffer))
+                            .ok_or(SupaSimError::AlreadyDestroyed)?,
+                    );
+                }
+                HalCommandBuilder::DispatchKernel { kernel, .. } => {
+                    kernel_locks.push(
+                        instance
+                            .kernels
+                            .get::<Kernel<B>>(convert_id(*kernel))
+                            .ok_or(SupaSimError::AlreadyDestroyed)?,
+                    );
+                }
+                HalCommandBuilder::DispatchKernelIndirect {
+                    kernel,
+                    indirect_buffer,
+                    ..
+                } => {
+                    kernel_locks.push(
+                        instance
+                            .kernels
+                            .get::<Kernel<B>>(convert_id(*kernel))
+                            .ok_or(SupaSimError::AlreadyDestroyed)?,
+                    );
+                    buffer_locks.push(
+                        instance
+                            .buffers
+                            .get::<Buffer<B>>(convert_id(*indirect_buffer))
+                            .ok_or(SupaSimError::AlreadyDestroyed)?,
+                    );
+                }
+                HalCommandBuilder::MemoryBarrier { resource } => {
+                    buffer_locks.push(
+                        instance
+                            .buffers
+                            .get::<Buffer<B>>(convert_id(*resource))
+                            .ok_or(SupaSimError::AlreadyDestroyed)?,
+                    );
+                }
+                _ => (),
+            }
+        }
+        let mut hal_commands = Vec::new();
+        unsafe {
+            cr.record_commands(&mut instance.inner, &mut hal_commands)
+                .map_supasim()?
+        };
+    }
+    if instance.inner_properties.easily_update_bind_groups {
+        instance.hal_bind_groups.extend(bindgroups);
+    }
     // TODO: priority
     todo!()
 }

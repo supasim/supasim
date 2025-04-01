@@ -239,13 +239,13 @@ pub enum BufferCommand<'a, B: Backend> {
         size: u64,
     },
     DispatchKernel {
-        shader: &'a B::Kernel,
+        kernel: &'a B::Kernel,
         bind_group: &'a B::BindGroup,
         push_constants: &'a [u8],
         workgroup_dims: [u32; 3],
     },
     DispatchKernelIndirect {
-        shader: &'a B::Kernel,
+        kernel: &'a B::Kernel,
         bind_group: &'a B::BindGroup,
         push_constants: &'a [u8],
         indirect_buffer: &'a B::Buffer,
@@ -269,4 +269,9 @@ pub enum BufferCommand<'a, B: Backend> {
     },
     /// Only for vulkan like synchronization. Will hitch a ride with the previous PipelineBarrier or WaitEvent
     MemoryBarrier { resource: GpuResource<'a, B> },
+    UpdateBindGroup {
+        bg: &'a B::BindGroup,
+        kernel: &'a B::Kernel,
+        resources: &'a [GpuResource<'a, B>],
+    },
 }
