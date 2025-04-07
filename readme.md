@@ -1,3 +1,4 @@
+[![CI](https://github.com/supasim/supasim/actions/workflows/rust.yml/badge.svg)](https://github.com/supasim/supasim/actions/workflows/rust.yml)
 # SupaSim
 
 ## Planned features
