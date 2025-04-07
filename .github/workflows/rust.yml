@@ -28,31 +28,15 @@ jobs:
         echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV # Make this a path to search for libraries
         mv "$VULKAN_SDK/include/slang/"* "$VULKAN_SDK/include"
     - name: Install Vulkan loader & validation layers
-      run: sudo apt-get install libvulkan-dev vulkan-validationlayers
+      run: sudo apt-get update && sudo apt-get install -y libvulkan-dev vulkan-validationlayers
     - name: Install Mesa Drivers(taken from wgpu)
+      run: sudo apt-get install -y mesa-vulkan-drivers mesa-utils
+    - name: Ensure proper Vulkan & drivers installed
       run: |
-        set -e
-
-        curl -L --retry 5 https://github.com/gfx-rs/ci-build/releases/download/build20/mesa-24.3.4-linux-x86_64.tar.xz -o mesa.tar.xz
-        mkdir mesa
-        tar xpf mesa.tar.xz -C mesa
-
-        # The ICD provided by the mesa build is hardcoded to the build environment.
-        #
-        # We write out our own ICD file to point to the mesa vulkan
-        cat <<- EOF > icd.
-        {
-          "ICD": {
-              "api_version": "1.1.255",
-              "library_path": "$PWD/mesa/lib/x86_64-linux-gnu/libvulkan_lvp.so"
-          },
-          "file_format_version": "1.0.0"
-        }
-        EOF
-
-        echo "VK_DRIVER_FILES=$PWD/icd.json" >> "$GITHUB_ENV"
-        echo "LD_LIBRARY_PATH=$PWD/mesa/lib/x86_64-linux-gnu/:$LD_LIBRARY_PATH" >> "$GITHUB_ENV"
-        echo "LIBGL_DRIVERS_PATH=$PWD/mesa/lib/x86_64-linux-gnu/dri" >> "$GITHUB_ENV"
+        ls /usr/share/vulkan/icd.d
+        cat /usr/share/vulkan/icd.d/*.json
+        glxinfo
+        vulkaninfo
     - name: Build
       run: cargo build --verbose --all-targets --all-features
     - name: Clippy
