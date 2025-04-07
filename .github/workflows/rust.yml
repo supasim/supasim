@@ -19,7 +19,7 @@ jobs:
     runs-on: windows-latest
     steps:
     - name: Install rust toolchain
-      run: rustup toolchain install ${{ env.REPO_MSRV }} --no-self-update --profile=minimal --component clippy
+      run: rustup toolchain install ${{ env.REPO_MSRV }} --no-self-update --profile=minimal --component clippy && cargo -V
 
     - name: Install Mesa(from wgpu CI)
       shell: bash
@@ -28,6 +28,8 @@ jobs:
 
         curl.exe -L --retry 5 https://github.com/pal1000/mesa-dist-win/releases/download/$MESA_VERSION/mesa3d-$MESA_VERSION-release-msvc.7z -o mesa.7z
         7z.exe e mesa.7z -omesa x64/{opengl32.dll,libgallium_wgl.dll,libglapi.dll,vulkan_lvp.dll,lvp_icd.x86_64.json}
+
+        ls mesa
 
         cp -v mesa/* target/llvm-cov-target/debug/
         cp -v mesa/* target/llvm-cov-target/debug/deps
