@@ -57,4 +57,4 @@ jobs:
       run: RUSTFLAGS="-Dwarnings" cargo clippy --verbose --all-targets --all-features
     - name: Run tests
       run: |
-        cargo test --verbose --all-targets --all-features
+        cargo test --verbose --all-targets --all-features -- --nocapture --test-threads=1
