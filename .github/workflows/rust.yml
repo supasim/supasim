@@ -25,6 +25,7 @@ jobs:
       shell: bash
       run: |
         set -e
+        mkdir -p target/llvm-cov-target/debug/deps
 
         curl.exe -L --retry 5 https://github.com/pal1000/mesa-dist-win/releases/download/$MESA_VERSION/mesa3d-$MESA_VERSION-release-msvc.7z -o mesa.7z
         7z.exe e mesa.7z -omesa x64/{opengl32.dll,libgallium_wgl.dll,libglapi.dll,vulkan_lvp.dll,lvp_icd.x86_64.json}
@@ -41,10 +42,12 @@ jobs:
     - name: Install Vulkan SDK
       shell: bash
       run: |
+        shell: bash
+        run: |
         set -e
-        curl.exe -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/VulkanSDK-${{ env.VULKAN_FULL_SDK_VERSION }}-Installer.exe -o vulkan-sdk-installer.exe
+        curl.exe -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/VulkanSDK-${{ env.VULKAN_VERSION }}-Installer.exe -o vulkan-sdk-installer.exe
         ./vulkan-sdk-installer.exe --accept-licenses --default-answer --confirm-command install
-        echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin" >> "$GITHUB_PATH"
+        echo "C:/VulkanSDK/${{ env.VULKAN_FULL_SDK_VERSION }}/Bin" >> "$GITHUB_PATH"
         
     - name: Build
       run: cargo build --verbose --all-targets --all-features
