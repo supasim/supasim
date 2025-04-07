@@ -27,6 +27,8 @@ jobs:
         echo "SPIRV_TOOLS_DIR=$VULKAN_SDK" >> $GITHUB_ENV # Spirv tools is also included
         echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV # Make this a path to search for libraries
         mv "$VULKAN_SDK/include/slang/"* "$VULKAN_SDK/include"
+    - name: Install Vulkan loader & validation layers
+      run: sudo apt-get install libvulkan-dev vulkan-validationlayers
     - name: Install Mesa Drivers(taken from wgpu)
       run: |
         set -e
