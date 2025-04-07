@@ -42,8 +42,6 @@ jobs:
     - name: Install Vulkan SDK
       shell: bash
       run: |
-        shell: bash
-        run: |
         set -e
         curl.exe -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/VulkanSDK-${{ env.VULKAN_VERSION }}-Installer.exe -o vulkan-sdk-installer.exe
         ./vulkan-sdk-installer.exe --accept-licenses --default-answer --confirm-command install
