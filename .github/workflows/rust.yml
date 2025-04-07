@@ -48,7 +48,9 @@ jobs:
         echo "C:/VulkanSDK/${{ env.VULKAN_FULL_SDK_VERSION }}/Bin" >> "$GITHUB_PATH"
         
     - name: Build
-      run: cargo build --verbose --all-targets --all-features
+      run: |
+        dir
+        cargo build --verbose --all-targets --all-features
     - name: Clippy
       run: RUSTFLAGS="-Dwarnings" cargo clippy --verbose --all-targets --all-features
     - name: Run tests
