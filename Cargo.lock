@@ -1303,7 +1303,7 @@ dependencies = [
 [[package]]
 name = "slang"
 version = "0.1.0"
-source = "git+https://github.com/supasim/slang-rs.git#362640f65e1c306967f5d0401a1789227f52fb47"
+source = "git+https://github.com/supasim/slang-rs.git#4dff404dc24c4213f9843cc721a0fd84c92ee988"
 dependencies = [
  "slang-sys",
 ]
@@ -1311,7 +1311,7 @@ dependencies = [
 [[package]]
 name = "slang-sys"
 version = "0.1.0"
-source = "git+https://github.com/supasim/slang-rs.git#362640f65e1c306967f5d0401a1789227f52fb47"
+source = "git+https://github.com/supasim/slang-rs.git#4dff404dc24c4213f9843cc721a0fd84c92ee988"
 dependencies = [
  "bindgen 0.69.5",
 ]

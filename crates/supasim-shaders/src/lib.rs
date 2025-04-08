@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod tests;
+
 use anyhow::{Result, anyhow};
 use rand::Rng;
 use slang::Downcast;
@@ -105,7 +108,6 @@ impl GlobalState {
         use std::{ffi::c_void, ptr::null_mut};
 
         unsafe {
-            
             let env = Self::env_from_version(s);
             let optim = spirv_tools_sys::spvOptimizerCreate(env);
             let options = spirv_tools_sys::spvOptimizerOptionsCreate();
@@ -229,6 +231,7 @@ impl GlobalState {
             OptimizationLevel::Standard => slang::OptimizationLevel::Default,
             OptimizationLevel::Maximal => slang::OptimizationLevel::Maximal,
         };
+        let mut profile = slang::ProfileID::UNKNOWN;
         let mut opt = slang::CompilerOptions::default()
             .language(slang::SourceLanguage::Slang)
             .optimization(optim)
@@ -237,7 +240,7 @@ impl GlobalState {
             opt = opt.include(include);
         }
         if let ShaderTarget::Spirv { version } = options.target {
-            opt = opt.profile(self.slang_session.find_profile(match version {
+            profile = self.slang_session.find_profile(match version {
                 SpirvVersion::V1_0 => "spirv_1_0",
                 SpirvVersion::V1_1 => "spirv_1_1",
                 SpirvVersion::V1_2 => "spirv_1_2",
@@ -249,17 +252,25 @@ impl GlobalState {
                 SpirvVersion::Cl1_2 | SpirvVersion::Cl2_0 => unimplemented!(),
                 SpirvVersion::Cl2_1 => "spirv_1_0",
                 SpirvVersion::Cl2_2 => "spirv_1_2",
-            }));
+            });
+        } else if target == slang::CompileTarget::Spirv {
+            println!("A: {:?}", options.target);
+            profile = self.slang_session.find_profile("spirv_1_0");
+        } else if target == slang::CompileTarget::Dxil {
+            if let ShaderTarget::Dxil { shader_model } = options.target {
+                profile = self.slang_session.find_profile(shader_model.to_str());
+            } else {
+                unreachable!();
+            }
         }
-        if let ShaderTarget::Dxil { shader_model } = options.target {
-            let profile = self.slang_session.find_profile(shader_model.to_str());
+        if !profile.is_unknown() {
             opt = opt.profile(profile);
         }
         let session = self
             .slang_session
             .create_session(
                 &slang::SessionDesc::default()
-                    .targets(&[slang::TargetDesc::default().format(target)])
+                    .targets(&[slang::TargetDesc::default().format(target).profile(profile)])
                     .options(&opt)
                     .search_paths(&[search_dir.as_ptr()]),
             )
@@ -322,13 +333,19 @@ impl GlobalState {
         #[allow(unused_mut)] // In case no features, so this doesn't get flagged
         let mut data = bytecode.as_slice();
 
+        let spirv_version = match options.target {
+            ShaderTarget::Spirv { version } => version,
+            _ => SpirvVersion::V1_0,
+        };
+
+        println!("{:?}", options.target);
         #[cfg(feature = "opt-valid")]
         if extra_valid && needs_spirv_transpile {
-            Self::validate_spv(bytemuck::cast_slice(data), SpirvVersion::V1_0)?;
+            Self::validate_spv(bytemuck::cast_slice(data), spirv_version)?;
         }
         #[cfg(feature = "opt-valid")]
         if extra_optim && needs_spirv_transpile {
-            _other_blob = Self::optimize_spv(bytemuck::cast_slice(data), SpirvVersion::V1_0)?;
+            _other_blob = Self::optimize_spv(bytemuck::cast_slice(data), spirv_version)?;
             data = &_other_blob;
         }
 
@@ -366,17 +383,22 @@ impl GlobalState {
 
         #[cfg(feature = "spirv-cross")]
         if options.target == ShaderTarget::Glsl && needs_spirv_transpile {
-            let vec = bytecode.as_slice().to_owned();
+            let _vec = bytecode.as_slice().to_owned();
             /*let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
             _stringcode = spirv::Ast::<spirv_cross::glsl::Target>::parse(&module)?.compile()?;
             data = _stringcode.as_bytes();*/
-            unsafe {
+            /*unsafe {
                 let mut context: spirv_cross_sys::spvc_context = null_mut();
                 spirv_cross_sys::spvc_context_create(&mut context);
                 let mut parsed_ir: spirv_cross_sys::spvc_parsed_ir = null_mut();
-                spirv_cross_sys::spvc_context_parse_spirv(context, vec.as_ptr() as *const _, vec.len() / 4, &mut parsed_ir);
-                // TODO: spirv-cross
-            }
+                spirv_cross_sys::spvc_context_parse_spirv(
+                    context,
+                    vec.as_ptr() as *const _,
+                    vec.len() / 4,
+                    &mut parsed_ir,
+                );
+            }*/
+            // TODO: spirv-cross
         }
         #[cfg(feature = "dxil-out")]
         if let ShaderTarget::Dxil { shader_model } = options.target {

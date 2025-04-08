@@ -17,7 +17,7 @@ pub fn main() -> Result<()> {
     };
     ctx.compile_shader(ShaderCompileOptions {
         target,
-        source: ShaderSource::Memory(include_bytes!("test.slang")),
+        source: ShaderSource::Memory(include_bytes!("../test.slang")),
         dest: ShaderDest::File(&PathBuf::from_str("test.spirv").unwrap()),
         entry: "computeMain",
         include: None,

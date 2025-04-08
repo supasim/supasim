@@ -1,2 +1,3 @@
 target/
 lib/
+crates/supasim-shaders/shader-tests/**
