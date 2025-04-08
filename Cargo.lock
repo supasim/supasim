@@ -1315,7 +1315,7 @@ dependencies = [
 [[package]]
 name = "slang"
 version = "0.1.0"
-source = "git+https://github.com/supasim/slang-rs.git#7092b9fd299ddf866cf791f765efb2007e094cc8"
+source = "git+https://github.com/supasim/slang-rs.git#362640f65e1c306967f5d0401a1789227f52fb47"
 dependencies = [
  "slang-sys",
 ]
@@ -1323,7 +1323,7 @@ dependencies = [
 [[package]]
 name = "slang-sys"
 version = "0.1.0"
-source = "git+https://github.com/supasim/slang-rs.git#7092b9fd299ddf866cf791f765efb2007e094cc8"
+source = "git+https://github.com/supasim/slang-rs.git#362640f65e1c306967f5d0401a1789227f52fb47"
 dependencies = [
  "bindgen 0.69.5",
 ]
@@ -1355,7 +1355,7 @@ dependencies = [
 [[package]]
 name = "spirv-tools-sys"
 version = "0.1.0"
-source = "git+https://github.com/supasim/spirv-tools.git#6e0041c12f3ce7bd57f765d6df9cd4c58bb7948a"
+source = "git+https://github.com/supasim/spirv-tools.git#f4414f1f0bb1ff986e91a562696eebb1c88e8ee4"
 dependencies = [
  "bindgen 0.71.1",
  "cc",
