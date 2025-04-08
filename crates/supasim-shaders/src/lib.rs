@@ -1,9 +1,9 @@
 use anyhow::{Result, anyhow};
 use rand::Rng;
 use slang::Downcast;
-#[cfg(feature = "spirv-cross")]
-use spirv_cross_sys;
-use std::{ffi::CString, io::Write, path::Path, str::FromStr, ptr::null_mut};
+#[allow(unused_imports)]
+use std::ptr::null_mut;
+use std::{ffi::CString, io::Write, path::Path, str::FromStr};
 use tempfile::tempdir;
 use types::ShaderReflectionInfo;
 pub use types::{ShaderModel, ShaderTarget, SpirvVersion};
@@ -334,7 +334,7 @@ impl GlobalState {
 
         #[cfg(feature = "msl-stable-out")]
         if options.target == ShaderTarget::Msl && needs_spirv_transpile {
-            let vec = bytecode.as_slice().to_owned();
+            let _vec = bytecode.as_slice().to_owned();
             /*let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
             _stringcode = spirv::Ast::<spirv_cross::msl::Target>::parse(&module)?.compile()?;
             data = _stringcode.as_bytes();*/
