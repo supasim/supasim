@@ -1,5 +1,5 @@
 use core::ffi;
-use std::{borrow::Cow, cell::Cell, ffi::CString, sync::Mutex};
+use std::{borrow::Cow, cell::Cell, ffi::{CStr, CString}, sync::Mutex};
 
 use crate::{
     Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, Event,
@@ -10,7 +10,7 @@ use gpu_allocator::{
     AllocationError, AllocationSizes, AllocatorDebugSettings,
     vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
 };
-use log::Level;
+use log::{warn, Level};
 use thiserror::Error;
 use types::{
     BufferDescriptor, Dag, InstanceProperties, ShaderReflectionInfo, ShaderResourceType,
@@ -75,6 +75,14 @@ impl Vulkan {
             let entry = Entry::load()?;
             let app_info =
                 vk::ApplicationInfo::default().api_version(vk::make_api_version(0, 1, 2, 0));
+            let debug = if debug && entry.enumerate_instance_extension_properties(None).unwrap().iter().any(|e| e.extension_name_as_c_str().unwrap() == c"VK_LAYER_KHRONOS_validation") {
+                true
+            } else if debug {
+                warn!("Debug support was requested but is not available on the current system!");
+                false
+            } else {
+                false
+            };
             let validation_layers = if debug {
                 vec![c"VK_LAYER_KHRONOS_validation".as_ptr()]
             } else {
@@ -85,6 +93,21 @@ impl Vulkan {
             } else {
                 Vec::new()
             };
+            // Check instance extensions
+            {
+                let mut has = Vec::new();
+                has.resize(extension_names.len(), false);
+                for ext in entry.enumerate_instance_extension_properties(None).unwrap() {
+                    for (i, ext2) in extension_names.iter().enumerate() {
+                        if CStr::from_ptr(*ext2) == ext.extension_name_as_c_str().unwrap() {
+                            has[i] = true;
+                        }
+                    }
+                }
+                if has.contains(&true) {
+                    panic!("Not all required instance extensions are supported!");
+                }
+            }
             let instance = entry.create_instance(
                 &vk::InstanceCreateInfo::default()
                     .application_info(&app_info)
@@ -92,21 +115,24 @@ impl Vulkan {
                     .enabled_extension_names(&extension_names),
                 None,
             )?;
-            let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
-                .message_severity(
-                    vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
-                )
-                .message_type(
-                    vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-                        | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-                        | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-                )
-                .pfn_user_callback(Some(Self::vulkan_debug_callback));
-            let debug_utils_loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
-            let debug_callback =
-                debug_utils_loader.create_debug_utils_messenger(&debug_info, None)?;
+            let debug_callback = if debug {
+                let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+                    .message_severity(
+                        vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
+                    )
+                    .message_type(
+                        vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                            | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                            | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+                    )
+                    .pfn_user_callback(Some(Self::vulkan_debug_callback));
+                let debug_utils_loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
+                let debug_callback =
+                    debug_utils_loader.create_debug_utils_messenger(&debug_info, None)?;
+                    Some(debug_callback)
+            } else {None};
             // TODO: add phyd filtering
             let (phyd, queue_family_idx) = instance
                 .enumerate_physical_devices()?
@@ -153,7 +179,7 @@ impl Vulkan {
                 phyd,
                 queue,
                 queue_family_idx,
-                Some(debug_callback),
+                debug_callback,
             )
         }
     }
