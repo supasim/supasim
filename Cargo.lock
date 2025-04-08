@@ -575,7 +575,7 @@ dependencies = [
 [[package]]
 name = "hassle-rs"
 version = "0.11.0"
-source = "git+https://github.com/supasim/hassle-rs.git#817119c7f97b9215dd8505a7458aca5e315cf3a1"
+source = "git+https://github.com/supasim/hassle-rs.git#fd928ee992d3b3489c414950ef35a92b5b088cc6"
 dependencies = [
  "bitflags 2.9.0",
  "com",
