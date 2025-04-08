@@ -46,8 +46,8 @@ jobs:
         set -e
         curl.exe -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/VulkanSDK-${{ env.VULKAN_VERSION }}-Installer.exe -o vulkan-sdk-installer.exe
         ./vulkan-sdk-installer.exe --accept-licenses --default-answer --confirm-command install
-        echo "C:/VulkanSDK/${{ env.VULKAN_FULL_SDK_VERSION }}/Bin" >> "$GITHUB_PATH"
-        export VULKAN_SDK="C:/VulkanSDK/${{ env.VULKAN_FULL_SDK_VERSION }}/"
+        echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin" >> "$GITHUB_PATH"
+        export VULKAN_SDK="C:/VulkanSDK/${{ env.VULKAN_VERSION }}/"
         echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
         
     - name: Build
