@@ -47,7 +47,8 @@ jobs:
         curl.exe -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/VulkanSDK-${{ env.VULKAN_VERSION }}-Installer.exe -o vulkan-sdk-installer.exe
         ./vulkan-sdk-installer.exe --accept-licenses --default-answer --confirm-command install
         echo "C:/VulkanSDK/${{ env.VULKAN_FULL_SDK_VERSION }}/Bin" >> "$GITHUB_PATH"
-        echo "VULKAN_SDK=C:/VulkanSDK/${{ env.VULKAN_FULL_SDK_VERSION }}/" >> "$GITHUB_ENV"
+        export VULKAN_SDK="C:/VulkanSDK/${{ env.VULKAN_FULL_SDK_VERSION }}/"
+        echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
         
     - name: Build
       run: cargo build --verbose --all-targets --all-features
@@ -72,10 +73,7 @@ jobs:
         export VULKAN_SDK="$INSTALL_DIR/x86_64"
         export LD_LIBRARY_PATH="$VULKAN_SDK/lib:$LD_LIBRARY_PATH"
         echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
-        echo "SLANG_DIR=$VULKAN_SDK" >> $GITHUB_ENV # Slang is included in the sdk
-        echo "SPIRV_TOOLS_DIR=$VULKAN_SDK" >> $GITHUB_ENV # Spirv tools is also included
         echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV # Make this a path to search for libraries
-        mv "$VULKAN_SDK/include/slang/"* "$VULKAN_SDK/include"
     - name: Install Vulkan loader & validation layers
       run: sudo apt-get update && sudo apt-get install -y libvulkan-dev vulkan-validationlayers
     - name: Install Mesa Drivers
