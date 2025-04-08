@@ -53,7 +53,7 @@ pub struct GlobalState {
 }
 impl GlobalState {
     #[cfg(feature = "opt-valid")]
-    pub fn env_from_version(s: SpirvVersion) -> u32 {
+    pub fn env_from_version(s: SpirvVersion) -> spirv_tools_sys::spv_target_env {
         match s {
             SpirvVersion::Cl1_2 => spirv_tools_sys::spv_target_env_SPV_ENV_OPENCL_1_2,
             SpirvVersion::Cl2_0 => spirv_tools_sys::spv_target_env_SPV_ENV_OPENCL_2_0,
@@ -105,6 +105,7 @@ impl GlobalState {
         use std::{ffi::c_void, ptr::null_mut};
 
         unsafe {
+            
             let env = Self::env_from_version(s);
             let optim = spirv_tools_sys::spvOptimizerCreate(env);
             let options = spirv_tools_sys::spvOptimizerOptionsCreate();
