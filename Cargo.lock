@@ -217,8 +217,6 @@ version = "1.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "525046617d8376e3db1deffb079e91cef90a89fc3ca5c185bbf8c9ecdd15cd5c"
 dependencies = [
- "jobserver",
- "libc",
  "shlex",
 ]
 
@@ -676,16 +674,6 @@ name = "jni-sys"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8eaf4bc02d17cbdd7ff4c7438cafcdf7fb9a4613313ad11b4f8fefe7d3fa0130"
-
-[[package]]
-name = "jobserver"
-version = "0.1.33"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38f262f097c174adebe41eb73d66ae9c06b2844fb0da69969647bbddd9b0538a"
-dependencies = [
- "getrandom",
- "libc",
-]
 
 [[package]]
 name = "js-sys"
@@ -1353,23 +1341,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "spirv-tools-sys"
-version = "0.1.0"
-source = "git+https://github.com/supasim/spirv-tools.git#f4414f1f0bb1ff986e91a562696eebb1c88e8ee4"
+name = "spirv-cross-sys"
+version = "0.0.0"
+source = "git+https://github.com/supasim/spirv-cross-sys.git#b5683303caf07fcd4c99102d7f16a70b67a9d1ba"
 dependencies = [
  "bindgen 0.71.1",
  "cc",
 ]
 
 [[package]]
-name = "spirv_cross"
-version = "0.23.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60647fadbf83c4a72f0d7ea67a7ca3a81835cf442b8deae5c134c3e0055b2e14"
+name = "spirv-tools-sys"
+version = "0.1.0"
+source = "git+https://github.com/supasim/spirv-tools.git#07be91fbc8d93f5175be1c011552d88f2ec7f291"
 dependencies = [
- "cc",
- "js-sys",
- "wasm-bindgen",
+ "bindgen 0.71.1",
 ]
 
 [[package]]
@@ -1462,8 +1447,8 @@ dependencies = [
  "rand",
  "serde",
  "slang",
+ "spirv-cross-sys",
  "spirv-tools-sys",
- "spirv_cross",
  "supasim-types",
  "tempfile",
 ]

@@ -1,9 +1,9 @@
 use anyhow::{Result, anyhow};
 use rand::Rng;
 use slang::Downcast;
-#[cfg(feature = "spirv_cross")]
-use spirv_cross::spirv;
-use std::{ffi::CString, io::Write, path::Path, str::FromStr};
+#[cfg(feature = "spirv-cross")]
+use spirv_cross_sys;
+use std::{ffi::CString, io::Write, path::Path, str::FromStr, ptr::null_mut};
 use tempfile::tempdir;
 use types::ShaderReflectionInfo;
 pub use types::{ShaderModel, ShaderTarget, SpirvVersion};
@@ -195,7 +195,7 @@ impl GlobalState {
             }
         }
         if needs_spirv_transpile {
-            #[cfg(not(feature = "spirv_cross"))]
+            #[cfg(not(feature = "spirv-cross"))]
             {
                 return Err(anyhow!(
                     "Shader compiler was not compiled with advanced cross compilation support"
@@ -335,9 +335,10 @@ impl GlobalState {
         #[cfg(feature = "msl-stable-out")]
         if options.target == ShaderTarget::Msl && needs_spirv_transpile {
             let vec = bytecode.as_slice().to_owned();
-            let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
+            /*let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
             _stringcode = spirv::Ast::<spirv_cross::msl::Target>::parse(&module)?.compile()?;
-            data = _stringcode.as_bytes();
+            data = _stringcode.as_bytes();*/
+            // TODO: spirv cross
         }
         #[cfg(feature = "wgsl-out")]
         if options.target == ShaderTarget::Wgsl && needs_spirv_transpile {
@@ -363,12 +364,19 @@ impl GlobalState {
             data = _stringcode.as_bytes();
         }
 
-        #[cfg(feature = "spirv_cross")]
+        #[cfg(feature = "spirv-cross")]
         if options.target == ShaderTarget::Glsl && needs_spirv_transpile {
             let vec = bytecode.as_slice().to_owned();
-            let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
+            /*let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
             _stringcode = spirv::Ast::<spirv_cross::glsl::Target>::parse(&module)?.compile()?;
-            data = _stringcode.as_bytes();
+            data = _stringcode.as_bytes();*/
+            unsafe {
+                let mut context: spirv_cross_sys::spvc_context = null_mut();
+                spirv_cross_sys::spvc_context_create(&mut context);
+                let mut parsed_ir: spirv_cross_sys::spvc_parsed_ir = null_mut();
+                spirv_cross_sys::spvc_context_parse_spirv(context, vec.as_ptr() as *const _, vec.len() / 4, &mut parsed_ir);
+                // TODO: spirv-cross
+            }
         }
         #[cfg(feature = "dxil-out")]
         if let ShaderTarget::Dxil { shader_model } = options.target {

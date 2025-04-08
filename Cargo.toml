@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/supasim",
-    "crates/supasim-hal",
-    "crates/supasim-macros",
-    "crates/supasim-shaders",
-    "crates/supasim-types",
+  "crates/supasim",
+  "crates/supasim-hal",
+  "crates/supasim-macros",
+  "crates/supasim-shaders",
+  "crates/supasim-types",
 ]
 
 [workspace.package]
