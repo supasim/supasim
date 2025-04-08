@@ -2,6 +2,9 @@ name: Cargo Update
 
 on:
   workflow_dispatch:  # Manual trigger via GitHub UI
+  
+permissions:
+  contents: write  # Required to push commits
 
 jobs:
   cargo-update:
