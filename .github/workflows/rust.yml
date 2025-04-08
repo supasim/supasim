@@ -9,15 +9,63 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  VULKAN_VERSION: 1.4.304.0
+  RUST_LOG: debug
+  RUST_BACKTRACE: full
+  REPO_MSRV: 1.85
+  MESA_VERSION: "24.3.4" # Note that this is only for windows
 jobs:
-  build:
+  Build-Windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install rust toolchain
+      run: rustup toolchain install ${{ env.REPO_MSRV }} --no-self-update --profile=minimal --component clippy && cargo -V
+
+    - name: Install Mesa(from wgpu CI)
+      shell: bash
+      run: |
+        set -e
+        mkdir -p target/llvm-cov-target/debug/deps
+
+        curl.exe -L --retry 5 https://github.com/pal1000/mesa-dist-win/releases/download/$MESA_VERSION/mesa3d-$MESA_VERSION-release-msvc.7z -o mesa.7z
+        7z.exe e mesa.7z -omesa x64/{opengl32.dll,libgallium_wgl.dll,libglapi.dll,vulkan_lvp.dll,lvp_icd.x86_64.json}
+
+        ls mesa
+
+        cp -v mesa/* target/llvm-cov-target/debug/
+        cp -v mesa/* target/llvm-cov-target/debug/deps
+
+        # We need to use cygpath to convert PWD to a windows path as we're using bash.
+        echo "VK_DRIVER_FILES=`cygpath --windows $PWD/mesa/lvp_icd.x86_64.json`" >> "$GITHUB_ENV"
+        echo "GALLIUM_DRIVER=llvmpipe" >> "$GITHUB_ENV"
+
+    - name: Install Vulkan SDK
+      shell: bash
+      run: |
+        set -e
+        curl.exe -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/VulkanSDK-${{ env.VULKAN_VERSION }}-Installer.exe -o vulkan-sdk-installer.exe
+        ./vulkan-sdk-installer.exe --accept-licenses --default-answer --confirm-command install
+        echo "C:/VulkanSDK/${{ env.VULKAN_FULL_SDK_VERSION }}/Bin" >> "$GITHUB_PATH"
+        export VULKAN_SDK="C:/VulkanSDK/${{ env.VULKAN_FULL_SDK_VERSION }}/"
+        echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
+        
+    - name: Build
+      run: cargo build --verbose --all-targets --all-features
+    - name: Clippy
+      run: RUSTFLAGS="-Dwarnings" cargo clippy --verbose --all-targets --all-features
+    - name: Run tests
+      run: |
+        cargo test --verbose --all-targets --all-features -- --nocapture --test-threads=1
+  Build-Linux:
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install rust toolchain
+      run: rustup toolchain install ${{ env.REPO_MSRV }} --no-self-update --profile=minimal --component clippy
     - name: Download Vulkan SDK
       run: |
-        export VULKAN_VERSION=1.4.304.0  # Change this to the desired version
         export INSTALL_DIR=$GITHUB_WORKSPACE/vulkan-sdk
         mkdir -p $INSTALL_DIR
         curl -L -o vulkan-sdk.tar.xz "https://sdk.lunarg.com/sdk/download/$VULKAN_VERSION/linux/vulkan-sdk.tar.xz"
@@ -25,13 +73,10 @@ jobs:
         export VULKAN_SDK="$INSTALL_DIR/x86_64"
         export LD_LIBRARY_PATH="$VULKAN_SDK/lib:$LD_LIBRARY_PATH"
         echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
-        echo "SLANG_DIR=$VULKAN_SDK" >> $GITHUB_ENV # Slang is included in the sdk
-        echo "SPIRV_TOOLS_DIR=$VULKAN_SDK" >> $GITHUB_ENV # Spirv tools is also included
         echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV # Make this a path to search for libraries
-        mv "$VULKAN_SDK/include/slang/"* "$VULKAN_SDK/include"
     - name: Install Vulkan loader & validation layers
       run: sudo apt-get update && sudo apt-get install -y libvulkan-dev vulkan-validationlayers
-    - name: Install Mesa Drivers(taken from wgpu)
+    - name: Install Mesa Drivers
       run: sudo apt-get install -y mesa-vulkan-drivers mesa-utils
     - name: Ensure proper Vulkan & drivers installed
       run: |
