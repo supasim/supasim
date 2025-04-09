@@ -77,6 +77,13 @@ jobs:
         echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV # Make this a path to search for libraries
     - name: Install Vulkan loader & validation layers
       run: sudo apt-get update && sudo apt-get install -y libvulkan-dev vulkan-validationlayers
+    - name: Install dxc and dxil libraries
+      run: |
+        export INSTALL_DIR=$GITHUB_WORKSPACE/dxc
+        curl -L -o dxc.tar.gz "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2502/linux_dxc_2025_02_20.x86_64.tar.gz"
+        tar -xzf dxc.tar.gz --strip-components=1 -C $INSTALL_DIR
+        export LD_LIBRARY_PATH="$INSTALL_DIR/lib:$LD_LIBRARY_PATH"
+        echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
     - name: Install Mesa Drivers
       run: sudo apt-get install -y mesa-vulkan-drivers mesa-utils
     - name: Ensure proper Vulkan & drivers installed
