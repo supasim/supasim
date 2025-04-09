@@ -93,9 +93,8 @@ jobs:
         set -e
         curl -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/mac/vulkansdk-macos-${{ env.VULKAN_VERSION }}.zip -o vulkan-sdk.zip
         unzip vulkan-sdk.zip -d vulkan-sdk
-        ls -R vulkan-sdk
 
-        sudo ./InstallVulkan-${{ env.VULKAN_VERSION }}.app/Contents/MacOS/InstallVulkan-${{ env.VULKAN_VERSION }} --root "$HOME/VulkanSDK" --accept-licenses --default-answer --confirm-command install
+        sudo ./InstallVulkan.app/Contents/MacOS/InstallVulkan --root "$HOME/VulkanSDK" --accept-licenses --default-answer --confirm-command install
 
         echo "$HOME/VulkanSDK/macOS/bin" >> "$GITHUB_PATH"
     
