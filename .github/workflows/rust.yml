@@ -54,10 +54,16 @@ jobs:
     - name: Build
       run: cargo build --verbose --all-targets --all-features
     - name: Clippy
-      run: RUSTFLAGS="-Dwarnings" cargo clippy --verbose --all-targets --all-features
+      run: |
+        set RUSTFLAGS="-Dwarnings"
+        cargo clippy --verbose --all-targets --all-features
     - name: Run tests
       run: |
         cargo test --verbose --all-targets --all-features -- --nocapture --test-threads=1
+    - name: Clippy(no features)
+      run: |
+        set RUSTFLAGS="-Dwarnings"
+        cargo clippy --verbose --all-targets --no-default-features
   Build-Linux:
     runs-on: ubuntu-latest
 
@@ -102,3 +108,5 @@ jobs:
     - name: Run tests
       run: |
         cargo test --verbose --all-targets --all-features -- --nocapture --test-threads=1
+    - name: Clippy(no features)
+      run: RUSTFLAGS="-Dwarnings" cargo clippy --verbose --all-targets --no-default-features

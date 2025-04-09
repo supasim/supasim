@@ -366,6 +366,7 @@ impl GlobalState {
         #[allow(unused_mut)] // In case no features, so this doesn't get flagged
         let mut data = bytecode.as_slice();
 
+        #[allow(unused_variables)]
         let spirv_version = match options.target {
             ShaderTarget::Spirv { version } => version,
             _ => SpirvVersion::V1_0,

@@ -1443,6 +1443,7 @@ dependencies = [
  "bytemuck",
  "hassle-rs",
  "libc",
+ "libloading",
  "naga",
  "rand",
  "serde",
