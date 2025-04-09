@@ -38,7 +38,7 @@ jobs:
 
         mkdir -p target/debug/deps/
         cp -v mesa/* target/debug/
-        cp -v mesa/* target/debug/deps/*
+        cp -v mesa/* target/debug/deps/
 
         # We need to use cygpath to convert PWD to a windows path as we're using bash.
         echo "VK_DRIVER_FILES=`cygpath --windows $PWD/mesa/lvp_icd.x86_64.json`" >> "$GITHUB_ENV"
