@@ -85,6 +85,7 @@ jobs:
   Build-Test-Macos:
     runs-on: macos-latest
     steps:
+    - uses: actions/checkout@v4
     - name: Install rust toolchain
       run: rustup toolchain install ${{ env.REPO_MSRV }} --no-self-update --profile=minimal --component clippy
     - name: Install vulkan sdk
