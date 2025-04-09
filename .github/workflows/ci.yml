@@ -111,6 +111,7 @@ jobs:
     - name: Run tests
       shell: bash
       run: |
+        ls -R "$VULKAN_SDK"
         cargo test --verbose --all-targets --all-features -- --nocapture
     - name: Clippy(no features)
       shell: bash
