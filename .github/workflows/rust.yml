@@ -73,6 +73,7 @@ jobs:
         echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin" >> "$GITHUB_PATH"
         export VULKAN_SDK="C:/VulkanSDK/${{ env.VULKAN_VERSION }}/"
         echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
+        echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin" >> "$GITHUB_PATH"
 
     - name: Print vulkaninfo
       run: "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin/vulkaninfoSDK.exe"
@@ -136,3 +137,16 @@ jobs:
         cargo test --verbose --all-targets --all-features -- --nocapture
     - name: Clippy(no features)
       run: RUSTFLAGS="-Dwarnings" cargo clippy --verbose --all-targets --no-default-features
+  Format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Taplo(from wgpu CI)
+        uses: uncenter/setup-taplo@v1
+        with:
+          version: "0.9.3"
+
+      - name: Run `taplo fmt`(from wgpu CI)
+        run: taplo format --check --diff
+
+      - name: Run `cargo fmt`
+        run: cargo fmt --check
