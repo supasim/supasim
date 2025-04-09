@@ -46,6 +46,12 @@ impl Wgpu {
         if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
             features |= wgpu::Features::PIPELINE_CACHE;
         }
+        if adapter
+            .features()
+            .contains(wgpu::Features::MULTI_DRAW_INDIRECT)
+        {
+            features |= wgpu::Features::MULTI_DRAW_INDIRECT;
+        }
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
@@ -74,7 +80,10 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     fn get_properties(&mut self) -> InstanceProperties {
         InstanceProperties {
             sync_mode: SyncMode::Automatic,
-            indirect: false,
+            indirect: self
+                .adapter
+                .features()
+                .contains(wgpu::Features::MULTI_DRAW_INDIRECT),
             pipeline_cache: self
                 .adapter
                 .features()
@@ -83,7 +92,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                 version: SpirvVersion::V1_0,
             },
             easily_update_bind_groups: false,
-            semaphore_signal: true,
+            semaphore_signal: false,
         }
     }
 
