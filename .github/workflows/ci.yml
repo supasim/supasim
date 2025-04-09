@@ -99,6 +99,8 @@ jobs:
         ls -R $HOME/VulkanSdk
         echo "$HOME/VulkanSDK/macOS/bin" >> "$GITHUB_PATH"
         echo "VULKAN_SDK=$HOME/VulkanSdk/macOS" >> "$GITHUB_ENV"
+        export DYLD_LIBRARY_PATH="$HOME/VulkanSdk/macOS/lib:$DYLD_LIBRARY_PATH"
+        echo "DYLD_LIRARY_PATH=$DYLD_LIRARY_PATH" >> "$GITHUB_ENV"
     
     - name: Build
       shell: bash
