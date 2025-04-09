@@ -46,8 +46,8 @@ jobs:
         echo "VK_DRIVER_FILES=`cygpath --windows $PWD/mesa/x64/lvp_icd.x86_64.json`" >> "$GITHUB_ENV"
         echo "GALLIUM_DRIVER=llvmpipe" >> "$GITHUB_ENV"
         echo "VULKAN_DRIVER=lavapipe" >> $GITHUB_ENV
-        echo "VK_ICD_FILENAMES=${{ github.workspace }}\\mesa\\x64\\lavapipe_icd.x86_64.json" >> $GITHUB_ENV
-        echo "${{ github.workspace }}\\mesa\\x64\\" >> $GITHUB_PATH
+        echo "VK_ICD_FILENAMES=`cygpath --windows $PWD/mesa/x64/lvp_icd.x86_64.json`" >> $GITHUB_ENV
+        echo "`cygpath --windows $PWD/mesa/x64/`" >> $GITHUB_PATH
 
     - name: Install Vulkan SDK
       shell: bash
@@ -64,7 +64,10 @@ jobs:
       shell: bash
       run: |
         echo $VK_DRIVER_FILES
+        cat $VK_DRIVER_FILES
+        echo Listing mesa files
         ls -R ./mesa
+        echo Running vulkaninfo
         "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin/vulkaninfoSDK.exe"
         
     - name: Build
