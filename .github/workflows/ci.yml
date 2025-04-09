@@ -91,8 +91,9 @@ jobs:
       shell: bash
       run: |
         set -e
-
+        mkdir vulkan-sdk
         curl -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/mac/vulkansdk-macos-${{ env.VULKAN_FULL_SDK_VERSION }}.zip -o vulkan-sdk.zip
+        ls -l .
         unzip vulkan-sdk.zip -d vulkan-sdk
 
         ls -l vulkan-sdk
