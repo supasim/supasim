@@ -11,14 +11,14 @@ pub fn main() -> Result<()> {
         /*ShaderTarget::Dxil {
             shader_model: ShaderModel::Sm6_1,
         }*/
-        ShaderTarget::Spirv {
-            version: SpirvVersion::V1_2,
+        ShaderTarget::Dxil {
+            shader_model: ShaderModel::Sm6_7,
         }
     };
     ctx.compile_shader(ShaderCompileOptions {
         target,
         source: ShaderSource::Memory(include_bytes!("../test.slang")),
-        dest: ShaderDest::File(&PathBuf::from_str("test.spirv").unwrap()),
+        dest: ShaderDest::File(&PathBuf::from_str("test.dxil").unwrap()),
         entry: "computeMain",
         include: None,
         fp_mode: Default::default(),
