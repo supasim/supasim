@@ -96,8 +96,9 @@ jobs:
         unzip vulkan-sdk.zip -d vulkan-sdk
 
         sudo ./vulkan-sdk/InstallVulkan.app/Contents/MacOS/InstallVulkan --root "$HOME/VulkanSDK" --accept-licenses --default-answer --confirm-command install
-
+        ls -R $HOME/VulkanSdk
         echo "$HOME/VulkanSDK/macOS/bin" >> "$GITHUB_PATH"
+        echo "VULKAN_SDK=$HOME/VulkanSdk/macOS" >> "$GITHUB_ENV"
     
     - name: Build
       shell: bash
