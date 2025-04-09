@@ -45,10 +45,10 @@ jobs:
         # We need to use cygpath to convert PWD to a windows path as we're using bash.
         echo "VK_DRIVER_FILES=`cygpath --windows $PWD/mesa/lvp_icd.x86_64.json`" >> "$GITHUB_ENV"
         echo "GALLIUM_DRIVER=llvmpipe" >> "$GITHUB_ENV"
-        echo "VULKAN_DRIVER=lavapipe" >> $env:GITHUB_ENV
-        echo "VK_ICD_FILENAMES=${{ github.workspace }}\\mesa\\x64\\etc\\vulkan\\icd.d\\lavapipe_icd.x86_64.json" >> $env:GITHUB_ENV
-        echo "VK_LAYER_PATH=${{ github.workspace }}\\mesa\\x64\\etc\\vulkan\\explicit_layer.d" >> $env:GITHUB_ENV
-        echo "${{ github.workspace }}\\mesa\\x64\\bin" >> $env:PATH
+        echo "VULKAN_DRIVER=lavapipe" >> $GITHUB_ENV
+        echo "VK_ICD_FILENAMES=${{ github.workspace }}\\mesa\\x64\\etc\\vulkan\\icd.d\\lavapipe_icd.x86_64.json" >> $GITHUB_ENV
+        echo "VK_LAYER_PATH=${{ github.workspace }}\\mesa\\x64\\etc\\vulkan\\explicit_layer.d" >> $GITHUB_ENV
+        echo "${{ github.workspace }}\\mesa\\x64\\bin" >> $GITHUB_PATH
 
     - name: Install Vulkan SDK
       shell: bash
@@ -65,7 +65,7 @@ jobs:
       shell: bash
       run: |
         echo $VK_DRIVER_FILES
-        cat $VK_DRIVER_FILES
+        ls -R ./mesa
         "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin/vulkaninfoSDK.exe"
         
     - name: Build
