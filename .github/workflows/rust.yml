@@ -23,6 +23,16 @@ jobs:
     - name: Install rust toolchain
       run: rustup toolchain install ${{ env.REPO_MSRV }} --no-self-update --profile=minimal --component clippy && cargo -V
 
+    - name: Install Vulkan SDK
+      shell: bash
+      run: |
+        set -e
+        curl.exe -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/VulkanSDK-${{ env.VULKAN_VERSION }}-Installer.exe -o vulkan-sdk-installer.exe
+        ./vulkan-sdk-installer.exe --accept-licenses --default-answer --confirm-command install
+        echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin" >> "$GITHUB_PATH"
+        export VULKAN_SDK="C:/VulkanSDK/${{ env.VULKAN_VERSION }}/"
+        echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
+
     - name: Install Mesa(from wgpu CI)
       shell: bash
       run: |
@@ -41,15 +51,8 @@ jobs:
         echo "VK_DRIVER_FILES=`cygpath --windows $PWD/mesa/lvp_icd.x86_64.json`" >> "$GITHUB_ENV"
         echo "GALLIUM_DRIVER=llvmpipe" >> "$GITHUB_ENV"
 
-    - name: Install Vulkan SDK
-      shell: bash
-      run: |
-        set -e
-        curl.exe -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/VulkanSDK-${{ env.VULKAN_VERSION }}-Installer.exe -o vulkan-sdk-installer.exe
-        ./vulkan-sdk-installer.exe --accept-licenses --default-answer --confirm-command install
-        echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin" >> "$GITHUB_PATH"
-        export VULKAN_SDK="C:/VulkanSDK/${{ env.VULKAN_VERSION }}/"
-        echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
+    - name: Print vulkaninfo
+      run: "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin/vulkaninfoSDK.exe"
         
     - name: Build
       run: cargo build --verbose --all-targets --all-features
@@ -59,7 +62,7 @@ jobs:
         cargo clippy --verbose --all-targets --all-features
     - name: Run tests
       run: |
-        cargo test --verbose --all-targets --all-features -- --nocapture --test-threads=1
+        cargo test --verbose --all-targets --all-features -- --nocapture
     - name: Clippy(no features)
       run: |
         set RUSTFLAGS="-Dwarnings"
@@ -107,6 +110,6 @@ jobs:
       run: RUSTFLAGS="-Dwarnings" cargo clippy --verbose --all-targets --all-features
     - name: Run tests
       run: |
-        cargo test --verbose --all-targets --all-features -- --nocapture --test-threads=1
+        cargo test --verbose --all-targets --all-features -- --nocapture
     - name: Clippy(no features)
       run: RUSTFLAGS="-Dwarnings" cargo clippy --verbose --all-targets --no-default-features

@@ -13,7 +13,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 ## Testing info
-Run the command `cargo test -- --nocapture --test-threads=1`. The `--nocapture` allows logs to be sent(though this is quite verbose, particularly for wgpu). More importantly, `--test-threads=1` means that `wgpu` and `vulkan` will not be fighting over the entry in parallel, which currently results in a SEGSEGV on linux.
+Run the command `cargo test -- --nocapture`. The `--nocapture` allows certain logs to be sent(though this is quite verbose, particularly for wgpu).
 
 ## Synchronization things
 ### Metal

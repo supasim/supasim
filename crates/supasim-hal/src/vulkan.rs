@@ -1,5 +1,10 @@
 use core::ffi;
-use std::{borrow::Cow, cell::Cell, ffi::{CStr, CString}, sync::Mutex};
+use std::{
+    borrow::Cow,
+    cell::Cell,
+    ffi::{CStr, CString},
+    sync::Mutex,
+};
 
 use crate::{
     Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, Event,
@@ -10,7 +15,7 @@ use gpu_allocator::{
     AllocationError, AllocationSizes, AllocatorDebugSettings,
     vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
 };
-use log::{warn, Level};
+use log::{Level, warn};
 use thiserror::Error;
 use types::{
     BufferDescriptor, Dag, InstanceProperties, ShaderReflectionInfo, ShaderResourceType,
@@ -75,7 +80,13 @@ impl Vulkan {
             let entry = Entry::load()?;
             let app_info =
                 vk::ApplicationInfo::default().api_version(vk::make_api_version(0, 1, 2, 0));
-            let debug = if debug && entry.enumerate_instance_extension_properties(None).unwrap().iter().any(|e| e.extension_name_as_c_str().unwrap() == c"VK_LAYER_KHRONOS_validation") {
+            let debug = if debug
+                && entry
+                    .enumerate_instance_extension_properties(None)
+                    .unwrap()
+                    .iter()
+                    .any(|e| e.extension_name_as_c_str().unwrap() == c"VK_LAYER_KHRONOS_validation")
+            {
                 true
             } else if debug {
                 warn!("Debug support was requested but is not available on the current system!");
@@ -95,17 +106,50 @@ impl Vulkan {
             };
             // Check instance extensions
             {
-                let mut has = Vec::new();
-                has.resize(extension_names.len(), false);
-                for ext in entry.enumerate_instance_extension_properties(None).unwrap() {
-                    for (i, ext2) in extension_names.iter().enumerate() {
-                        if CStr::from_ptr(*ext2) == ext.extension_name_as_c_str().unwrap() {
-                            has[i] = true;
-                        }
+                for &ext in &extension_names {
+                    let ext_name = CStr::from_ptr(ext);
+                    if !entry
+                        .enumerate_instance_extension_properties(None)
+                        .unwrap()
+                        .iter()
+                        .map(|a| a.extension_name_as_c_str().unwrap())
+                        .any(|a| a == ext_name)
+                    {
+                        return Err(VulkanError::VulkanInstanceExtensionNotSupported(ext_name));
                     }
                 }
-                if has.contains(&true) {
-                    panic!("Not all required instance extensions are supported!");
+            }
+            // Check for validation layers
+            {
+                for &layer in &validation_layers {
+                    let layer_name = CStr::from_ptr(layer);
+                    if !entry
+                        .enumerate_instance_layer_properties()
+                        .unwrap()
+                        .iter()
+                        .map(|a| a.layer_name_as_c_str().unwrap())
+                        .any(|a| a == layer_name)
+                    {
+                        return Err(VulkanError::VulkanLayerNotSupported(layer_name));
+                    }
+                }
+            }
+            // Check vulkan version
+            {
+                match entry.try_enumerate_instance_version().unwrap() {
+                    Some(v) => {
+                        if v < vk::make_api_version(0, 1, 2, 0) {
+                            return Err(VulkanError::VulkanVersionTooLow(format!(
+                                "{}.{}.{}",
+                                vk::api_version_major(v),
+                                vk::api_version_minor(v),
+                                vk::api_version_patch(v)
+                            )));
+                        }
+                    }
+                    None => {
+                        return Err(VulkanError::VulkanVersionTooLow("1.0".to_owned()));
+                    }
                 }
             }
             let instance = entry.create_instance(
@@ -131,8 +175,10 @@ impl Vulkan {
                 let debug_utils_loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
                 let debug_callback =
                     debug_utils_loader.create_debug_utils_messenger(&debug_info, None)?;
-                    Some(debug_callback)
-            } else {None};
+                Some(debug_callback)
+            } else {
+                None
+            };
             // TODO: add phyd filtering
             let (phyd, queue_family_idx) = instance
                 .enumerate_physical_devices()?
@@ -247,6 +293,15 @@ impl Vulkan {
 #[must_use]
 #[derive(Error, Debug)]
 pub enum VulkanError {
+    #[error(
+        "Provided Vulkan version is too low. Vulkan version 1.2 or higher is required, but only {0} is supported."
+    )]
+    VulkanVersionTooLow(String),
+    #[error("Instance extension {0:?}, which is required, is not supported")]
+    VulkanInstanceExtensionNotSupported(&'static CStr),
+    #[error("Layer {0:?}, which is required, is not supported")]
+    VulkanLayerNotSupported(&'static CStr),
+
     #[error("{0}")]
     VulkanRaw(#[from] vk::Result),
     #[error("{0}")]
@@ -391,7 +446,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                         .descriptor_type(match res {
                             ShaderResourceType::Buffer => vk::DescriptorType::STORAGE_BUFFER,
                             ShaderResourceType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
-                            ShaderResourceType::Unknown => panic!("Unknown shader binding"),
+                            ShaderResourceType::Unknown => unreachable!("Unknown shader binding"),
                         })
                         .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 })

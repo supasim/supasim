@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use crate::{
     Backend, BackendInstance, BufferCommand, CommandRecorder, GpuResource, RecorderSubmitInfo,
     Semaphore,
@@ -152,6 +154,9 @@ fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Resul
     }
 }
 
+static INSTANCE_CREATE_LOCK: LazyLock<std::sync::Mutex<()>> =
+    LazyLock::new(|| std::sync::Mutex::new(()));
+
 #[cfg(feature = "vulkan")]
 #[test]
 pub fn vulkan_test() {
@@ -160,7 +165,9 @@ pub fn vulkan_test() {
         .filter_level(log::LevelFilter::Info)
         .try_init();
     info!("Vulkan test");
+    let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
     let instance = Vulkan::create_instance(true).unwrap();
+    drop(_lock);
     info!("Created vulkan instance");
     main_test::<Vulkan>(instance, true).unwrap();
 }
@@ -172,7 +179,9 @@ pub fn wgpu_test() {
         .filter_level(log::LevelFilter::Info)
         .try_init();
     info!("Wgpu test");
+    let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
     let instance = Wgpu::create_instance(true).unwrap();
+    drop(_lock);
     info!("Created wgpu instance");
     main_test::<Wgpu>(instance, true).unwrap();
 }
@@ -183,7 +192,9 @@ pub fn dummy_test() {
         .filter_level(log::LevelFilter::Info)
         .try_init();
     info!("Dummy test");
+    let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
     let instance = Dummy::create_instance();
+    drop(_lock);
     info!("Created dummy instance");
     main_test::<Dummy>(instance, false).unwrap();
 }
