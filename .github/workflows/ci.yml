@@ -61,7 +61,7 @@ jobs:
       shell: bash
       run: |
         echo Running vulkaninfo
-        "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin/vulkaninfoSDK.exe"
+        "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin/vulkaninfoSDK.exe" || true
         
     - name: Build
       run: cargo build --verbose --all-targets --all-features
