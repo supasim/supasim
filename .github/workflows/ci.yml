@@ -82,6 +82,37 @@ jobs:
       run: |
         set RUSTFLAGS="-Dwarnings"
         cargo clippy --verbose --all-targets --no-default-features
+  Build-Test-Macos:
+    runs-on: macos-latest
+    steps:
+    - name: Install rust toolchain
+      run: rustup toolchain install ${{ env.REPO_MSRV }} --no-self-update --profile=minimal --component clippy
+    - name: Install vulkan sdk
+      shell: bash
+      run: |
+        set -e
+
+        curl -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/mac/vulkansdk-macos-${{ env.VULKAN_FULL_SDK_VERSION }}.zip -o vulkan-sdk.zip
+        unzip vulkan-sdk.zip -d vulkan-sdk
+
+        ls -l vulkan-sdk
+        sudo ./vulkan-sdk/InstallVulkan-${{ env.VULKAN_VERSION }}.app/Contents/MacOS/InstallVulkan-${{ env.VULKAN_VERSION }} --root "$HOME/VulkanSDK" --accept-licenses --default-answer --confirm-command install
+
+        echo "$HOME/VulkanSDK/macOS/bin" >> "$GITHUB_PATH"
+    
+    - name: Build
+      shell: bash
+      run: cargo build --verbose --all-targets --all-features
+    - name: Clippy
+      shell: bash
+      run: RUSTFLAGS="-Dwarnings" cargo clippy --verbose --all-targets --all-features
+    - name: Run tests
+      shell: bash
+      run: |
+        cargo test --verbose --all-targets --all-features -- --nocapture
+    - name: Clippy(no features)
+      shell: bash
+      run: RUSTFLAGS="-Dwarnings" cargo clippy --verbose --all-targets --no-default-features
   Build-Test-Linux:
     runs-on: ubuntu-latest
 
