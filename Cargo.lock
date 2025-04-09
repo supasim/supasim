@@ -115,7 +115,7 @@ dependencies = [
  "bitflags 2.9.0",
  "cexpr",
  "clang-sys",
- "itertools 0.12.1",
+ "itertools",
  "lazy_static",
  "lazycell",
  "log",
@@ -138,7 +138,7 @@ dependencies = [
  "bitflags 2.9.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -626,15 +626,6 @@ name = "itertools"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
 dependencies = [
  "either",
 ]
@@ -1352,7 +1343,7 @@ dependencies = [
 [[package]]
 name = "spirv-tools-sys"
 version = "0.1.0"
-source = "git+https://github.com/supasim/spirv-tools.git#07be91fbc8d93f5175be1c011552d88f2ec7f291"
+source = "git+https://github.com/supasim/spirv-tools.git#546d389895d303b4d51b7b4bb5f03af1a8310e02"
 dependencies = [
  "bindgen 0.71.1",
 ]
