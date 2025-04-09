@@ -75,13 +75,28 @@ impl ShaderModel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShaderTarget {
     CudaCpp,
-    Ptx {},
+    Ptx,
     Spirv { version: SpirvVersion },
     Msl,
     Hlsl,
     Glsl,
     Wgsl,
     Dxil { shader_model: ShaderModel },
+}
+impl ShaderTarget {
+    pub fn file_extension(&self) -> &str {
+        use ShaderTarget::*;
+        match self {
+            CudaCpp => "cu",
+            Ptx => "ptx",
+            Spirv { .. } => "spv",
+            Msl => "metal",
+            Hlsl => "hlsl",
+            Glsl => "glsl",
+            Wgsl => "wgsl",
+            Dxil { .. } => "dxil",
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SyncMode {

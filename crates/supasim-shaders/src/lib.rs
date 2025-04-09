@@ -1,8 +1,11 @@
+#[cfg(test)]
+mod tests;
+
 use anyhow::{Result, anyhow};
 use rand::Rng;
 use slang::Downcast;
-#[cfg(feature = "spirv_cross")]
-use spirv_cross::spirv;
+#[allow(unused_imports)]
+use std::ptr::null_mut;
 use std::{ffi::CString, io::Write, path::Path, str::FromStr};
 use tempfile::tempdir;
 use types::ShaderReflectionInfo;
@@ -53,7 +56,7 @@ pub struct GlobalState {
 }
 impl GlobalState {
     #[cfg(feature = "opt-valid")]
-    pub fn env_from_version(s: SpirvVersion) -> u32 {
+    fn env_from_version(s: SpirvVersion) -> spirv_tools_sys::spv_target_env {
         match s {
             SpirvVersion::Cl1_2 => spirv_tools_sys::spv_target_env_SPV_ENV_OPENCL_1_2,
             SpirvVersion::Cl2_0 => spirv_tools_sys::spv_target_env_SPV_ENV_OPENCL_2_0,
@@ -69,7 +72,7 @@ impl GlobalState {
         }
     }
     #[cfg(feature = "opt-valid")]
-    pub fn validate_spv(module: &[u32], s: SpirvVersion) -> Result<()> {
+    fn validate_spv(module: &[u32], s: SpirvVersion) -> Result<()> {
         use std::{ffi::CStr, ptr::null_mut};
 
         unsafe {
@@ -101,7 +104,7 @@ impl GlobalState {
     }
     // TODO: needs to know whether to minify or do other optimizations
     #[cfg(feature = "opt-valid")]
-    pub fn optimize_spv(module: &[u32], s: SpirvVersion) -> Result<Vec<u8>> {
+    fn optimize_spv(module: &[u32], s: SpirvVersion) -> Result<Vec<u8>> {
         use std::{ffi::c_void, ptr::null_mut};
 
         unsafe {
@@ -134,6 +137,40 @@ impl GlobalState {
             Ok(v)
         }
     }
+    #[cfg(feature = "spirv-cross")]
+    fn transpile_spirv(module: &[u32], target: ShaderTarget) -> Result<Vec<u8>> {
+        use std::ptr::null;
+
+        use spirv_cross_sys as spvc;
+        unsafe {
+            let mut context = null_mut();
+            spvc::spvc_context_create(&mut context);
+            let mut ir = null_mut();
+            spvc::spvc_context_parse_spirv(context, module.as_ptr(), module.len(), &mut ir);
+            let mut compiler = null_mut();
+            spvc::spvc_context_create_compiler(
+                context,
+                match target {
+                    ShaderTarget::Glsl => spvc::spvc_backend_SPVC_BACKEND_GLSL,
+                    ShaderTarget::Msl => spvc::spvc_backend_SPVC_BACKEND_MSL,
+                    ShaderTarget::Hlsl => spvc::spvc_backend_SPVC_BACKEND_HLSL,
+                    _ => panic!("Transpile spirv called on invalid target"),
+                },
+                ir,
+                spvc::spvc_capture_mode_SPVC_CAPTURE_MODE_TAKE_OWNERSHIP,
+                &mut compiler,
+            );
+            let mut options = null_mut();
+            spvc::spvc_compiler_create_compiler_options(compiler, &mut options);
+            spvc::spvc_compiler_install_compiler_options(compiler, options);
+            let mut result = null();
+            spvc::spvc_compiler_compile(compiler, &mut result);
+            let result =
+                String::from(std::ffi::CStr::from_ptr(result).to_str().unwrap()).into_bytes();
+            spvc::spvc_context_destroy(context);
+            Ok(result)
+        }
+    }
     pub fn new_from_env() -> Result<Self> {
         let global_session = slang::GlobalSession::new().unwrap();
         Ok(Self {
@@ -144,7 +181,7 @@ impl GlobalState {
         let extra_optim = options.opt_level == OptimizationLevel::Maximal || options.minify;
         let extra_valid = options.stability == StabilityGuarantee::ExtraValidation;
         let (target, needs_spirv_transpile) = match options.target {
-            ShaderTarget::Ptx {} => (slang::CompileTarget::Ptx, false),
+            ShaderTarget::Ptx => (slang::CompileTarget::Ptx, false),
             ShaderTarget::CudaCpp => (slang::CompileTarget::CudaSource, false),
             ShaderTarget::Msl => {
                 if extra_optim || options.stability != StabilityGuarantee::Experimental {
@@ -194,7 +231,7 @@ impl GlobalState {
             }
         }
         if needs_spirv_transpile {
-            #[cfg(not(feature = "spirv_cross"))]
+            #[cfg(not(feature = "spirv-cross"))]
             {
                 return Err(anyhow!(
                     "Shader compiler was not compiled with advanced cross compilation support"
@@ -228,6 +265,7 @@ impl GlobalState {
             OptimizationLevel::Standard => slang::OptimizationLevel::Default,
             OptimizationLevel::Maximal => slang::OptimizationLevel::Maximal,
         };
+        let mut profile = slang::ProfileID::UNKNOWN;
         let mut opt = slang::CompilerOptions::default()
             .language(slang::SourceLanguage::Slang)
             .optimization(optim)
@@ -236,7 +274,7 @@ impl GlobalState {
             opt = opt.include(include);
         }
         if let ShaderTarget::Spirv { version } = options.target {
-            opt = opt.profile(self.slang_session.find_profile(match version {
+            profile = self.slang_session.find_profile(match version {
                 SpirvVersion::V1_0 => "spirv_1_0",
                 SpirvVersion::V1_1 => "spirv_1_1",
                 SpirvVersion::V1_2 => "spirv_1_2",
@@ -248,17 +286,24 @@ impl GlobalState {
                 SpirvVersion::Cl1_2 | SpirvVersion::Cl2_0 => unimplemented!(),
                 SpirvVersion::Cl2_1 => "spirv_1_0",
                 SpirvVersion::Cl2_2 => "spirv_1_2",
-            }));
+            });
+        } else if target == slang::CompileTarget::Spirv {
+            profile = self.slang_session.find_profile("spirv_1_0");
+        } else if target == slang::CompileTarget::Dxil {
+            if let ShaderTarget::Dxil { shader_model } = options.target {
+                profile = self.slang_session.find_profile(shader_model.to_str());
+            } else {
+                unreachable!();
+            }
         }
-        if let ShaderTarget::Dxil { shader_model } = options.target {
-            let profile = self.slang_session.find_profile(shader_model.to_str());
+        if !profile.is_unknown() {
             opt = opt.profile(profile);
         }
         let session = self
             .slang_session
             .create_session(
                 &slang::SessionDesc::default()
-                    .targets(&[slang::TargetDesc::default().format(target)])
+                    .targets(&[slang::TargetDesc::default().format(target).profile(profile)])
                     .options(&opt)
                     .search_paths(&[search_dir.as_ptr()]),
             )
@@ -321,22 +366,27 @@ impl GlobalState {
         #[allow(unused_mut)] // In case no features, so this doesn't get flagged
         let mut data = bytecode.as_slice();
 
+        let spirv_version = match options.target {
+            ShaderTarget::Spirv { version } => version,
+            _ => SpirvVersion::V1_0,
+        };
+
         #[cfg(feature = "opt-valid")]
         if extra_valid && needs_spirv_transpile {
-            Self::validate_spv(bytemuck::cast_slice(data), SpirvVersion::V1_0)?;
+            Self::validate_spv(bytemuck::cast_slice(data), spirv_version)?;
         }
         #[cfg(feature = "opt-valid")]
         if extra_optim && needs_spirv_transpile {
-            _other_blob = Self::optimize_spv(bytemuck::cast_slice(data), SpirvVersion::V1_0)?;
+            _other_blob = Self::optimize_spv(bytemuck::cast_slice(data), spirv_version)?;
             data = &_other_blob;
         }
 
         #[cfg(feature = "msl-stable-out")]
         if options.target == ShaderTarget::Msl && needs_spirv_transpile {
             let vec = bytecode.as_slice().to_owned();
-            let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
-            _stringcode = spirv::Ast::<spirv_cross::msl::Target>::parse(&module)?.compile()?;
-            data = _stringcode.as_bytes();
+            let res = Self::transpile_spirv(bytemuck::cast_slice(&vec), ShaderTarget::Msl)?;
+            _other_blob = res;
+            data = &_other_blob;
         }
         #[cfg(feature = "wgsl-out")]
         if options.target == ShaderTarget::Wgsl && needs_spirv_transpile {
@@ -362,12 +412,12 @@ impl GlobalState {
             data = _stringcode.as_bytes();
         }
 
-        #[cfg(feature = "spirv_cross")]
+        #[cfg(feature = "spirv-cross")]
         if options.target == ShaderTarget::Glsl && needs_spirv_transpile {
             let vec = bytecode.as_slice().to_owned();
-            let module = spirv::Module::from_words(bytemuck::cast_slice(&vec));
-            _stringcode = spirv::Ast::<spirv_cross::glsl::Target>::parse(&module)?.compile()?;
-            data = _stringcode.as_bytes();
+            let res = Self::transpile_spirv(bytemuck::cast_slice(&vec), ShaderTarget::Glsl)?;
+            _other_blob = res;
+            data = &_other_blob;
         }
         #[cfg(feature = "dxil-out")]
         if let ShaderTarget::Dxil { shader_model } = options.target {

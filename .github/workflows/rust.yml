@@ -1,6 +1,7 @@
 name: SupaSim Main
 
 on:
+  workflow_dispatch:  # Manual trigger via GitHub UI
   push:
   pull_request:
     branches: [ "master" ]

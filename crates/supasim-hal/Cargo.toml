@@ -11,7 +11,7 @@ license.workspace = true
 [features]
 default = ["vulkan", "wgpu"]
 cuda = [
-    # "cust"
+  # "cust"
 ] # Potential cuda libraries: cust, cudarc
 wgpu = ["dep:wgpu", "pollster"]
 vulkan = ["ash", "gpu-allocator"]
