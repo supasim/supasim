@@ -181,7 +181,7 @@ impl GlobalState {
         let extra_optim = options.opt_level == OptimizationLevel::Maximal || options.minify;
         let extra_valid = options.stability == StabilityGuarantee::ExtraValidation;
         let (target, needs_spirv_transpile) = match options.target {
-            ShaderTarget::Ptx {} => (slang::CompileTarget::Ptx, false),
+            ShaderTarget::Ptx => (slang::CompileTarget::Ptx, false),
             ShaderTarget::CudaCpp => (slang::CompileTarget::CudaSource, false),
             ShaderTarget::Msl => {
                 if extra_optim || options.stability != StabilityGuarantee::Experimental {
