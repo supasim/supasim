@@ -15,6 +15,7 @@ env:
   RUST_BACKTRACE: full
   REPO_MSRV: 1.85
   MESA_VERSION: "24.3.4" # Note that this is only for windows
+  WARP_VERSION: "1.0.13" # Windows only
 jobs:
   Build-Windows:
     runs-on: windows-latest
@@ -23,21 +24,33 @@ jobs:
     - name: Install rust toolchain
       run: rustup toolchain install ${{ env.REPO_MSRV }} --no-self-update --profile=minimal --component clippy && cargo -V
 
-    - name: Install Vulkan SDK
+    - name: Install DXC(from wgpu CI)
       shell: bash
       run: |
         set -e
-        curl.exe -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/VulkanSDK-${{ env.VULKAN_VERSION }}-Installer.exe -o vulkan-sdk-installer.exe
-        ./vulkan-sdk-installer.exe --accept-licenses --default-answer --confirm-command install
-        echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin" >> "$GITHUB_PATH"
-        export VULKAN_SDK="C:/VulkanSDK/${{ env.VULKAN_VERSION }}/"
-        echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
+        curl.exe -L --retry 5 https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2502/dxc_2025_02_20.zip -o dxc.zip
+        7z.exe e dxc.zip -odxc bin/x64/{dxc.exe,dxcompiler.dll,dxil.dll}
+        cygpath --windows "$PWD/dxc" >> "$GITHUB_PATH"
+    
+    - name: Install WARP(from wgpu CI)
+      shell: bash
+      run: |
+        set -e
+        # Ensure dxc is on path
+        dxc --version
+        curl.exe -L --retry 5 https://www.nuget.org/api/v2/package/Microsoft.Direct3D.WARP/$WARP_VERSION -o warp.zip
+        7z.exe e warp.zip -owarp build/native/bin/x64/d3d10warp.dll
+
+        mkdir -p target/llvm-cov-target/debug/deps
+
+        cp -v warp/d3d10warp.dll target/llvm-cov-target/debug/
+        cp -v warp/d3d10warp.dll target/llvm-cov-target/debug/deps
+
 
     - name: Install Mesa(from wgpu CI)
       shell: bash
       run: |
         set -e
-        mkdir -p target/llvm-cov-target/debug/deps
 
         curl.exe -L --retry 5 https://github.com/pal1000/mesa-dist-win/releases/download/$MESA_VERSION/mesa3d-$MESA_VERSION-release-msvc.7z -o mesa.7z
         7z.exe e mesa.7z -omesa x64/{opengl32.dll,libgallium_wgl.dll,libglapi.dll,vulkan_lvp.dll,lvp_icd.x86_64.json}
@@ -50,6 +63,16 @@ jobs:
         # We need to use cygpath to convert PWD to a windows path as we're using bash.
         echo "VK_DRIVER_FILES=`cygpath --windows $PWD/mesa/lvp_icd.x86_64.json`" >> "$GITHUB_ENV"
         echo "GALLIUM_DRIVER=llvmpipe" >> "$GITHUB_ENV"
+
+    - name: Install Vulkan SDK
+      shell: bash
+      run: |
+        set -e
+        curl.exe -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/VulkanSDK-${{ env.VULKAN_VERSION }}-Installer.exe -o vulkan-sdk-installer.exe
+        ./vulkan-sdk-installer.exe --accept-licenses --default-answer --confirm-command install
+        echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin" >> "$GITHUB_PATH"
+        export VULKAN_SDK="C:/VulkanSDK/${{ env.VULKAN_VERSION }}/"
+        echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
 
     - name: Print vulkaninfo
       run: "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin/vulkaninfoSDK.exe"
