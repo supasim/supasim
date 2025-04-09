@@ -1343,7 +1343,7 @@ dependencies = [
 [[package]]
 name = "spirv-cross-sys"
 version = "0.0.0"
-source = "git+https://github.com/supasim/spirv-cross-sys.git#b5683303caf07fcd4c99102d7f16a70b67a9d1ba"
+source = "git+https://github.com/supasim/spirv-cross-sys.git#9de2805177eeb5e2043dcbce2fbe6d1f14443208"
 dependencies = [
  "bindgen 0.71.1",
  "cc",

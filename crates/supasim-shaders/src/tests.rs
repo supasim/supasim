@@ -24,6 +24,7 @@ pub fn shader_tests_main() {
         ShaderTarget::Ptx,
         ShaderTarget::Wgsl,
     ] {
+        println!("Target: {target:?}");
         let mut dest_file = PathBuf::new();
         dest_file.push("shader-tests");
         dest_file.push(format!("test.{}", target.file_extension()));
