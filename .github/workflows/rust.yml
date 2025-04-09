@@ -43,12 +43,11 @@ jobs:
         ls mesa
 
         # We need to use cygpath to convert PWD to a windows path as we're using bash.
-        echo "VK_DRIVER_FILES=`cygpath --windows $PWD/mesa/lvp_icd.x86_64.json`" >> "$GITHUB_ENV"
+        echo "VK_DRIVER_FILES=`cygpath --windows $PWD/mesa/x64/lvp_icd.x86_64.json`" >> "$GITHUB_ENV"
         echo "GALLIUM_DRIVER=llvmpipe" >> "$GITHUB_ENV"
         echo "VULKAN_DRIVER=lavapipe" >> $GITHUB_ENV
-        echo "VK_ICD_FILENAMES=${{ github.workspace }}\\mesa\\x64\\etc\\vulkan\\icd.d\\lavapipe_icd.x86_64.json" >> $GITHUB_ENV
-        echo "VK_LAYER_PATH=${{ github.workspace }}\\mesa\\x64\\etc\\vulkan\\explicit_layer.d" >> $GITHUB_ENV
-        echo "${{ github.workspace }}\\mesa\\x64\\bin" >> $GITHUB_PATH
+        echo "VK_ICD_FILENAMES=${{ github.workspace }}\\mesa\\x64\\lavapipe_icd.x86_64.json" >> $GITHUB_ENV
+        echo "${{ github.workspace }}\\mesa\\x64\\" >> $GITHUB_PATH
 
     - name: Install Vulkan SDK
       shell: bash
