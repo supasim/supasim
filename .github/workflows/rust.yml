@@ -80,6 +80,7 @@ jobs:
     - name: Install dxc and dxil libraries
       run: |
         export INSTALL_DIR=$GITHUB_WORKSPACE/dxc
+        mkdir -p $INSTALL_DIR
         curl -L -o dxc.tar.gz "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2502/linux_dxc_2025_02_20.x86_64.tar.gz"
         tar -xzf dxc.tar.gz --strip-components=1 -C $INSTALL_DIR
         export LD_LIBRARY_PATH="$INSTALL_DIR/lib:$LD_LIBRARY_PATH"
