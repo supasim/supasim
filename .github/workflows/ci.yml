@@ -94,7 +94,7 @@ jobs:
         mkdir -p target/debug/deps
         cp -v "$HOME/VulkanSdk/macOS/lib"/*.dylib target/debug/
         cp -v "$HOME/VulkanSdk/macOS/lib"/*.dylib target/debug/deps
-        sudo cp -v "$HOME/VulkanSdk/macOS/lib"/*.dylib /usr/local/lib
+        sudo cp -v "$HOME/VulkanSdk/macOS/lib"/*.dylib /Library/Frameworks
         echo "VK_ICD_FILENAMES=$HOME/VulkanSdk/macOS/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
         echo "VK_LAYER_PATH=$HOME/VulkanSdk/macOS/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
 
