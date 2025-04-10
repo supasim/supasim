@@ -110,6 +110,7 @@ jobs:
         echo $VULKAN_SDK
         ls $VULKAN_SDK
         echo $PATH
+        vulkaninfo || true
       
     - name: Build
       shell: bash
