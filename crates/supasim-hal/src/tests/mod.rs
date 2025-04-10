@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use crate::{
     Backend, BackendInstance, BufferCommand, CommandRecorder, GpuResource, RecorderSubmitInfo,
     Semaphore,
@@ -28,7 +30,11 @@ unsafe fn create_storage_buf<B: Backend>(
 fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Result<(), B::Error> {
     unsafe {
         info!("Starting test");
-        let mut cache = instance.create_kernel_cache(&[])?;
+        let mut cache = if instance.get_properties().pipeline_cache {
+            Some(instance.create_kernel_cache(&[])?)
+        } else {
+            None
+        };
         let mut fun_semaphore = instance.create_semaphore()?;
         let mut kernel = instance.compile_kernel(
             include_bytes!("test_add.spirv"),
@@ -42,7 +48,7 @@ fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Resul
                 ],
                 push_constant_len: 0,
             },
-            Some(&mut cache),
+            cache.as_mut(),
         )?;
         let mut kernel2 = instance.compile_kernel(
             include_bytes!("test_double.spirv"),
@@ -52,7 +58,7 @@ fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Resul
                 resources: vec![ShaderResourceType::Buffer],
                 push_constant_len: 0,
             },
-            Some(&mut cache),
+            cache.as_mut(),
         )?;
         let uniform_buf = instance.create_buffer(&BufferDescriptor {
             size: 16,
@@ -139,12 +145,17 @@ fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Resul
         instance.destroy_buffer(sb1)?;
         instance.destroy_buffer(sb2)?;
         instance.destroy_buffer(sbout)?;
-        instance.destroy_kernel_cache(cache)?;
+        if let Some(cache) = cache {
+            instance.destroy_kernel_cache(cache)?;
+        }
         instance.destroy()?;
         info!("Destroyed");
         Ok(())
     }
 }
+
+static INSTANCE_CREATE_LOCK: LazyLock<std::sync::Mutex<()>> =
+    LazyLock::new(|| std::sync::Mutex::new(()));
 
 #[cfg(feature = "vulkan")]
 #[test]
@@ -154,7 +165,9 @@ pub fn vulkan_test() {
         .filter_level(log::LevelFilter::Info)
         .try_init();
     info!("Vulkan test");
+    let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
     let instance = Vulkan::create_instance(true).unwrap();
+    drop(_lock);
     info!("Created vulkan instance");
     main_test::<Vulkan>(instance, true).unwrap();
 }
@@ -166,7 +179,9 @@ pub fn wgpu_test() {
         .filter_level(log::LevelFilter::Info)
         .try_init();
     info!("Wgpu test");
+    let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
     let instance = Wgpu::create_instance(true).unwrap();
+    drop(_lock);
     info!("Created wgpu instance");
     main_test::<Wgpu>(instance, true).unwrap();
 }
@@ -177,7 +192,9 @@ pub fn dummy_test() {
         .filter_level(log::LevelFilter::Info)
         .try_init();
     info!("Dummy test");
+    let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
     let instance = Dummy::create_instance();
+    drop(_lock);
     info!("Created dummy instance");
     main_test::<Dummy>(instance, false).unwrap();
 }

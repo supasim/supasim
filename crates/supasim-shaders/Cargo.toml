@@ -16,7 +16,6 @@ dxil-out = ["hassle-rs"]
 opt-valid = ["spirv-tools-sys", "spirv-cross"]
 spirv-cross = ["spirv-cross-sys"]
 
-
 [dependencies]
 naga = { version = "24.0", features = ["spv-in", "wgsl-out"], optional = true }
 anyhow.workspace = true
@@ -36,6 +35,9 @@ libc = "0.2"
 hassle-rs = { version = "0.11", git = "https://github.com/supasim/hassle-rs.git", optional = true }
 
 types.workspace = true
+
+[dev-dependencies]
+libloading = "0.8"
 
 [[example]]
 name = "simple-shaders"

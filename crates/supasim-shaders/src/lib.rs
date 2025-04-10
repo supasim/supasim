@@ -269,7 +269,14 @@ impl GlobalState {
         let mut opt = slang::CompilerOptions::default()
             .language(slang::SourceLanguage::Slang)
             .optimization(optim)
-            .target(target);
+            .target(target)
+            .stage(slang::Stage::Compute);
+        if options.minify {
+            opt = opt
+                .debug_information(slang::DebugInfoLevel::None)
+                .no_mangle(false)
+                .obfuscate(true);
+        }
         if let Some(include) = options.include {
             opt = opt.include(include);
         }
@@ -366,6 +373,7 @@ impl GlobalState {
         #[allow(unused_mut)] // In case no features, so this doesn't get flagged
         let mut data = bytecode.as_slice();
 
+        #[allow(unused_variables)]
         let spirv_version = match options.target {
             ShaderTarget::Spirv { version } => version,
             _ => SpirvVersion::V1_0,
