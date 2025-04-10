@@ -17,7 +17,7 @@ env:
   MESA_VERSION: "24.3.4" # Note that this is only for windows
 jobs:
   Build-Test-Windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
     - uses: actions/checkout@v4
     - name: Install rust toolchain
@@ -75,7 +75,7 @@ jobs:
         set RUSTFLAGS="-Dwarnings"
         cargo clippy --verbose --all-targets --no-default-features
   Build-Test-Macos:
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
     - uses: actions/checkout@v4
     - name: Install rust toolchain
