@@ -17,7 +17,7 @@ opt-valid = ["spirv-tools-sys", "spirv-cross"]
 spirv-cross = ["spirv-cross-sys"]
 
 [dependencies]
-naga = { version = "24.0", features = ["spv-in", "wgsl-out"], optional = true }
+naga = { version = "25.0", features = ["spv-in", "wgsl-out"], optional = true }
 anyhow.workspace = true
 slang = { git = "https://github.com/supasim/slang-rs.git" }
 rand.workspace = true
@@ -35,9 +35,6 @@ libc = "0.2"
 hassle-rs = { version = "0.11", git = "https://github.com/supasim/hassle-rs.git", optional = true }
 
 types.workspace = true
-
-[dev-dependencies]
-libloading = "0.8"
 
 [[example]]
 name = "simple-shaders"

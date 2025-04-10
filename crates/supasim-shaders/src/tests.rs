@@ -19,15 +19,21 @@ pub fn shader_tests_main() {
             version: types::SpirvVersion::V1_4,
         },
         ShaderTarget::Msl,
-        ShaderTarget::Dxil {
-            shader_model: types::ShaderModel::Sm6_7,
-        },
         ShaderTarget::Wgsl,
+        ShaderTarget::CudaCpp,
+        ShaderTarget::Hlsl,
     ];
-    if unsafe { libloading::Library::new(libloading::library_filename("nvrtc")).is_ok() } {
+    if !std::env::var("SUPASIM_SKIP_SHADERS_DXIL")
+        .is_ok_and(|a| &a != "0" && &a != "false" && !a.is_empty())
+    {
+        targets.push(ShaderTarget::Dxil {
+            shader_model: types::ShaderModel::Sm6_7,
+        });
+    }
+    if !std::env::var("SUPASIM_SKIP_SHADERS_PTX")
+        .is_ok_and(|a| &a != "0" && &a != "false" && !a.is_empty())
+    {
         targets.push(ShaderTarget::Ptx);
-    } else {
-        targets.push(ShaderTarget::CudaCpp);
     }
     for target in targets {
         println!("Target: {target:?}");

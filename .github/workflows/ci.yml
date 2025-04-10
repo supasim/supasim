@@ -97,16 +97,15 @@ jobs:
         curl.exe -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/VulkanSDK-${{ env.VULKAN_VERSION }}-Installer.exe -o vulkan-sdk-installer.exe
         ./vulkan-sdk-installer.exe --accept-licenses --default-answer --confirm-command install
         echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin" >> "$GITHUB_PATH"
+        echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Lib" >> "$GITHUB_PATH"
         export VULKAN_SDK="C:/VulkanSDK/${{ env.VULKAN_VERSION }}/"
         echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
 
         # DXC
-        export INSTALL_DIR="`cygpath -u $PWD/dxc`"
-        mkdir -p $INSTALL_DIR
-        curl -L -o dxc.tar.gz "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2502/linux_dxc_2025_02_20.x86_64.tar.gz"
-        tar -xzf dxc.tar.gz --strip-components=1 -C $INSTALL_DIR
-        export LD_LIBRARY_PATH="$INSTALL_DIR/lib:$LD_LIBRARY_PATH"
-        echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
+        curl.exe -L --retry 5 https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2502/dxc_2025_02_20.zip -o dxc.zip
+        7z.exe e dxc.zip -odxc bin/x64/{dxc.exe,dxcompiler.dll,dxil.dll}
+        # Uncomment this as needed
+        # cygpath --windows "$PWD/dxc" >> "$GITHUB_PATH"
 
     - name: Install Vulkan SDK (MacOS)
       shell: bash
@@ -141,9 +140,17 @@ jobs:
       if: ${{ matrix.run-tests }}
       run: |
         set -e
+        # Skip backends
         if [ ${{ matrix.os != 'ubuntu-latest' }} ]; then
           export SUPASIM_SKIP_BACKEND_VULKAN=1
           export SUPASIM_SKIP_BACKEND_WGPU_VULKAN=1
         fi
         export SUPASIM_SKIP_BACKEND_WGPU_DX12=1
+
+        # Skip shader targets
+        export SUPASIM_SKIP_SHADERS_PTX=1
+        if [ ${{ matrix.os == 'macos-latest' }} ]; then
+          export SUPASIM_SKIP_SHADERS_DXIL=1
+        fi
+
         cargo test --verbose --all-targets --all-features -- --nocapture
