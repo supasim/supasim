@@ -55,7 +55,7 @@ jobs:
       
     - name: Install Vulkan SDK, Mesa, Layers, DXC (Linux)
       shell: bash
-      if: ${{ matrix.os }} == "ubuntu-latest"
+      if: ${{ matrix.os == "ubuntu-latest" }}
       run: |
         set -e
 
@@ -83,7 +83,7 @@ jobs:
         
     - name: Install Vulkan SDK, Mesa, DXC (Windows)
       shell: bash
-      if: ${{ matrix.os }} == "windows-latest"
+      if: ${{ matrix.os == "windows-latest" }}
       run: |
         set -e
         
@@ -111,7 +111,7 @@ jobs:
 
     - name: Install Vulkan SDK (MacOS)
       shell: bash
-      if: ${{ matrix.os }} == "macos-latest"
+      if: ${{ matrix.os == "macos-latest" }}
       run: |
         set -e
         curl -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/mac/vulkansdk-macos-${{ env.VULKAN_VERSION }}.zip -o vulkan-sdk.zip
