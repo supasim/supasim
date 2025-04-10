@@ -92,8 +92,8 @@ jobs:
         echo "$HOME/VulkanSDK/macOS/bin" >> "$GITHUB_PATH"
         echo "VULKAN_SDK=$HOME/VulkanSdk/macOS" >> "$GITHUB_ENV"
         mkdir -p target/debug/deps
-        cp -v "$HOME/VulkanSdk/macOS/lib/*" target/debug/
-        cp -v "$HOME/VulkanSdk/macOS/lib/*" target/debug/deps
+        cp -v "$HOME/VulkanSdk/macOS/lib/"* target/debug/
+        cp -v "$HOME/VulkanSdk/macOS/lib/"* target/debug/deps
     
     - name: Build
       shell: bash
