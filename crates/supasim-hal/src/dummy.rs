@@ -16,8 +16,8 @@ impl Backend for Dummy {
     type Error = DummyResource;
 }
 impl Dummy {
-    pub fn create_instance() -> DummyResource {
-        DummyResource
+    pub fn create_instance() -> Result<DummyResource, DummyResource> {
+        Ok(DummyResource)
     }
 }
 #[derive(Clone, Debug)]

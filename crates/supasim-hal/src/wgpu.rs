@@ -27,13 +27,17 @@ impl Backend for Wgpu {
     type Error = WgpuError;
 }
 impl Wgpu {
-    pub fn create_instance(advanced_dbg: bool) -> Result<WgpuInstance, WgpuError> {
+    pub fn create_instance(
+        advanced_dbg: bool,
+        backends: wgpu::Backends,
+    ) -> Result<WgpuInstance, WgpuError> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             flags: if advanced_dbg {
                 wgpu::InstanceFlags::advanced_debugging()
             } else {
                 wgpu::InstanceFlags::debugging()
             },
+            backends,
             ..Default::default()
         });
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {

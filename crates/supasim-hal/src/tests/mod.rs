@@ -27,7 +27,10 @@ unsafe fn create_storage_buf<B: Backend>(
         Ok(buf)
     }
 }
-fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Result<(), B::Error> {
+fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
+    mut instance: I,
+    check_result: bool,
+) -> Result<(), B::Error> {
     unsafe {
         info!("Starting test");
         let mut cache = if instance.get_properties().pipeline_cache {
@@ -157,21 +160,52 @@ fn main_test<B: Backend>(mut instance: B::Instance, check_result: bool) -> Resul
 static INSTANCE_CREATE_LOCK: LazyLock<std::sync::Mutex<()>> =
     LazyLock::new(|| std::sync::Mutex::new(()));
 
-#[cfg(feature = "vulkan")]
-#[test]
-pub fn vulkan_test() {
-    use crate::vulkan::Vulkan;
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .try_init();
-    info!("Vulkan test");
-    let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
-    let instance = Vulkan::create_instance(true).unwrap();
-    drop(_lock);
-    info!("Created vulkan instance");
-    main_test::<Vulkan>(instance, true).unwrap();
+pub fn should_skip(test_backend: &str) -> bool {
+    std::env::var(format!("SUPASIM_SKIP_BACKEND_{test_backend}"))
+        .is_ok_and(|a| &a != "0" && &a != "false" && !a.is_empty())
 }
+macro_rules! gpu_test {
+    ($func_name:ident, $backend_name:literal, $verify_result:literal, $instance_create:block) => {
+        #[test]
+        pub fn $func_name() {
+            if should_skip($backend_name) {
+                return;
+            }
+            let _ = env_logger::builder()
+                .filter_level(log::LevelFilter::Info)
+                .try_init();
+            info!("{} test", $backend_name);
+            let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
+            let instance = $instance_create;
+            drop(_lock);
+            let instance = instance.expect(&format!("Failed to create {} instance", $backend_name));
+            info!("Created {} instance", $backend_name);
+            main_test(instance, $verify_result).unwrap();
+        }
+    };
+}
+gpu_test!(dummy_test, "DUMMY", false, {
+    crate::Dummy::create_instance()
+});
+#[cfg(feature = "vulkan")]
+gpu_test!(vulkan_test, "VULKAN", true, {
+    crate::Vulkan::create_instance(true)
+});
 #[cfg(feature = "wgpu")]
+gpu_test!(wgpu_vulkan_test, "WGPU_VULKAN", true, {
+    crate::wgpu::Wgpu::create_instance(true, wgpu::Backends::VULKAN)
+});
+#[cfg(feature = "wgpu")]
+#[cfg(target_vendor = "apple")]
+gpu_test!(wgpu_metal_test, "WGPU_METAL", true, {
+    crate::wgpu::Wgpu::create_instance(true, wgpu::Backends::METAL)
+});
+#[cfg(feature = "wgpu")]
+#[cfg(target_os = "windows")]
+gpu_test!(wgpu_dx12_test, "WGPU_DX12", true, {
+    crate::wgpu::Wgpu::create_instance(true, wgpu::Backends::DX12)
+});
+/*#[cfg(feature = "wgpu")]
 #[test]
 pub fn wgpu_test() {
     use crate::wgpu::Wgpu;
@@ -180,21 +214,18 @@ pub fn wgpu_test() {
         .try_init();
     info!("Wgpu test");
     let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
+    for backend in [
+        (wgpu::Backend::Vulkan, "VULKAN"),
+        #[cfg(target_vendor = "apple")]
+        (wgpu::Backend::Metal, "METAL"),
+        #[cfg(target_os = "windows")]
+        (wgpu::Backend::Dx12, "DX12"),
+    ] {
+
+    }
     let instance = Wgpu::create_instance(true).unwrap();
     drop(_lock);
+    if std::env::var("SUPASIM_WGPU_TEST")
     info!("Created wgpu instance");
     main_test::<Wgpu>(instance, true).unwrap();
-}
-#[test]
-pub fn dummy_test() {
-    use crate::dummy::Dummy;
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .try_init();
-    info!("Dummy test");
-    let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
-    let instance = Dummy::create_instance();
-    drop(_lock);
-    info!("Created dummy instance");
-    main_test::<Dummy>(instance, false).unwrap();
-}
+}*/

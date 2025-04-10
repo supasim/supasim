@@ -77,6 +77,7 @@ impl Vulkan {
     pub fn create_instance(debug: bool) -> Result<VulkanInstance, VulkanError> {
         // TODO: currently, if this errors, memory leaks happen.
         unsafe {
+            let err = Cell::new(true);
             let entry = Entry::load()?;
             let app_info =
                 vk::ApplicationInfo::default().api_version(vk::make_api_version(0, 1, 2, 0));
@@ -159,6 +160,11 @@ impl Vulkan {
                     .enabled_extension_names(&extension_names),
                 None,
             )?;
+            defer! {
+                if err.get() {
+                    instance.destroy_instance(None);
+                }
+            }
             let debug_callback = if debug {
                 let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
                     .message_severity(
@@ -179,6 +185,14 @@ impl Vulkan {
             } else {
                 None
             };
+            defer! {
+                if err.get() {
+                    if let Some(debug_callback) = debug_callback {
+                        let debug_utils_loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
+                        debug_utils_loader.destroy_debug_utils_messenger(debug_callback, None);
+                    }
+                }
+            }
             // TODO: add phyd filtering
             let (phyd, queue_family_idx) = instance
                 .enumerate_physical_devices()?
@@ -216,17 +230,24 @@ impl Vulkan {
                 .push_next(&mut timeline_semaphore)
                 .push_next(&mut sync2);
             let device = instance.create_device(phyd, &dev_create_info, None)?;
+            defer! {
+                if err.get() {
+                    device.destroy_device(None);
+                }
+            }
             let queue = device.get_device_queue(queue_family_idx, 0);
-            Self::from_existing(
+            let s = Self::from_existing(
                 debug,
-                entry,
-                instance,
-                device,
+                entry.clone(),
+                instance.clone(),
+                device.clone(),
                 phyd,
                 queue,
                 queue_family_idx,
                 debug_callback,
-            )
+            )?;
+            err.set(false);
+            Ok(s)
         }
     }
     /// # Safety
@@ -250,6 +271,7 @@ impl Vulkan {
         debug_callback: Option<vk::DebugUtilsMessengerEXT>,
     ) -> Result<VulkanInstance, VulkanError> {
         unsafe {
+            let err = Cell::new(true);
             let alloc = Allocator::new(&AllocatorCreateDesc {
                 instance: instance.clone(),
                 device: device.clone(),
@@ -273,11 +295,16 @@ impl Vulkan {
                     .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
                 None,
             )?;
-            Ok(VulkanInstance {
+            defer! {
+                if err.get() {
+                    device.destroy_command_pool(pool, None);
+                }
+            }
+            let s = VulkanInstance {
                 sync2_dev: khr::synchronization2::Device::new(&instance, &device),
                 entry,
                 instance,
-                device,
+                device: device.clone(),
                 _phyd: phyd,
                 alloc: Mutex::new(alloc),
                 queue,
@@ -286,7 +313,9 @@ impl Vulkan {
                 unused_command_buffers: Vec::new(),
                 unused_events: Vec::new(),
                 debug: debug_callback,
-            })
+            };
+            err.set(false);
+            Ok(s)
         }
     }
 }

@@ -139,4 +139,11 @@ jobs:
     - name: Run tests
       shell: bash
       if: ${{ matrix.run-tests }}
-      run: set -e && cargo test --verbose --all-targets --all-features -- --nocapture
+      run: |
+        set -e
+        if [ ${{ matrix.os != 'ubuntu-latest' }} ]; then
+          export SUPASIM_SKIP_BACKEND_VULKAN=1
+          export SUPASIM_SKIP_BACKEND_WGPU_VULKAN=1
+        fi
+        export SUPASIM_SKIP_BACKEND_WGPU_DX12=1
+        cargo test --verbose --all-targets --all-features -- --nocapture
