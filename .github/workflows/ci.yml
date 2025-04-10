@@ -42,15 +42,9 @@ jobs:
 
         # We need to use cygpath to convert PWD to a windows path as we're using bash.
         echo "VK_DRIVER_FILES=`cygpath --windows $PWD/mesa/lvp_icd.x86_64.json`" >> "$GITHUB_ENV"
-        echo "VK_ICD_FILENAMES=$(cygpath --windows "$PWD/mesa/lvp_icd.x86_64.json")" >> "$GITHUB_ENV"
         echo "GALLIUM_DRIVER=llvmpipe" >> "$GITHUB_ENV"
-        echo "MESA_VK_DEVICE_SELECT=0" >> "$GITHUB_ENV"
-        echo "MESA_LOADER_DRIVER_OVERRIDE=llvmpipe" >> "$GITHUB_ENV"
-        echo "LIBGL_ALWAYS_SOFTWARE=true" >> "$GITHUB_ENV"
-        # Put mesa at the start of the path
-        echo "$(cygpath --windows "$PWD/mesa")" | cat - $GITHUB_PATH > temp && mv temp $GITHUB_PATH
+        cat $GITHUB_PATH
         
-
     - name: Install Vulkan SDK
       shell: bash
       run: |
@@ -60,8 +54,6 @@ jobs:
         echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin" >> "$GITHUB_PATH"
         export VULKAN_SDK="C:/VulkanSDK/${{ env.VULKAN_VERSION }}/"
         echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
-        echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin" >> "$GITHUB_PATH"
-        echo "VK_LAYER_PATH=C:/VulkanSdk/${{ env.VULKAN_VERSION }}/etc/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
 
     - name: Print vulkaninfo
       shell: bash
@@ -99,8 +91,9 @@ jobs:
         ls -R $HOME/VulkanSdk
         echo "$HOME/VulkanSDK/macOS/bin" >> "$GITHUB_PATH"
         echo "VULKAN_SDK=$HOME/VulkanSdk/macOS" >> "$GITHUB_ENV"
-        export DYLD_LIBRARY_PATH="$HOME/VulkanSdk/macOS/lib:$DYLD_LIBRARY_PATH"
-        echo "DYLD_LIRARY_PATH=$DYLD_LIRARY_PATH" >> "$GITHUB_ENV"
+        mkdir -p target/debug/deps
+        cp -v "$HOME/VulkanSdk/macOS/lib/*" target/debug/
+        cp -v "$HOME/VulkanSdk/macOS/lib/*" target/debug/deps
     
     - name: Build
       shell: bash
