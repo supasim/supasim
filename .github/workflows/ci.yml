@@ -96,7 +96,21 @@ jobs:
         cp -v "$HOME/VulkanSdk/macOS/lib"/*.dylib target/debug/deps
         echo "VK_ICD_FILENAMES=$HOME/VulkanSdk/macOS/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
         echo "VK_LAYER_PATH=$HOME/VulkanSdk/macOS/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
-    
+
+    - name: Verify installs
+      shell: bash
+      run: |
+        echo ICD
+        echo $VK_ICD_FILENAMES
+        cat $VK_ICD_FILENAMES
+        echo Layers
+        echo $VK_LAYER_PATH
+        ls $VK_LAYER_PATH
+        echo SDK
+        echo $VULKAN_SDK
+        ls $VULKAN_SDK
+        echo $PATH
+      
     - name: Build
       shell: bash
       run: cargo build --verbose --all-targets --all-features
