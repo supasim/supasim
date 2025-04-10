@@ -87,13 +87,15 @@ jobs:
         curl -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/mac/vulkansdk-macos-${{ env.VULKAN_VERSION }}.zip -o vulkan-sdk.zip
         unzip vulkan-sdk.zip -d vulkan-sdk
 
-        sudo ./vulkan-sdk/InstallVulkan.app/Contents/MacOS/InstallVulkan --root "$HOME/VulkanSDK" --accept-licenses --default-answer --confirm-command install
+        sudo ./vulkan-sdk/InstallVulkan.app/Contents/MacOS/InstallVulkan --root "$HOME/VulkanSdk" --accept-licenses --default-answer --confirm-command install
         ls -R $HOME/VulkanSdk
-        echo "$HOME/VulkanSDK/macOS/bin" >> "$GITHUB_PATH"
+        echo "$HOME/VulkanSdk/macOS/bin" >> "$GITHUB_PATH"
         echo "VULKAN_SDK=$HOME/VulkanSdk/macOS" >> "$GITHUB_ENV"
         mkdir -p target/debug/deps
         cp -v "$HOME/VulkanSdk/macOS/lib"/*.dylib target/debug/
         cp -v "$HOME/VulkanSdk/macOS/lib"/*.dylib target/debug/deps
+        echo "VK_ICD_FILENAMES=$HOME/VulkanSdk/macOS/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
+        echo "VK_LAYER_PATH=$HOME/VulkanSdk/macOS/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
     
     - name: Build
       shell: bash
