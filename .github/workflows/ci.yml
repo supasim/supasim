@@ -41,6 +41,8 @@ jobs:
         cp -v mesa/* target/debug/deps/
 
         # We need to use cygpath to convert PWD to a windows path as we're using bash.
+        echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Bin" >> "$GITHUB_PATH"
+        echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Lib" >> "$GITHUB_PATH"
         echo "VK_DRIVER_FILES=`cygpath --windows $PWD/mesa/lvp_icd.x86_64.json`" >> "$GITHUB_ENV"
         echo "GALLIUM_DRIVER=llvmpipe" >> "$GITHUB_ENV"
         cat $GITHUB_PATH
@@ -51,6 +53,8 @@ jobs:
         set -e
         curl.exe -L --retry 5 https://sdk.lunarg.com/sdk/download/${{ env.VULKAN_VERSION }}/windows/VulkanSDK-${{ env.VULKAN_VERSION }}-Installer.exe -o vulkan-sdk-installer.exe
         ./vulkan-sdk-installer.exe --accept-licenses --default-answer --confirm-command install
+        
+        echo "VULKAN_SDK=C:/VulkanSDK/${{ env.VULKAN_VERSION }}/" >> $GITHUB_ENV
         # Todo: set env variables, install other necessary things, etc
         
     - name: Build
@@ -81,6 +85,11 @@ jobs:
         unzip vulkan-sdk.zip -d vulkan-sdk
 
         sudo ./vulkan-sdk/InstallVulkan.app/Contents/MacOS/InstallVulkan --root "$HOME/VulkanSdk" --accept-licenses --default-answer --confirm-command install
+
+        echo "VULKAN_SDK=$HOME/VulkanSdk/macOS" >> "$GITHUB_ENV"
+        echo "VK_ICD_FILENAMES=$HOME/VulkanSdk/macOS/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
+        echo "VK_LAYER_PATH=$HOME/VulkanSdk/macOS/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
+        echo "DYLD_FALLBACK_LIBRARY_PATH=$HOME/VulkanSdk/macOS/lib" >>"$GITHUB_ENV"
         # Todo: set env variables, install other necessary things, etc
       
     - name: Build
@@ -93,7 +102,6 @@ jobs:
       shell: bash
       if: false
       run: |
-        ls -R "$VULKAN_SDK"
         cargo test --verbose --all-targets --all-features -- --nocapture
     - name: Clippy(no features)
       shell: bash
