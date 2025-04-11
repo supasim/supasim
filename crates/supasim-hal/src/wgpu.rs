@@ -4,6 +4,7 @@ use std::{borrow::Cow, cell::Cell, num::NonZero};
 
 use crate::*;
 use ::wgpu;
+use wgpu::RequestAdapterError;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Wgpu;
@@ -45,7 +46,7 @@ impl Wgpu {
             force_fallback_adapter: false,
             compatible_surface: None,
         }))
-        .ok_or(WgpuError::NoSuitableAdapters)?;
+        .map_err(WgpuError::NoSuitableAdapters)?;
         let mut features = wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
         if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
             features |= wgpu::Features::PIPELINE_CACHE;
@@ -56,15 +57,14 @@ impl Wgpu {
         {
             features |= wgpu::Features::MULTI_DRAW_INDIRECT;
         }
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &wgpu::DeviceDescriptor {
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: None,
                 required_features: features,
                 required_limits: wgpu::Limits::downlevel_defaults(),
                 memory_hints: wgpu::MemoryHints::Performance,
-            },
-            None,
-        ))?;
+                trace: wgpu::Trace::Off,
+            }))?;
         Ok(WgpuInstance {
             instance,
             adapter,
@@ -189,7 +189,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     }
 
     unsafe fn wait_for_idle(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
-        self.device.poll(wgpu::MaintainBase::Wait);
+        self.device.poll(wgpu::MaintainBase::Wait)?;
         Ok(())
     }
 
@@ -206,22 +206,15 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         &mut self,
         infos: &mut [RecorderSubmitInfo<Wgpu>],
     ) -> Result<(), <Wgpu as Backend>::Error> {
+        let mut new_recorders = Vec::new();
+        for _ in 0..infos.len() {
+            new_recorders.push(unsafe { self.create_recorder()? });
+        }
         let idx = self.queue.submit(infos.iter_mut().map(|a| {
-            if let WgpuCommandRecorder::Recorded(b) = a.command_recorder {
-                b.clone()
-            } else {
-                // This stupid pointer nonsense, idk if its correct
-                let recorded = match unsafe { std::ptr::read(a.command_recorder as *const _) } {
-                    WgpuCommandRecorder::Unrecorded(r) => r.finish(),
-                    WgpuCommandRecorder::Recorded(_) => unreachable!(),
-                };
-                unsafe {
-                    std::ptr::write(
-                        a.command_recorder,
-                        WgpuCommandRecorder::Recorded(recorded.clone()),
-                    )
-                }
-                recorded
+            let thing = std::mem::replace(a.command_recorder, new_recorders.pop().unwrap());
+            match thing {
+                WgpuCommandRecorder::Unrecorded(a) => a.finish(),
+                WgpuCommandRecorder::Recorded(a) => a,
             }
         }));
         for info in infos {
@@ -245,16 +238,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         buffers: &mut [&mut <Wgpu as Backend>::CommandRecorder],
     ) -> Result<(), <Wgpu as Backend>::Error> {
         for b in buffers {
-            let r = match b {
-                WgpuCommandRecorder::Recorded(b) => unsafe {
-                    std::ptr::read(b as *const _); // Call destructor
-                    self.create_recorder()?
-                },
-                WgpuCommandRecorder::Unrecorded(r) => {
-                    WgpuCommandRecorder::Unrecorded(unsafe { std::ptr::read(r as *const _) })
-                }
-            };
-            unsafe { std::ptr::write(*b, r) };
+            **b = unsafe { self.create_recorder()? };
         }
         Ok(())
     }
@@ -342,12 +326,13 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         &mut self,
         buffer: &<Wgpu as Backend>::Buffer,
     ) -> Result<*mut u8, <Wgpu as Backend>::Error> {
+        // Todo: this is awful code
         let ptr = match buffer.mapped_ptr.get() {
             Some(ptr) => ptr,
             None => {
                 let slice = buffer.inner.slice(..);
                 slice.map_async(wgpu::MapMode::Write, |_| ());
-                self.device.poll(wgpu::Maintain::Poll);
+                self.device.poll(wgpu::PollType::Poll)?;
                 slice.get_mapped_range_mut().as_mut_ptr()
             }
         };
@@ -475,7 +460,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
     ) -> Result<(), <Wgpu as Backend>::Error> {
         let r = match self {
             Self::Unrecorded(r) => r,
-            Self::Recorded(_) => unreachable!(),
+            _ => unreachable!(),
         };
         for command in commands {
             match command {
@@ -575,7 +560,7 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
         if let Some(a) = self.inner.get_mut() {
             instance
                 .device
-                .poll(wgpu::Maintain::WaitForSubmissionIndex(a.clone()));
+                .poll(wgpu::PollType::WaitForSubmissionIndex(a.clone()))?;
         }
         self.inner.set(None);
         Ok(())
@@ -585,7 +570,10 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
         instance: &mut <Wgpu as Backend>::Instance,
     ) -> Result<bool, <Wgpu as Backend>::Error> {
         if self.inner.get_mut().is_some() {
-            Ok(instance.device.poll(wgpu::Maintain::Poll).is_queue_empty())
+            Ok(instance
+                .device
+                .poll(wgpu::PollType::Poll)
+                .is_ok_and(|a| a.wait_finished()))
         } else {
             Ok(true)
         }
@@ -603,10 +591,12 @@ impl Event<Wgpu> for WgpuEvent {}
 pub enum WgpuError {
     #[error("Wgpu internal error: {0}")]
     WgpuError(#[from] wgpu::Error),
-    #[error("No suitable adapters found")]
-    NoSuitableAdapters,
+    #[error("No suitable adapters found: {0}")]
+    NoSuitableAdapters(#[from] RequestAdapterError),
     #[error("Error requesting wgpu device: {0}")]
     RequestDevice(#[from] wgpu::RequestDeviceError),
+    #[error("Error polling: {0}")]
+    PollError(#[from] wgpu::PollError),
 }
 impl Error<Wgpu> for WgpuError {
     fn is_out_of_device_memory(&self) -> bool {
@@ -616,6 +606,6 @@ impl Error<Wgpu> for WgpuError {
         false
     }
     fn is_timeout(&self) -> bool {
-        false
+        matches!(self, Self::PollError(wgpu::PollError::Timeout))
     }
 }

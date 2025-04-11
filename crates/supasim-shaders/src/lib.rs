@@ -6,7 +6,7 @@ use rand::Rng;
 use slang::Downcast;
 #[allow(unused_imports)]
 use std::ptr::null_mut;
-use std::{ffi::CString, io::Write, path::Path, process::Command, str::FromStr};
+use std::{ffi::CString, io::Write, path::Path, str::FromStr};
 use tempfile::tempdir;
 use types::ShaderReflectionInfo;
 pub use types::{ShaderModel, ShaderTarget, SpirvVersion};
@@ -173,10 +173,8 @@ impl GlobalState {
             Ok(result)
         }
     }
+    #[cfg(target_os = "macos")]
     fn compile_metallib(module: &[u8], temp_dir: &Path) -> Result<Vec<u8>> {
-        if cfg!(not(target_os = "macos")) {
-            return Err(anyhow!("MetalLib compilation is only supported on macOS"));
-        }
         let inter_path = format!("{}/inter.air", temp_dir.to_str().unwrap());
         let out_path = format!("{}/out.metallib", temp_dir.to_str().unwrap());
         let mut metal = Command::new("xcrun")
@@ -284,6 +282,10 @@ impl GlobalState {
                     "Shader compiler was not compiled with advanced cross compilation support"
                 ));
             }
+        }
+        if matches!(options.target, ShaderTarget::MetalLib { .. }) {
+            #[cfg(not(target_os = "macos"))]
+            return Err(anyhow!("MetalLib compilation is only supported on macOS"));
         }
         let mut _tempdir = None;
         let (source_file, _source, search_dir) = match options.source {
@@ -455,6 +457,7 @@ impl GlobalState {
                 _other_blob = res;
                 data = &_other_blob;
             }
+            #[cfg(target_os = "macos")]
             if let ShaderTarget::MetalLib { .. } = options.target {
                 if _tempdir.is_none() {
                     _tempdir = Some(tempdir()?);
