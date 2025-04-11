@@ -186,7 +186,7 @@ impl GlobalState {
                 "-x", // The input doesn't have extension, so specify it is MSL
                 "metal",
                 "-c", // Preprocess, compile, assemble
-                "-", // Stdin input
+                "-",  // Stdin input
                 "-o",
                 &inter_path,
             ])
