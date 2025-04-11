@@ -15,6 +15,7 @@ env:
   RUST_BACKTRACE: full
   REPO_MSRV: 1.85
   MESA_VERSION: "24.3.4" # Note that this is only for windows
+  WARP_VERSION: "1.0.13"
 jobs:
   Format:
     runs-on: ubuntu-latest
@@ -81,11 +82,24 @@ jobs:
         export LD_LIBRARY_PATH="$INSTALL_DIR/lib:$LD_LIBRARY_PATH"
         echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
         
-    - name: Install Vulkan SDK, Mesa, DXC (Windows)
+    - name: Install Vulkan SDK, Mesa, DXC, Warp (Windows)
       shell: bash
       if: ${{ matrix.os == 'windows-latest' }}
       run: |
         set -e
+
+        # DXC
+        curl.exe -L --retry 5 https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2502/dxc_2025_02_20.zip -o dxc.zip
+        7z.exe e dxc.zip -odxc bin/x64/{dxc.exe,dxcompiler.dll,dxil.dll}
+        cygpath --windows "$PWD/dxc" >> "$GITHUB_PATH"
+
+        # Warp
+        curl.exe -L --retry 5 https://www.nuget.org/api/v2/package/Microsoft.Direct3D.WARP/$WARP_VERSION -o warp.zip
+        7z.exe e warp.zip -owarp build/native/bin/x64/d3d10warp.dll
+        mkdir -p target/debug/deps
+        cp -v warp/d3d10warp.dll target/debug
+        cp -v warp/d3d10warp.dll target/debug/deps
+        echo "$GITHUB_WORKSPACE/warp" >> "$GITHUB_PATH"
         
         # Mesa
         curl.exe -L --retry 5 https://github.com/pal1000/mesa-dist-win/releases/download/$MESA_VERSION/mesa3d-$MESA_VERSION-release-msvc.7z -o mesa.7z
@@ -100,12 +114,6 @@ jobs:
         echo "C:/VulkanSDK/${{ env.VULKAN_VERSION }}/Lib" >> "$GITHUB_PATH"
         export VULKAN_SDK="C:/VulkanSDK/${{ env.VULKAN_VERSION }}/"
         echo "VULKAN_SDK=$VULKAN_SDK" >> $GITHUB_ENV
-
-        # DXC
-        curl.exe -L --retry 5 https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2502/dxc_2025_02_20.zip -o dxc.zip
-        7z.exe e dxc.zip -odxc bin/x64/{dxc.exe,dxcompiler.dll,dxil.dll}
-        # Uncomment this as needed
-        # cygpath --windows "$PWD/dxc" >> "$GITHUB_PATH"
 
     - name: Install Vulkan SDK (MacOS)
       shell: bash
@@ -145,7 +153,9 @@ jobs:
           export SUPASIM_SKIP_BACKEND_VULKAN=1
           export SUPASIM_SKIP_BACKEND_WGPU_VULKAN=1
         fi
-        export SUPASIM_SKIP_BACKEND_WGPU_DX12=1
+        #if [ ${{ matrix.os != 'windows-latest' }} ]; then
+          #export SUPASIM_SKIP_BACKEND_WGPU_DX12=1
+        #fi
 
         # Skip shader targets
         export SUPASIM_SKIP_SHADERS_PTX=1
