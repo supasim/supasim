@@ -176,15 +176,16 @@ impl GlobalState {
     #[cfg(all(target_os = "macos", feature = "msl-stable-out"))]
     fn compile_metallib(module: &[u8], temp_dir: &Path) -> Result<Vec<u8>> {
         use std::process::Command;
-        let inter_path = format!("{}/inter.air", temp_dir.to_str().unwrap());
+        let inter_path = format!("{}/inter.ir", temp_dir.to_str().unwrap());
         let out_path = format!("{}/out.metallib", temp_dir.to_str().unwrap());
         let mut metal = Command::new("xcrun")
             .args([
                 "-sdk",
                 "macosx",
                 "metal",
-                "-x",
+                "-x", // The input doesn't have extension, so specify it is MSL
                 "metal",
+                "-c", // Preprocess, compile, assemble
                 "-", // Stdin input
                 "-o",
                 &inter_path,
