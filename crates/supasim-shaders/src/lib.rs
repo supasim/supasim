@@ -202,10 +202,6 @@ impl GlobalState {
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
-        println!(
-            "Air file contents: {}",
-            std::fs::read_to_string(&inter_path)?
-        );
         let output = Command::new("xcrun")
             .args(["-sdk", "macosx", "metallib", &inter_path, "-o", &out_path])
             .output()?;
