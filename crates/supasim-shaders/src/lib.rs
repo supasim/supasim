@@ -175,6 +175,7 @@ impl GlobalState {
     }
     #[cfg(target_os = "macos")]
     fn compile_metallib(module: &[u8], temp_dir: &Path) -> Result<Vec<u8>> {
+        use std::process::Command;
         let inter_path = format!("{}/inter.air", temp_dir.to_str().unwrap());
         let out_path = format!("{}/out.metallib", temp_dir.to_str().unwrap());
         let mut metal = Command::new("xcrun")
