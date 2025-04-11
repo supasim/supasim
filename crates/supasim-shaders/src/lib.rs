@@ -6,7 +6,7 @@ use rand::Rng;
 use slang::Downcast;
 #[allow(unused_imports)]
 use std::ptr::null_mut;
-use std::{ffi::CString, io::Write, path::Path, str::FromStr};
+use std::{ffi::CString, io::Write, path::Path, process::Command, str::FromStr};
 use tempfile::tempdir;
 use types::ShaderReflectionInfo;
 pub use types::{ShaderModel, ShaderTarget, SpirvVersion};
@@ -152,7 +152,9 @@ impl GlobalState {
                 context,
                 match target {
                     ShaderTarget::Glsl => spvc::spvc_backend_SPVC_BACKEND_GLSL,
-                    ShaderTarget::Msl => spvc::spvc_backend_SPVC_BACKEND_MSL,
+                    ShaderTarget::Msl { .. } | ShaderTarget::MetalLib { .. } => {
+                        spvc::spvc_backend_SPVC_BACKEND_MSL
+                    }
                     ShaderTarget::Hlsl => spvc::spvc_backend_SPVC_BACKEND_HLSL,
                     _ => panic!("Transpile spirv called on invalid target"),
                 },
@@ -171,6 +173,42 @@ impl GlobalState {
             Ok(result)
         }
     }
+    fn compile_metallib(module: &[u8], temp_dir: &Path) -> Result<Vec<u8>> {
+        if cfg!(not(target_os = "macos")) {
+            return Err(anyhow!("MetalLib compilation is only supported on macOS"));
+        }
+        let inter_path = format!("{}/inter.air", temp_dir.to_str().unwrap());
+        let out_path = format!("{}/out.metallib", temp_dir.to_str().unwrap());
+        let mut metal = Command::new("xcrun")
+            .args([
+                "-sdk",
+                "macosx",
+                "metal",
+                "-", // Stdin input
+                "-o",
+                &inter_path,
+            ])
+            .stdin(std::process::Stdio::piped())
+            .spawn()?;
+        metal.stdin.as_mut().unwrap().write_all(module)?;
+        let output = metal.wait_with_output()?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "Metal compilation failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        let output = Command::new("xcrun")
+            .args(["-sdk", "macosx", "metallib", &inter_path, "-o", &out_path])
+            .output()?;
+        if !output.status.success() {
+            return Err(anyhow!(
+                "Metal compilation failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+        Ok(std::fs::read(&out_path)?)
+    }
     pub fn new_from_env() -> Result<Self> {
         let global_session = slang::GlobalSession::new().unwrap();
         Ok(Self {
@@ -183,11 +221,18 @@ impl GlobalState {
         let (target, needs_spirv_transpile) = match options.target {
             ShaderTarget::Ptx => (slang::CompileTarget::Ptx, false),
             ShaderTarget::CudaCpp => (slang::CompileTarget::CudaSource, false),
-            ShaderTarget::Msl => {
+            ShaderTarget::Msl { .. } | ShaderTarget::MetalLib { .. } => {
                 if extra_optim || options.stability != StabilityGuarantee::Experimental {
                     (slang::CompileTarget::Spirv, true)
                 } else {
-                    (slang::CompileTarget::Metal, false)
+                    (
+                        if let ShaderTarget::MetalLib { .. } = options.target {
+                            slang::CompileTarget::MetalLib
+                        } else {
+                            slang::CompileTarget::Metal
+                        },
+                        false,
+                    )
                 }
             }
             ShaderTarget::Spirv { .. } => (slang::CompileTarget::Spirv, false),
@@ -202,10 +247,12 @@ impl GlobalState {
             ShaderTarget::Hlsl => (slang::CompileTarget::Hlsl, false),
             ShaderTarget::Dxil { .. } => (slang::CompileTarget::Hlsl, false),
         };
-        if options.target == ShaderTarget::Msl && needs_spirv_transpile {
+        if options.target.metal_version().is_some() && needs_spirv_transpile {
             #[cfg(not(feature = "msl-stable-out"))]
             {
-                return Err(anyhow!("Shader compiler was not compiled with MSL support"));
+                return Err(anyhow!(
+                    "Shader compiler was not compiled with MSL or MetalLib support"
+                ));
             }
         } else if options.target == ShaderTarget::Wgsl {
             #[cfg(not(feature = "wgsl-out"))]
@@ -238,7 +285,7 @@ impl GlobalState {
                 ));
             }
         }
-        let _tempdir;
+        let mut _tempdir = None;
         let (source_file, _source, search_dir) = match options.source {
             ShaderSource::File(f) => (
                 f.to_owned(),
@@ -246,8 +293,9 @@ impl GlobalState {
                 CString::from_str(f.parent().unwrap().to_str().unwrap())?,
             ),
             ShaderSource::Memory(m) => {
-                _tempdir = tempdir()?;
-                let mut path = _tempdir.path().to_owned();
+                let tempdir = tempdir()?;
+                let mut path = tempdir.path().to_owned();
+                _tempdir = Some(tempdir);
                 path.push(format!("{}.tmp.slang", rand::rng().random::<u64>()));
                 let mut f = std::fs::File::create_new(&path)?;
 
@@ -302,6 +350,12 @@ impl GlobalState {
             } else {
                 unreachable!();
             }
+        } else if target == slang::CompileTarget::Metal || target == slang::CompileTarget::MetalLib
+        {
+            opt = opt.capability(
+                self.slang_session
+                    .find_capability(options.target.metal_version().unwrap().to_str()),
+            )
         }
         if !profile.is_unknown() {
             opt = opt.profile(profile);
@@ -367,7 +421,6 @@ impl GlobalState {
             */
         }
         let bytecode = linked_program.entry_point_code(0, 0)?;
-        let mut _stringcode = String::new();
         let mut _other_blob = Vec::<u8>::new();
 
         #[allow(unused_mut)] // In case no features, so this doesn't get flagged
@@ -381,20 +434,35 @@ impl GlobalState {
 
         #[cfg(feature = "opt-valid")]
         if extra_valid && needs_spirv_transpile {
-            Self::validate_spv(bytemuck::cast_slice(data), spirv_version)?;
+            let vec = bytecode.as_slice().to_owned();
+            Self::validate_spv(bytemuck::cast_slice(&vec), spirv_version)?;
         }
         #[cfg(feature = "opt-valid")]
         if extra_optim && needs_spirv_transpile {
-            _other_blob = Self::optimize_spv(bytemuck::cast_slice(data), spirv_version)?;
+            let vec = bytecode.as_slice().to_owned();
+            _other_blob = Self::optimize_spv(bytemuck::cast_slice(&vec), spirv_version)?;
             data = &_other_blob;
         }
 
         #[cfg(feature = "msl-stable-out")]
-        if options.target == ShaderTarget::Msl && needs_spirv_transpile {
-            let vec = bytecode.as_slice().to_owned();
-            let res = Self::transpile_spirv(bytemuck::cast_slice(&vec), ShaderTarget::Msl)?;
-            _other_blob = res;
-            data = &_other_blob;
+        if needs_spirv_transpile {
+            if let Some(version) = options.target.metal_version() {
+                let vec = bytecode.as_slice().to_owned();
+                let res = Self::transpile_spirv(
+                    bytemuck::cast_slice(&vec),
+                    ShaderTarget::Msl { version },
+                )?;
+                _other_blob = res;
+                data = &_other_blob;
+            }
+            if let ShaderTarget::MetalLib { .. } = options.target {
+                if _tempdir.is_none() {
+                    _tempdir = Some(tempdir()?);
+                }
+                let res = Self::compile_metallib(data, _tempdir.unwrap().path())?;
+                _other_blob = res;
+                data = &_other_blob;
+            }
         }
         #[cfg(feature = "wgsl-out")]
         if options.target == ShaderTarget::Wgsl && needs_spirv_transpile {
@@ -412,12 +480,13 @@ impl GlobalState {
                 naga::valid::Capabilities::all(),
             );
             let info = valid.validate(&module)?;
-            _stringcode = naga::back::wgsl::write_string(
+            _other_blob = naga::back::wgsl::write_string(
                 &module,
                 &info,
                 naga::back::wgsl::WriterFlags::empty(),
-            )?;
-            data = _stringcode.as_bytes();
+            )?
+            .into_bytes();
+            data = &_other_blob;
         }
 
         #[cfg(feature = "spirv-cross")]

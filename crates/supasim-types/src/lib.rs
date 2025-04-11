@@ -72,16 +72,32 @@ impl ShaderModel {
         }
     }
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MetalVersion {
+    #[default]
+    V2_3,
+    V3_1,
+}
+impl MetalVersion {
+    pub fn to_str(&self) -> &str {
+        use MetalVersion::*;
+        match self {
+            V2_3 => "metallib_2_3",
+            V3_1 => "metallib_3_1",
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShaderTarget {
     CudaCpp,
     Ptx,
-    Spirv { version: SpirvVersion },
-    Msl,
-    Hlsl,
-    Glsl,
     Wgsl,
+    Glsl,
+    Spirv { version: SpirvVersion },
+    Hlsl,
     Dxil { shader_model: ShaderModel },
+    Msl { version: MetalVersion },
+    MetalLib { version: MetalVersion },
 }
 impl ShaderTarget {
     pub fn file_extension(&self) -> &str {
@@ -90,11 +106,18 @@ impl ShaderTarget {
             CudaCpp => "cu",
             Ptx => "ptx",
             Spirv { .. } => "spv",
-            Msl => "metal",
+            Msl { .. } => "metal",
             Hlsl => "hlsl",
             Glsl => "glsl",
             Wgsl => "wgsl",
             Dxil { .. } => "dxil",
+            MetalLib { .. } => "metallib",
+        }
+    }
+    pub fn metal_version(&self) -> Option<MetalVersion> {
+        match self {
+            Self::MetalLib { version } | Self::Msl { version } => Some(*version),
+            _ => None,
         }
     }
 }
