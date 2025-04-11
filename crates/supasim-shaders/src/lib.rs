@@ -192,6 +192,8 @@ impl GlobalState {
             .stdin(std::process::Stdio::piped())
             .spawn()?;
         metal.stdin.as_mut().unwrap().write_all(module)?;
+        metal.stdin.as_mut().unwrap().flush()?;
+        metal.stdin = None; // Close stdin to signal end of input
         let output = metal.wait_with_output()?;
         if !output.status.success() {
             return Err(anyhow!(
@@ -204,7 +206,7 @@ impl GlobalState {
             .output()?;
         if !output.status.success() {
             return Err(anyhow!(
-                "Metal compilation failed: {}",
+                "Metal library linking failed: {}",
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
