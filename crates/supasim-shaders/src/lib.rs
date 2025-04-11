@@ -183,6 +183,8 @@ impl GlobalState {
                 "-sdk",
                 "macosx",
                 "metal",
+                "-x",
+                "metal",
                 "-", // Stdin input
                 "-o",
                 &inter_path,
