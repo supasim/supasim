@@ -1,4 +1,6 @@
 [![CI](https://github.com/supasim/supasim/actions/workflows/ci.yml/badge.svg)](https://github.com/supasim/supasim/actions/workflows/ci.yml)
+[![Lines of code](https://tokei.rs/b1/github/supasim/supasim)](https://github.com/supasim/supasim)
+
 # SupaSim
 
 ## Planned features
