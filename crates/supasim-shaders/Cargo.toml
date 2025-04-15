@@ -32,7 +32,7 @@ spirv-cross-sys = { git = "https://github.com/supasim/spirv-cross-sys.git", opti
 bytemuck.workspace = true
 spirv-tools-sys = { git = "https://github.com/supasim/spirv-tools.git", optional = true }
 libc = "0.2"
-hassle-rs = { version = "0.11", git = "https://github.com/supasim/hassle-rs.git", optional = true }
+hassle-rs = { version = "0.11", git = "https://github.com/supasim/hassle-rs.git", branch = "linux-dxil", optional = true }
 
 types.workspace = true
 
