@@ -278,34 +278,10 @@ gpu_test!(wgpu_vulkan_test, "WGPU_VULKAN", true, {
 #[cfg(feature = "wgpu")]
 #[cfg(target_vendor = "apple")]
 gpu_test!(wgpu_metal_test, "WGPU_METAL", true, {
-    crate::wgpu::Wgpu::create_instance(true, wgpu::Backends::METAL)
+    crate::wgpu::Wgpu::create_instance(true, wgpu::Backends::METAL, None)
 });
 #[cfg(feature = "wgpu")]
 #[cfg(target_os = "windows")]
 gpu_test!(wgpu_dx12_test, "WGPU_DX12", true, {
-    crate::wgpu::Wgpu::create_instance(true, wgpu::Backends::DX12)
+    crate::wgpu::Wgpu::create_instance(true, wgpu::Backends::DX12, None)
 });
-/*#[cfg(feature = "wgpu")]
-#[test]
-pub fn wgpu_test() {
-    use crate::wgpu::Wgpu;
-    let _ = env_logger::builder()
-        .filter_level(log::LevelFilter::Info)
-        .try_init();
-    info!("Wgpu test");
-    let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
-    for backend in [
-        (wgpu::Backend::Vulkan, "VULKAN"),
-        #[cfg(target_vendor = "apple")]
-        (wgpu::Backend::Metal, "METAL"),
-        #[cfg(target_os = "windows")]
-        (wgpu::Backend::Dx12, "DX12"),
-    ] {
-
-    }
-    let instance = Wgpu::create_instance(true).unwrap();
-    drop(_lock);
-    if std::env::var("SUPASIM_WGPU_TEST")
-    info!("Created wgpu instance");
-    main_test::<Wgpu>(instance, true).unwrap();
-}*/
