@@ -11,9 +11,9 @@
 * HIP(maybe, long term)
 * Metal(long term) 2.3 or 2.4 for apple devices with M1 or newer
 * Vulkan for GPUs with somewhat modern capabilities. Currently, that means
-  * At least 16 concurrently executing threadgroups(aka streaming multiprocessors). It seems that all discrete GPUs and desktop integrated GPUs from the past decade have this.
+  * (Not explicitly required but this is optimized for) At least 16 concurrently executing threadgroups(aka streaming multiprocessors). It seems that all discrete GPUs and desktop integrated GPUs from the past decade have this.
   * Allow threadgroups with 1024 threads. All systems I checked have exactly this limit.
-  * Warp size that is a factor/multiple of 64 - lowest I could find is 15 year old Nvidia GPUs with 16. No reason this wouldn't be a power of 2.
+  * Warp size that is a factor/multiple of 32 - lowest I could find is 15 year old Nvidia GPUs with 16. No reason this wouldn't be a power of 2.
 
 ### Graphics
 * WGPU powered
