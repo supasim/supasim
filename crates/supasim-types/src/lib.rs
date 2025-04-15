@@ -4,28 +4,25 @@ pub use daggy::petgraph::algo::toposort;
 pub use daggy::petgraph::graph::NodeIndex;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum MemoryType {
+pub enum BufferType {
     /// Driver decides
     #[default]
     Any,
-    /// Only used on GPU
-    GpuOnly,
-    /// Best for uploading data to GPU
+    /// Used for kernel access. Memory type on GPU that can be copied around on GPU but is optimized for local access.
+    Storage,
+    /// Best for uploading data to GPU. Memory type on GPU that can be written to from CPU and copied from on GPU.
     Upload,
-    /// Best for downloading data from GPU
+    /// Best for downloading data from GPU. Memory type on GPU that can be copied to from GPU and read from CPU.
     Download,
-    /// Both upload and download supported, optimized for download
-    UploadDownload,
+    /// Can be copied to from GPU and used in other use cases such as uniform buffers.
+    Other,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BufferDescriptor {
     pub size: u64,
-    pub memory_type: MemoryType,
-    pub mapped_at_creation: bool,
+    pub memory_type: BufferType,
     pub visible_to_renderer: bool,
     pub indirect_capable: bool,
-    pub transfer_src: bool,
-    pub transfer_dst: bool,
     pub uniform: bool,
     pub needs_flush: bool,
 }
@@ -147,6 +144,8 @@ pub struct InstanceProperties {
     pub easily_update_bind_groups: bool,
     /// Whether the backend supports CPU->GPU communication using semaphore signalling.
     pub semaphore_signal: bool,
+    /// Whether the system has unified memory, which provides opportunities for optimization, particularly on apple, mobile, or other devices with integrated GPUs
+    pub is_unified_memory: bool,
 }
 /// # Safety
 /// This is undefined behavior lol

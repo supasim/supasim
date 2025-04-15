@@ -24,7 +24,7 @@ pub use bytemuck;
 pub use hal;
 pub use shaders;
 pub use types::{
-    MemoryType, ShaderModel, ShaderReflectionInfo, ShaderResourceType, ShaderTarget, SpirvVersion,
+    BufferType, ShaderModel, ShaderReflectionInfo, ShaderResourceType, ShaderTarget, SpirvVersion,
 };
 
 pub type UserBufferAccessClosure<B> = Box<dyn FnOnce(&mut [MappedBuffer<B>]) -> anyhow::Result<()>>;
@@ -148,14 +148,8 @@ impl<T> DerefMut for InnerRefMut<'_, T> {
 pub struct BufferDescriptor {
     /// The size needed in bytes
     pub size: u64,
-    /// The type of memory and usage
-    pub memory_type: MemoryType,
     /// Whether this can be used as an indirect buffer for indirect dispatch calls
     pub indirect_capable: bool,
-    /// Whether this can be the source for a copy
-    pub transfer_src: bool,
-    /// Whether this can be the destination for a copy
-    pub transfer_dst: bool,
     /// Whether the buffer is used for uniform data(small amount of data which can be **read** from all threads in a dispatch quickly)
     pub uniform: bool,
     /// The value that the contents of the buffer must be aligned to. This is important for when supasim must detect
@@ -167,10 +161,7 @@ impl Default for BufferDescriptor {
     fn default() -> Self {
         Self {
             size: 0,
-            memory_type: MemoryType::Any,
             indirect_capable: false,
-            transfer_src: true,
-            transfer_dst: true,
             uniform: false,
             contents_align: 0,
             priority: 1.0,
@@ -181,12 +172,13 @@ impl From<BufferDescriptor> for types::BufferDescriptor {
     fn from(s: BufferDescriptor) -> types::BufferDescriptor {
         types::BufferDescriptor {
             size: s.size,
-            memory_type: s.memory_type,
-            mapped_at_creation: false,
+            memory_type: if s.indirect_capable || s.uniform {
+                types::BufferType::Other
+            } else {
+                types::BufferType::Storage
+            },
             visible_to_renderer: false,
             indirect_capable: s.indirect_capable,
-            transfer_src: true,
-            transfer_dst: true,
             uniform: s.uniform,
             needs_flush: true,
         }
@@ -365,6 +357,7 @@ pub struct InstanceProperties {
     pub supports_pipeline_cache: bool,
     pub supports_indirect_dispatch: bool,
     pub shader_type: types::ShaderTarget,
+    pub is_unified_memory: bool,
 }
 api_type!(Instance, {
     inner: B::Instance,
@@ -399,6 +392,7 @@ impl<B: hal::Backend> Instance<B> {
             supports_pipeline_cache: v.pipeline_cache,
             supports_indirect_dispatch: v.indirect,
             shader_type: v.shader_type,
+            is_unified_memory: v.is_unified_memory,
         })
     }
     pub fn compile_kernel(
@@ -586,30 +580,42 @@ impl<B: hal::Backend> Instance<B> {
         closure: UserBufferAccessClosure<B>,
         buffers: &[&BufferSlice<B>],
     ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
-        let mut mapped_buffers = Vec::new();
+        let mut buffer_datas = Vec::new();
         for b in buffers {
             b.validate()?;
             b.acquire()?;
             let buffer = b.buffer.inner()?;
             let _instance = buffer.instance.clone();
-            let ptr = unsafe {
-                _instance
-                    .inner_mut()?
-                    .inner
-                    .map_buffer(&buffer.inner)
-                    .map_supasim()?
-                    .add(b.start as usize)
+            let mut data;
+            #[allow(clippy::uninit_vec)]
+            {
+                data = Vec::with_capacity(b.len as usize);
+                unsafe {
+                    data.set_len(b.len as usize);
+                    _instance
+                        .inner_mut()?
+                        .inner
+                        .read_buffer(&buffer.inner, b.start, &mut data)
+                        .map_supasim()?;
+                };
             };
+            buffer_datas.push(data);
+        }
+        let mut mapped_buffers = Vec::new();
+        for (i, a) in buffer_datas.iter_mut().enumerate() {
+            let b = &buffers[i];
             let mapped = MappedBuffer {
                 instance: self.clone(),
-                inner: ptr,
+                inner: a.as_mut_ptr(),
                 len: b.len,
                 buffer: b.buffer.as_inner()?.id,
                 has_mut: b.needs_mut,
+                was_used_mut: false,
             };
             mapped_buffers.push(mapped);
         }
         closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e))?;
+        // TODO: write buffers that need it
         drop(mapped_buffers);
         for b in buffers {
             b.release()?;
@@ -889,6 +895,7 @@ pub struct MappedBuffer<B: hal::Backend> {
     len: u64,
     buffer: Id<Buffer<B>>,
     has_mut: bool,
+    was_used_mut: bool,
 }
 impl<B: hal::Backend> MappedBuffer<B> {
     pub fn read<T: bytemuck::Pod>(&self) -> SupaSimResult<B, &[T]> {
@@ -917,6 +924,7 @@ impl<B: hal::Backend> MappedBuffer<B> {
         if !self.has_mut {
             return Err(SupaSimError::BufferRegionNotValid);
         }
+        self.was_used_mut = true;
         let buffer_align = self
             .instance
             .inner()?

@@ -18,8 +18,8 @@ use gpu_allocator::{
 use log::{Level, warn};
 use thiserror::Error;
 use types::{
-    BufferDescriptor, Dag, InstanceProperties, ShaderReflectionInfo, ShaderResourceType,
-    SyncOperations, to_static_lifetime,
+    BufferDescriptor, BufferType, Dag, InstanceProperties, ShaderReflectionInfo,
+    ShaderResourceType, SyncOperations, to_static_lifetime,
 };
 
 use scopeguard::defer;
@@ -75,7 +75,6 @@ impl Vulkan {
         vk::FALSE
     }
     pub fn create_instance(debug: bool) -> Result<VulkanInstance, VulkanError> {
-        // TODO: currently, if this errors, memory leaks happen.
         unsafe {
             let err = Cell::new(true);
             let entry = Entry::load()?;
@@ -305,7 +304,7 @@ impl Vulkan {
                 entry,
                 instance,
                 device: device.clone(),
-                _phyd: phyd,
+                phyd,
                 alloc: Mutex::new(alloc),
                 queue,
                 queue_family_idx,
@@ -375,7 +374,7 @@ pub struct VulkanInstance {
     entry: ash::Entry,
     instance: ash::Instance,
     device: ash::Device,
-    _phyd: vk::PhysicalDevice,
+    phyd: vk::PhysicalDevice,
     alloc: Mutex<Allocator>,
     queue: vk::Queue,
     queue_family_idx: u32,
@@ -424,15 +423,31 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         Ok(())
     }
     fn get_properties(&mut self) -> InstanceProperties {
+        let is_unified_memory = unsafe {
+            let memory_props = self
+                .instance
+                .get_physical_device_memory_properties(self.phyd);
+            // The idea here is that implementations are required to provide a host visible and coherent memory type.
+            // Heaps and types are different, but implementations generally provide (pinned) system memory as a heap.
+            // If this heap isn't separate from the device heap, we know any system memory type is also device local.
+            // The spec recommends this for UMA systems: https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#memory-device
+            memory_props.memory_heaps.len() == 1
+                && memory_props.memory_heaps_as_slice()[0]
+                    .flags
+                    .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
+        };
         InstanceProperties {
             sync_mode: types::SyncMode::VulkanStyle,
             indirect: false,
             pipeline_cache: true,
+            // TODO: detect spirv version
             shader_type: types::ShaderTarget::Spirv {
                 version: types::SpirvVersion::V1_0,
             },
             easily_update_bind_groups: false,
             semaphore_signal: true,
+            // TODO: add unified memory detection
+            is_unified_memory,
         }
     }
     unsafe fn compile_kernel(
@@ -568,20 +583,20 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .queue_family_indices(&queue_family_indices)
                 .usage({
                     use vk::BufferUsageFlags as F;
-                    let mut flags = F::empty();
-                    if alloc_info.transfer_src {
-                        flags |= F::TRANSFER_SRC
+                    let mut flags = match alloc_info.memory_type {
+                        BufferType::Storage => {
+                            F::TRANSFER_SRC | F::TRANSFER_DST | F::STORAGE_BUFFER
+                        }
+                        BufferType::Upload => F::TRANSFER_SRC,
+                        BufferType::Download => F::TRANSFER_DST,
+                        BufferType::Other => F::TRANSFER_DST,
+                        BufferType::Any => unreachable!(),
                     };
-                    if alloc_info.transfer_dst {
-                        flags |= F::TRANSFER_DST
-                    }
                     if alloc_info.indirect_capable {
-                        flags |= F::INDIRECT_BUFFER
+                        flags |= F::INDIRECT_BUFFER | F::STORAGE_BUFFER
                     }
                     if alloc_info.uniform {
                         flags |= F::UNIFORM_BUFFER
-                    } else {
-                        flags |= F::STORAGE_BUFFER
                     };
                     flags
                 });
@@ -592,7 +607,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 }
             }
             let requirements = self.device.get_buffer_memory_requirements(buffer);
-            use types::MemoryType::*;
+            use types::BufferType::*;
             let mut allocation = self
                 .alloc
                 .lock()
@@ -602,10 +617,10 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     requirements,
                     location: match alloc_info.memory_type {
                         Any => gpu_allocator::MemoryLocation::Unknown,
-                        GpuOnly => gpu_allocator::MemoryLocation::GpuOnly,
+                        Storage => gpu_allocator::MemoryLocation::GpuOnly,
                         Upload => gpu_allocator::MemoryLocation::CpuToGpu,
                         Download => gpu_allocator::MemoryLocation::GpuToCpu,
-                        UploadDownload => gpu_allocator::MemoryLocation::CpuToGpu,
+                        Other => gpu_allocator::MemoryLocation::GpuOnly,
                     },
                     linear: true,
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
@@ -619,7 +634,11 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             self.device
                 .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
             err.set(false);
-            assert!(allocation.mapped_ptr().is_some());
+            if alloc_info.memory_type == BufferType::Upload
+                || alloc_info.memory_type == BufferType::Download
+            {
+                assert!(allocation.mapped_ptr().is_some());
+            }
             Ok(VulkanBuffer {
                 buffer,
                 allocation,
@@ -1004,18 +1023,6 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(())
         }
     }
-    unsafe fn map_buffer(
-        &mut self,
-        buffer: &<Vulkan as Backend>::Buffer,
-    ) -> Result<*mut u8, <Vulkan as Backend>::Error> {
-        Ok(buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8)
-    }
-    unsafe fn unmap_buffer(
-        &mut self,
-        _buffer: &<Vulkan as Backend>::Buffer,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        Ok(())
-    }
     unsafe fn write_buffer(
         &mut self,
         buffer: &<Vulkan as Backend>::Buffer,
@@ -1023,10 +1030,10 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         data: &[u8],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            let b = self.map_buffer(buffer)?.add(offset as usize);
+            let b =
+                (buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8).add(offset as usize);
             let slice = std::slice::from_raw_parts_mut(b, data.len());
             slice.copy_from_slice(data);
-            self.unmap_buffer(buffer)?;
             Ok(())
         }
     }
@@ -1037,10 +1044,10 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         data: &mut [u8],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            let b = self.map_buffer(buffer)?.add(offset as usize);
+            let b =
+                (buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8).add(offset as usize);
             let slice = std::slice::from_raw_parts(b as *const u8, data.len());
             data.copy_from_slice(slice);
-            self.unmap_buffer(buffer)?;
         }
         Ok(())
     }

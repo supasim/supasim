@@ -94,7 +94,8 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     /// * All bind groups using this buffer must have been updated or destroyed
     unsafe fn destroy_buffer(&mut self, buffer: B::Buffer) -> Result<(), B::Error>;
     /// # Safety
-    /// All submitted command recorders using this buffer must have completed
+    /// * All submitted command recorders using this buffer must have completed
+    /// * The buffer must be of type `Upload`
     unsafe fn write_buffer(
         &mut self,
         buffer: &B::Buffer,
@@ -103,19 +104,13 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     ) -> Result<(), B::Error>;
     /// # Safety
     /// * All submitted command recorders using this buffer mutably must have completed
+    /// * The buffer must be of type `Download`
     unsafe fn read_buffer(
         &mut self,
         buffer: &B::Buffer,
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), B::Error>;
-    /// # Safety
-    /// * If this map is to be used mutably, all submitted command recorders using this buffer must have completed
-    /// * All submitted command recorders using this buffer mutably must have completed
-    unsafe fn map_buffer(&mut self, buffer: &B::Buffer) -> Result<*mut u8, B::Error>;
-    /// # Safety
-    /// * All pointers to this mapped buffer are invalidated
-    unsafe fn unmap_buffer(&mut self, buffer: &B::Buffer) -> Result<(), B::Error>;
     /// # Safety
     /// * The resources must correspond with the kernel and its layout
     unsafe fn create_bind_group(

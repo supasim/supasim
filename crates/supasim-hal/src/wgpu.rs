@@ -31,6 +31,7 @@ impl Wgpu {
     pub fn create_instance(
         advanced_dbg: bool,
         backends: wgpu::Backends,
+        preset_unified_memory: Option<bool>,
     ) -> Result<WgpuInstance, WgpuError> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             flags: if advanced_dbg {
@@ -47,7 +48,14 @@ impl Wgpu {
             compatible_surface: None,
         }))
         .map_err(WgpuError::NoSuitableAdapters)?;
-        let mut features = wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
+        let unified_memory = if let Some(a) = preset_unified_memory {
+            a
+        } else {
+            let device_type = adapter.get_info().device_type;
+            device_type == wgpu::DeviceType::Cpu || device_type == wgpu::DeviceType::IntegratedGpu
+        };
+
+        let mut features = wgpu::Features::empty();
         if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
             features |= wgpu::Features::PIPELINE_CACHE;
         }
@@ -56,6 +64,9 @@ impl Wgpu {
             .contains(wgpu::Features::MULTI_DRAW_INDIRECT)
         {
             features |= wgpu::Features::MULTI_DRAW_INDIRECT;
+        }
+        if unified_memory {
+            features |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
         }
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -70,6 +81,7 @@ impl Wgpu {
             adapter,
             device,
             queue,
+            unified_memory,
         })
     }
 }
@@ -79,6 +91,7 @@ pub struct WgpuInstance {
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    unified_memory: bool,
 }
 impl BackendInstance<Wgpu> for WgpuInstance {
     fn get_properties(&mut self) -> InstanceProperties {
@@ -97,6 +110,8 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             },
             easily_update_bind_groups: false,
             semaphore_signal: false,
+            // TODO: detect unified memory
+            is_unified_memory: self.unified_memory,
         }
     }
 
@@ -251,33 +266,42 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             label: None,
             size: alloc_info.size,
             usage: {
-                let mut usage = wgpu::BufferUsages::STORAGE;
+                let mut usage = match alloc_info.memory_type {
+                    BufferType::Storage => {
+                        wgpu::BufferUsages::STORAGE
+                            | wgpu::BufferUsages::COPY_SRC
+                            | wgpu::BufferUsages::COPY_DST
+                    }
+                    BufferType::Download => {
+                        wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ
+                    }
+                    BufferType::Upload => {
+                        wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::MAP_WRITE
+                    }
+                    BufferType::Other => wgpu::BufferUsages::COPY_DST,
+                    BufferType::Any => {
+                        unreachable!()
+                    }
+                };
+
                 if alloc_info.indirect_capable {
-                    usage |= wgpu::BufferUsages::INDIRECT;
-                }
-                if alloc_info.transfer_dst {
-                    usage |= wgpu::BufferUsages::COPY_DST;
-                }
-                if alloc_info.transfer_src {
-                    usage |= wgpu::BufferUsages::COPY_SRC;
+                    usage |= wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE;
                 }
                 if alloc_info.uniform {
                     usage |= wgpu::BufferUsages::UNIFORM;
                 }
-                if !matches!(alloc_info.memory_type, MemoryType::GpuOnly) {
-                    usage |= wgpu::BufferUsages::MAP_WRITE;
-                }
                 usage
             },
-            mapped_at_creation: alloc_info.mapped_at_creation,
+            mapped_at_creation: false,
         });
         Ok(WgpuBuffer {
             inner: buffer.clone(),
-            mapped_ptr: Cell::new(if alloc_info.mapped_at_creation {
-                Some(buffer.slice(..).get_mapped_range_mut().as_mut_ptr())
-            } else {
-                None
-            }),
+            mapped_ptr: Cell::new(None),
+            map_mut: match alloc_info.memory_type {
+                BufferType::Download => Some(false),
+                BufferType::Upload => Some(true),
+                _ => None,
+            },
         })
     }
 
@@ -319,33 +343,6 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         if !was_mapped {
             unsafe { self.unmap_buffer(buffer)? };
         }
-        Ok(())
-    }
-
-    unsafe fn map_buffer(
-        &mut self,
-        buffer: &<Wgpu as Backend>::Buffer,
-    ) -> Result<*mut u8, <Wgpu as Backend>::Error> {
-        // Todo: this is awful code
-        let ptr = match buffer.mapped_ptr.get() {
-            Some(ptr) => ptr,
-            None => {
-                let slice = buffer.inner.slice(..);
-                slice.map_async(wgpu::MapMode::Write, |_| ());
-                self.device.poll(wgpu::PollType::Poll)?;
-                slice.get_mapped_range_mut().as_mut_ptr()
-            }
-        };
-        buffer.mapped_ptr.set(Some(ptr));
-        Ok(ptr)
-    }
-
-    unsafe fn unmap_buffer(
-        &mut self,
-        buffer: &<Wgpu as Backend>::Buffer,
-    ) -> Result<(), <Wgpu as Backend>::Error> {
-        buffer.inner.unmap();
-        buffer.mapped_ptr.set(None);
         Ok(())
     }
 
@@ -437,6 +434,41 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 }
+impl WgpuInstance {
+    unsafe fn map_buffer(
+        &mut self,
+        buffer: &<Wgpu as Backend>::Buffer,
+    ) -> Result<*mut u8, <Wgpu as Backend>::Error> {
+        // Todo: this is awful code
+        let ptr = match buffer.mapped_ptr.get() {
+            Some(ptr) => ptr,
+            None => {
+                let slice = buffer.inner.slice(..);
+                slice.map_async(
+                    if buffer.map_mut.unwrap() {
+                        wgpu::MapMode::Write
+                    } else {
+                        wgpu::MapMode::Read
+                    },
+                    |_| (),
+                );
+                self.device.poll(wgpu::PollType::Wait)?;
+                slice.get_mapped_range_mut().as_mut_ptr()
+            }
+        };
+        buffer.mapped_ptr.set(Some(ptr));
+        Ok(ptr)
+    }
+
+    unsafe fn unmap_buffer(
+        &mut self,
+        buffer: &<Wgpu as Backend>::Buffer,
+    ) -> Result<(), <Wgpu as Backend>::Error> {
+        buffer.inner.unmap();
+        buffer.mapped_ptr.set(None);
+        Ok(())
+    }
+}
 pub struct WgpuKernel {
     shader: wgpu::ShaderModule,
     pipeline: wgpu::ComputePipeline,
@@ -446,6 +478,7 @@ impl Kernel<Wgpu> for WgpuKernel {}
 pub struct WgpuBuffer {
     inner: wgpu::Buffer,
     mapped_ptr: Cell<Option<*mut u8>>,
+    map_mut: Option<bool>,
 }
 impl Buffer<Wgpu> for WgpuBuffer {}
 pub enum WgpuCommandRecorder {

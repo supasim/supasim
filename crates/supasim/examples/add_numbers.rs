@@ -8,9 +8,6 @@ pub fn main() {
     let buffer1 = instance
         .create_buffer(&BufferDescriptor {
             size: 16,
-            memory_type: types::MemoryType::Upload,
-            transfer_src: false,
-            transfer_dst: true,
             contents_align: 4,
             ..Default::default()
         })
@@ -18,9 +15,6 @@ pub fn main() {
     let buffer2 = instance
         .create_buffer(&BufferDescriptor {
             size: 16,
-            memory_type: types::MemoryType::Upload,
-            transfer_src: false,
-            transfer_dst: true,
             contents_align: 4,
             ..Default::default()
         })
@@ -28,9 +22,6 @@ pub fn main() {
     let buffer3 = instance
         .create_buffer(&BufferDescriptor {
             size: 16,
-            memory_type: types::MemoryType::Download,
-            transfer_src: true,
-            transfer_dst: false,
             contents_align: 4,
             ..Default::default()
         })

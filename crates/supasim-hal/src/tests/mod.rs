@@ -9,21 +9,17 @@ use types::{BufferDescriptor, ShaderReflectionInfo, ShaderResourceType, SyncOper
 
 unsafe fn create_storage_buf<B: Backend>(
     instance: &mut B::Instance,
-    data: &[u8],
+    size: u64,
 ) -> Result<B::Buffer, B::Error> {
     unsafe {
         let buf = instance.create_buffer(&BufferDescriptor {
-            size: data.len() as u64,
-            memory_type: types::MemoryType::UploadDownload,
-            mapped_at_creation: false,
+            size,
+            memory_type: types::BufferType::Storage,
             visible_to_renderer: false,
             indirect_capable: false,
-            transfer_src: false,
-            transfer_dst: false,
             uniform: false,
             needs_flush: true,
         })?;
-        instance.write_buffer(&buf, 0, data)?;
         Ok(buf)
     }
 }
@@ -63,20 +59,38 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
             },
             cache.as_mut(),
         )?;
-        let uniform_buf = instance.create_buffer(&BufferDescriptor {
+        let upload_buffer = instance.create_buffer(&BufferDescriptor {
             size: 16,
-            memory_type: types::MemoryType::Upload,
-            mapped_at_creation: false,
+            memory_type: types::BufferType::Upload,
             visible_to_renderer: false,
             indirect_capable: false,
-            transfer_src: false,
-            transfer_dst: false,
+            uniform: false,
+            needs_flush: true,
+        })?;
+        let download_buffer = instance.create_buffer(&BufferDescriptor {
+            size: 16,
+            memory_type: types::BufferType::Download,
+            visible_to_renderer: false,
+            indirect_capable: false,
+            uniform: false,
+            needs_flush: true,
+        })?;
+        let uniform_buf = instance.create_buffer(&BufferDescriptor {
+            size: 16,
+            memory_type: types::BufferType::Other,
+            visible_to_renderer: false,
+            indirect_capable: false,
             uniform: true,
             needs_flush: true,
         })?;
-        let sb1 = create_storage_buf::<B>(&mut instance, bytemuck::bytes_of(&[5u32, 0, 0, 0]))?;
-        let sb2 = create_storage_buf::<B>(&mut instance, bytemuck::bytes_of(&[8u32, 0, 0, 0]))?;
-        let sbout = create_storage_buf::<B>(&mut instance, bytemuck::bytes_of(&[2u32, 0, 0, 0]))?;
+        let sb1 = create_storage_buf::<B>(&mut instance, 16)?;
+        let sb2 = create_storage_buf::<B>(&mut instance, 16)?;
+        let sbout = create_storage_buf::<B>(&mut instance, 16)?;
+        instance.write_buffer(
+            &upload_buffer,
+            0,
+            bytemuck::cast_slice(&[5u32, 8u32, 2u32, 0]),
+        )?;
         let bind_group = instance.create_bind_group(
             &mut kernel,
             &[
@@ -95,6 +109,52 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
         recorder.record_commands(
             &mut instance,
             &mut [
+                BufferCommand::CopyBuffer {
+                    src_buffer: &upload_buffer,
+                    dst_buffer: &sb1,
+                    src_offset: 0,
+                    dst_offset: 0,
+                    size: 4,
+                },
+                BufferCommand::CopyBuffer {
+                    src_buffer: &upload_buffer,
+                    dst_buffer: &sb2,
+                    src_offset: 4,
+                    dst_offset: 0,
+                    size: 4,
+                },
+                BufferCommand::CopyBuffer {
+                    src_buffer: &upload_buffer,
+                    dst_buffer: &sbout,
+                    src_offset: 8,
+                    dst_offset: 0,
+                    size: 4,
+                },
+                BufferCommand::MemoryBarrier {
+                    resource: GpuResource::Buffer {
+                        buffer: &sb1,
+                        offset: 0,
+                        size: 16,
+                    },
+                },
+                BufferCommand::MemoryBarrier {
+                    resource: GpuResource::Buffer {
+                        buffer: &sb2,
+                        offset: 0,
+                        size: 16,
+                    },
+                },
+                BufferCommand::MemoryBarrier {
+                    resource: GpuResource::Buffer {
+                        buffer: &sbout,
+                        offset: 0,
+                        size: 16,
+                    },
+                },
+                BufferCommand::PipelineBarrier {
+                    before: SyncOperations::Transfer,
+                    after: SyncOperations::ComputeDispatch,
+                },
                 BufferCommand::DispatchKernel {
                     kernel: &kernel,
                     bind_group: &bind_group,
@@ -118,6 +178,24 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
                     push_constants: &[],
                     workgroup_dims: [1, 1, 1],
                 },
+                BufferCommand::MemoryBarrier {
+                    resource: GpuResource::Buffer {
+                        buffer: &sbout,
+                        offset: 0,
+                        size: 16,
+                    },
+                },
+                BufferCommand::PipelineBarrier {
+                    before: SyncOperations::ComputeDispatch,
+                    after: SyncOperations::Transfer,
+                },
+                BufferCommand::CopyBuffer {
+                    src_buffer: &sbout,
+                    dst_buffer: &download_buffer,
+                    src_offset: 0,
+                    dst_offset: 0,
+                    size: 16,
+                },
             ],
         )?;
         info!("Recorded commands");
@@ -130,7 +208,7 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
         fun_semaphore.wait(&mut instance)?;
 
         let mut res = [3u32, 0, 0, 0];
-        instance.read_buffer(&sbout, 0, bytemuck::cast_slice_mut(&mut res))?;
+        instance.read_buffer(&download_buffer, 0, bytemuck::cast_slice_mut(&mut res))?;
         if check_result && res[0] != 26 {
             panic!("Expected 26, got {}", res[0]);
         }
@@ -148,6 +226,8 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
         instance.destroy_buffer(sb1)?;
         instance.destroy_buffer(sb2)?;
         instance.destroy_buffer(sbout)?;
+        instance.destroy_buffer(upload_buffer)?;
+        instance.destroy_buffer(download_buffer)?;
         if let Some(cache) = cache {
             instance.destroy_kernel_cache(cache)?;
         }
@@ -193,7 +273,7 @@ gpu_test!(vulkan_test, "VULKAN", true, {
 });
 #[cfg(feature = "wgpu")]
 gpu_test!(wgpu_vulkan_test, "WGPU_VULKAN", true, {
-    crate::wgpu::Wgpu::create_instance(true, wgpu::Backends::VULKAN)
+    crate::wgpu::Wgpu::create_instance(true, wgpu::Backends::VULKAN, None)
 });
 #[cfg(feature = "wgpu")]
 #[cfg(target_vendor = "apple")]

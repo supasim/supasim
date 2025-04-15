@@ -33,6 +33,7 @@ impl BackendInstance<Dummy> for DummyResource {
             },
             easily_update_bind_groups: true,
             semaphore_signal: true,
+            is_unified_memory: false,
         }
     }
 
@@ -132,20 +133,6 @@ impl BackendInstance<Dummy> for DummyResource {
         buffer: &<Dummy as Backend>::Buffer,
         offset: u64,
         data: &mut [u8],
-    ) -> Result<(), <Dummy as Backend>::Error> {
-        Ok(())
-    }
-
-    unsafe fn map_buffer(
-        &mut self,
-        buffer: &<Dummy as Backend>::Buffer,
-    ) -> Result<*mut u8, <Dummy as Backend>::Error> {
-        Ok(std::ptr::null_mut())
-    }
-
-    unsafe fn unmap_buffer(
-        &mut self,
-        buffer: &<Dummy as Backend>::Buffer,
     ) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
     }
