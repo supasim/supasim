@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # BEGIN LICENSE
-#   SupaSim, a GPUGPU and simulation toolkit.
+#   SupaSim, a GPGPU and simulation toolkit.
 #   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
 #
 #

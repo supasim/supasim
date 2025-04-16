@@ -1,5 +1,5 @@
 # BEGIN LICENSE
-#   SupaSim, a GPUGPU and simulation toolkit.
+#   SupaSim, a GPGPU and simulation toolkit.
 #   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
 #
 #
@@ -25,14 +25,14 @@ permissions:
   contents: write  # Required to push commits
 
 jobs:
-  cargo-update:
+  update-license-header:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.SUPASIM_PAT }}
       - name: Update license stuff
         shell: bash
         run: |
@@ -40,11 +40,13 @@ jobs:
           ./scripts/update-license-header.py -h LICENSE_HEADER ./**/*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml
 
       - name: Commit and push changes
+        shell: bash
         run: |
+          shopt -s globstar
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if [[ -n $(git status --porcelain) ]]; then
-            git add Cargo.lock
+            git add ./*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml
             git commit -m "chore: update license header of all files"
             git push
           else
