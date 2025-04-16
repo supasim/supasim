@@ -40,11 +40,13 @@ jobs:
           ./scripts/update-license-header.py -h LICENSE_HEADER ./**/*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml
 
       - name: Commit and push changes
+        shell: bash
         run: |
+          shopt -s globstar
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if [[ -n $(git status --porcelain) ]]; then
-            git add Cargo.lock
+            git add /*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml
             git commit -m "chore: update license header of all files"
             git push
           else
