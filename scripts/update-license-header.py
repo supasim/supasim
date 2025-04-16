@@ -35,11 +35,17 @@ if __name__ == "__main__":
     header_lines = open(header_file, "r").readlines()
     header_rust = ["/* BEGIN LICENSE\n"]
     for line in header_lines:
-        header_rust.append("  " + line)
+        if len(line.strip()) != 0:
+            header_rust.append("  " + line)
+        else:
+            header_rust.append("\n")
     header_rust.append("END LICENSE */\n")
     header_toml = ["# BEGIN LICENSE\n"]
     for line in header_lines:
-        header_toml.append("#   " + line)
+        if len(line.strip()) != 0:
+            header_toml.append("#   " + line)
+        else:
+            header_toml.append("#\n")
     header_toml.append("# END LICENSE\n")
     for fname in files_to_update:
         print(f"Editing {fname}")
