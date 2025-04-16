@@ -13,7 +13,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 ## Testing info
-Run the command `cargo test -- --nocapture`. The `--nocapture` allows certain logs to be sent(though this is quite verbose, particularly for wgpu).
+Run the command `cargo test --all-feataures -- --nocapture`. The `--nocapture` allows certain logs to be sent(though this is quite verbose, particularly for wgpu).
 
 ## Synchronization things
 ### Metal

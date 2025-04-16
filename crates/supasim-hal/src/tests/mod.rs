@@ -1,18 +1,18 @@
 /* BEGIN LICENSE
   SupaSim, a GPUGPU and simulation toolkit.
   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
-  
-  
+
+
   SupaSim is free software; you can redistribute it and/or
   modify it under the terms of the GNU General Public License
   as published by the Free Software Foundation; either version 3
   of the License, or (at your option) any later version.
-  
+
   SupaSim is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
   GNU General Public License for more details.
-  
+
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
@@ -269,16 +269,16 @@ macro_rules! gpu_test {
             if should_skip($backend_name) {
                 return;
             }
+            let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
             let _ = env_logger::builder()
                 .filter_level(log::LevelFilter::Info)
                 .try_init();
             info!("{} test", $backend_name);
-            let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
             let instance = $instance_create;
-            drop(_lock);
             let instance = instance.expect(&format!("Failed to create {} instance", $backend_name));
             info!("Created {} instance", $backend_name);
             main_test(instance, $verify_result).unwrap();
+            drop(_lock);
         }
     };
 }
