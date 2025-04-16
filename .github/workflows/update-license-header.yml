@@ -25,7 +25,7 @@ permissions:
   contents: write  # Required to push commits
 
 jobs:
-  cargo-update:
+  update-license-header:
     runs-on: ubuntu-latest
 
     steps:
@@ -46,7 +46,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if [[ -n $(git status --porcelain) ]]; then
-            git add /*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml
+            git add ./*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml
             git commit -m "chore: update license header of all files"
             git push
           else
