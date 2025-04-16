@@ -1,0 +1,52 @@
+# BEGIN LICENSE
+#   SupaSim, a GPUGPU and simulation toolkit.
+#   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
+#
+#
+#   SupaSim is free software; you can redistribute it and/or
+#   modify it under the terms of the GNU General Public License
+#   as published by the Free Software Foundation; either version 3
+#   of the License, or (at your option) any later version.
+#
+#   SupaSim is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# END LICENSE
+name: Update License Header
+
+on:
+  workflow_dispatch:  # Manual trigger via GitHub UI
+  
+permissions:
+  contents: write  # Required to push commits
+
+jobs:
+  cargo-update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Update license stuff
+        shell: bash
+        run: |
+          shopt -s globstar
+          ./scripts/update-license-header.py -h LICENSE_HEADER ./**/*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [[ -n $(git status --porcelain) ]]; then
+            git add Cargo.lock
+            git commit -m "chore: update license header of all files"
+            git push
+          else
+            echo "No changes to commit"
+          fi
