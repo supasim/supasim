@@ -56,9 +56,15 @@ pub fn main() {
     instance
         .access_buffers(
             Box::new(|buffers| {
-                buffers[0].write::<u32>()?.copy_from_slice(&[1, 2, 3, 4]);
-                buffers[1].write::<u32>()?.copy_from_slice(&[5, 6, 7, 8]);
-                buffers[2].write::<u32>()?.copy_from_slice(&[1, 1, 1, 1]);
+                buffers[0]
+                    .writeable::<u32>()?
+                    .copy_from_slice(&[1, 2, 3, 4]);
+                buffers[1]
+                    .writeable::<u32>()?
+                    .copy_from_slice(&[5, 6, 7, 8]);
+                buffers[2]
+                    .writeable::<u32>()?
+                    .copy_from_slice(&[1, 1, 1, 1]);
                 Ok(())
             }),
             &buffers,
@@ -71,7 +77,7 @@ pub fn main() {
     instance
         .access_buffers(
             Box::new(|buffers| {
-                println!("{:?}", buffers[2].read::<u32>()?);
+                println!("{:?}", buffers[2].readable::<u32>()?);
                 Ok(())
             }),
             &buffers,

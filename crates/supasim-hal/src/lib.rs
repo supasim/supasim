@@ -90,7 +90,6 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
         alloc_info: &BufferDescriptor,
     ) -> Result<B::Buffer, B::Error>;
     /// # Safety
-    /// * All mappings to this buffer are invalidated
     /// * All bind groups using this buffer must have been updated or destroyed
     unsafe fn destroy_buffer(&mut self, buffer: B::Buffer) -> Result<(), B::Error>;
     /// # Safety

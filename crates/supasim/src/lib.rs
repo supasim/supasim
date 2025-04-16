@@ -898,7 +898,7 @@ pub struct MappedBuffer<B: hal::Backend> {
     was_used_mut: bool,
 }
 impl<B: hal::Backend> MappedBuffer<B> {
-    pub fn read<T: bytemuck::Pod>(&self) -> SupaSimResult<B, &[T]> {
+    pub fn readable<T: bytemuck::Pod>(&self) -> SupaSimResult<B, &[T]> {
         // This code lol... maybe I need to do some major refactor this is gross
         let buffer_align = self
             .instance
@@ -920,7 +920,7 @@ impl<B: hal::Backend> MappedBuffer<B> {
             Err(SupaSimError::BufferRegionNotValid)
         }
     }
-    pub fn write<T: bytemuck::Pod>(&mut self) -> SupaSimResult<B, &mut [T]> {
+    pub fn writeable<T: bytemuck::Pod>(&mut self) -> SupaSimResult<B, &mut [T]> {
         if !self.has_mut {
             return Err(SupaSimError::BufferRegionNotValid);
         }
