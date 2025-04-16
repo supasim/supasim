@@ -69,3 +69,6 @@ Note that CPU support is desired due to relieving gpu/not using its memory, even
   * See [wgpu integration issue](https://github.com/lapce/floem/issues/687)
   * Supports cpu and gpu, using vello, vger, its own renderer, or tiny-skia for cpu
   * Release, counter example - 64s, 25.9MB
+
+## Updating the license header
+Run `./scripts/update-license-header.py -h LICENSE_HEADER ./**/*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml` after `shopt -s globstar`
