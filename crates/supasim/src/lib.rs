@@ -290,7 +290,7 @@ api_type!(Instance, {
     command_recorders: Arena<Option<CommandRecorderWeak<B>>>,
     buffers: Arena<Option<BufferWeak<B>>>,
     wait_handles: Arena<WaitHandleWeak<B>>,
-    unused_wait_handles: Vec<WaitHandle<B>>,
+    unused_wait_handles: Vec<B::Semaphore>,
     hal_command_recorders: Vec<B::CommandRecorder>,
     hal_bind_groups: Vec<B::BindGroup>,
 },);
@@ -479,24 +479,29 @@ impl<B: hal::Backend> Instance<B> {
     }
     fn acquire_wait_handle(&self) -> SupaSimResult<B, WaitHandle<B>> {
         let mut s = self.inner_mut()?;
-        let _handle;
-        let idx = if let Some(handle) = s.unused_wait_handles.pop() {
-            _handle = handle.clone();
-            s.wait_handles.insert(handle.downgrade())
+        let handle;
+        if let Some(sem) = s.unused_wait_handles.pop() {
+            handle = WaitHandle::from_inner(WaitHandleInner {
+                _phantom: Default::default(),
+                instance: self.clone(),
+                inner: Some(sem),
+                id: Index::DANGLING,
+            });
+            let id = s.wait_handles.insert(handle.downgrade());
+            handle.inner_mut()?.id = id;
         } else {
             let semaphore = unsafe { s.inner.create_semaphore() }.map_supasim()?;
-            let wait_handle = WaitHandle::from_inner(WaitHandleInner {
+            handle = WaitHandle::from_inner(WaitHandleInner {
                 instance: self.clone(),
                 _phantom: Default::default(),
-                inner: semaphore,
+                inner: Some(semaphore),
                 // Yes its UB, but id doesn't have any destructor and just contains two numbers
                 id: Index::DANGLING,
             });
-            let id = s.wait_handles.insert(wait_handle.downgrade());
-            wait_handle.inner_mut()?.id = id;
-            id
+            let id = s.wait_handles.insert(handle.downgrade());
+            handle.inner_mut()?.id = id;
         };
-        s.wait_handles.get(idx).unwrap().upgrade()
+        Ok(handle)
     }
 
     #[allow(clippy::type_complexity)]
@@ -849,18 +854,17 @@ impl<B: hal::Backend> MappedBuffer<B> {
 
 api_type!(WaitHandle, {
     instance: Instance<B>,
-    inner: B::Semaphore,
+    /// This is an option so that it can be saved after destroy
+    inner: Option<B::Semaphore>,
     id: Index,
 },);
 impl<B: hal::Backend> Drop for WaitHandleInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
             instance.wait_handles.remove(self.id);
-            let _ = unsafe {
-                instance
-                    .inner
-                    .destroy_semaphore(std::ptr::read(&self.inner))
-            };
+            instance
+                .unused_wait_handles
+                .push(std::mem::take(&mut self.inner).unwrap());
         }
     }
 }
@@ -869,7 +873,13 @@ impl<B: hal::Backend> WaitHandle<B> {
         let mut s = self.inner_mut()?;
         let _i = s.instance.clone();
         let mut instance = _i.inner_mut()?;
-        unsafe { s.inner.wait(&mut instance.inner).map_supasim()? }
+        unsafe {
+            s.inner
+                .as_mut()
+                .unwrap()
+                .wait(&mut instance.inner)
+                .map_supasim()?
+        }
         Ok(())
     }
 }
