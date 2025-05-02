@@ -52,7 +52,8 @@ serde_json = "1.0"
 thiserror = "2.0"
 tempfile = "3.19"
 scopeguard = "1.2"
-daggy = "0.8.1"
+daggy = "0.9"
+thunderdome = "0.6"
 
 hal = { package = "supasim-hal", path = "crates/supasim-hal" }
 macros = { package = "supasim-macros", path = "crates/supasim-macros" }

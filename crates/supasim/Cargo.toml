@@ -33,6 +33,7 @@ paste = "1.0"
 anyhow.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true
+thunderdome.workspace = true
 
 macros.workspace = true
 shaders.workspace = true

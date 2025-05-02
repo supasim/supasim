@@ -30,12 +30,12 @@ mod sync;
 
 use hal::{BackendInstance as _, RecorderSubmitInfo, Semaphore};
 use std::{
-    hash::Hash,
     marker::PhantomData,
     ops::{Deref, DerefMut},
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 use thiserror::Error;
+use thunderdome::{Arena, Index};
 use types::SyncMode;
 
 pub use bytemuck;
@@ -46,101 +46,6 @@ pub use types::{
 };
 
 pub type UserBufferAccessClosure<B> = Box<dyn FnOnce(&mut [MappedBuffer<B>]) -> anyhow::Result<()>>;
-
-/// Contains the index, and a certain "random" value to check if a destroyed thing has been replaced
-struct Id<T>(u32, u32, PhantomData<T>);
-impl<T> Default for Id<T> {
-    fn default() -> Self {
-        Self(u32::MAX, 0, Default::default())
-    }
-}
-impl<T> Clone for Id<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-impl<T> Copy for Id<T> {}
-impl<T> std::fmt::Debug for Id<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("()")
-    }
-}
-impl<T> PartialEq for Id<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0 && self.1 == other.1
-    }
-}
-impl<T> Eq for Id<T> {}
-impl<T> Hash for Id<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_u32(self.0);
-        state.write_u32(self.1);
-    }
-}
-pub(crate) fn convert_id<A, B>(id: Id<A>) -> Id<B> {
-    Id(id.0, id.1, Default::default())
-}
-struct Tracker<T> {
-    list: Vec<(u32, T)>,
-    unused: Vec<u32>,
-    current_identifier: u32,
-}
-impl<T> Default for Tracker<T> {
-    fn default() -> Self {
-        Self {
-            list: Vec::new(),
-            unused: Vec::new(),
-            current_identifier: 0,
-        }
-    }
-}
-impl<T> Tracker<T> {
-    pub fn get<O: AsId<T>>(&self, id: Id<O>) -> Option<&T> {
-        let value = &self.list[id.0 as usize];
-        if value.0 != id.1 {
-            return None;
-        }
-        Some(&value.1)
-    }
-    pub fn get_mut<O: AsId<T>>(&mut self, id: Id<O>) -> Option<&mut T> {
-        let value = &mut self.list[id.0 as usize];
-        if value.0 != id.1 {
-            return None;
-        }
-        Some(&mut value.1)
-    }
-    pub fn add<O: AsId<T>>(&mut self, value: T) -> Id<O> {
-        // TODO: currently this overwrites the previous value. Make it soemtimes preserve if that is desired
-        let identifier = self.current_identifier;
-        self.current_identifier = self.current_identifier.wrapping_add(1);
-        let idx = match self.unused.pop() {
-            Some(idx) => {
-                self.list[idx as usize] = (identifier, value);
-                idx
-            }
-            None => {
-                self.list.push((identifier, value));
-                self.list.len() as u32 - 1
-            }
-        };
-        Id(idx, identifier, Default::default())
-    }
-    pub fn remove<O: AsId<T>>(&mut self, id: Id<O>, replace_with: Option<T>) {
-        let value = &mut self.list[id.0 as usize];
-        if value.0 == id.1 {
-            value.0 = u32::MAX;
-            if let Some(v) = replace_with {
-                value.1 = v;
-            }
-        }
-    }
-    pub fn acquire<O: AsId<T>>(&mut self, idx: u32) -> Id<O> {
-        let v = self.current_identifier;
-        self.current_identifier += 1;
-        self.list[idx as usize].0 = v;
-        Id(idx, v, Default::default())
-    }
-}
 
 struct InnerRef<'a, T>(RwLockReadGuard<'a, Option<T>>);
 impl<T> Deref for InnerRef<'_, T> {
@@ -380,11 +285,12 @@ pub struct InstanceProperties {
 api_type!(Instance, {
     inner: B::Instance,
     inner_properties: types::InstanceProperties,
-    kernels: Tracker<Option<KernelWeak<B>>>,
-    kernel_caches: Tracker<Option<KernelCacheWeak<B>>>,
-    command_recorders: Tracker<Option<CommandRecorderWeak<B>>>,
-    buffers: Tracker<Option<BufferWeak<B>>>,
-    wait_handles: Tracker<WaitHandleWeak<B>>,
+    kernels: Arena<Option<KernelWeak<B>>>,
+    kernel_caches: Arena<Option<KernelCacheWeak<B>>>,
+    command_recorders: Arena<Option<CommandRecorderWeak<B>>>,
+    buffers: Arena<Option<BufferWeak<B>>>,
+    wait_handles: Arena<WaitHandleWeak<B>>,
+    unused_wait_handles: Vec<WaitHandle<B>>,
     hal_command_recorders: Vec<B::CommandRecorder>,
     hal_bind_groups: Vec<B::BindGroup>,
 },);
@@ -395,11 +301,12 @@ impl<B: hal::Backend> Instance<B> {
             _phantom: Default::default(),
             inner: hal,
             inner_properties,
-            kernels: Tracker::default(),
-            kernel_caches: Tracker::default(),
-            command_recorders: Tracker::default(),
-            buffers: Tracker::default(),
-            wait_handles: Tracker::default(),
+            kernels: Arena::default(),
+            kernel_caches: Arena::default(),
+            command_recorders: Arena::default(),
+            buffers: Arena::default(),
+            wait_handles: Arena::default(),
+            unused_wait_handles: Vec::new(),
             hal_command_recorders: Vec::new(),
             hal_bind_groups: Vec::new(),
         })
@@ -442,9 +349,10 @@ impl<B: hal::Backend> Instance<B> {
             _phantom: Default::default(),
             instance: self.clone(),
             inner: kernel,
-            id: Default::default(),
+            // Yes its UB, but id doesn't have any destructor and just contains two numbers
+            id: Index::DANGLING,
         });
-        k.inner_mut()?.id = s.kernels.add(Some(k.downgrade()));
+        k.inner_mut()?.id = s.kernels.insert(Some(k.downgrade()));
         Ok(k)
     }
     pub fn create_kernel_cache(&self, data: &[u8]) -> SupaSimResult<B, KernelCache<B>> {
@@ -454,9 +362,10 @@ impl<B: hal::Backend> Instance<B> {
             _phantom: Default::default(),
             instance: self.clone(),
             inner,
-            id: Default::default(),
+            // Yes its UB, but id doesn't have any destructor and just contains two numbers
+            id: Index::DANGLING,
         });
-        k.inner_mut()?.id = s.kernel_caches.add(Some(k.downgrade()));
+        k.inner_mut()?.id = s.kernel_caches.insert(Some(k.downgrade()));
         Ok(k)
     }
     pub fn create_recorder(&self, reusable: bool) -> SupaSimResult<B, CommandRecorder<B>> {
@@ -464,7 +373,8 @@ impl<B: hal::Backend> Instance<B> {
         let r = CommandRecorder::from_inner(CommandRecorderInner {
             _phantom: Default::default(),
             instance: self.clone(),
-            id: Default::default(),
+            // Yes its UB, but id doesn't have any destructor and just contains two numbers
+            id: Index::DANGLING,
             recorded: false,
             cleared: true,
             commands: Vec::new(),
@@ -475,7 +385,7 @@ impl<B: hal::Backend> Instance<B> {
             num_semaphores: 0,
             semaphores: Vec::new(),
         });
-        r.inner_mut()?.id = s.command_recorders.add(Some(r.downgrade()));
+        r.inner_mut()?.id = s.command_recorders.insert(Some(r.downgrade()));
         Ok(r)
     }
     pub fn create_buffer(&self, desc: &BufferDescriptor) -> SupaSimResult<B, Buffer<B>> {
@@ -485,12 +395,13 @@ impl<B: hal::Backend> Instance<B> {
             _phantom: Default::default(),
             instance: self.clone(),
             inner,
-            id: Default::default(),
+            // Yes its UB, but id doesn't have any destructor and just contains two numbers
+            id: Index::DANGLING,
             _semaphores: Vec::new(),
             host_using: Vec::new(),
             create_info: *desc,
         });
-        b.inner_mut()?.id = s.buffers.add(Some(b.downgrade()));
+        b.inner_mut()?.id = s.buffers.insert(Some(b.downgrade()));
         Ok(b)
     }
     pub fn submit_commands(&self, recorders: &[CommandRecorder<B>]) -> SupaSimResult<B, ()> {
@@ -568,25 +479,21 @@ impl<B: hal::Backend> Instance<B> {
     }
     fn acquire_wait_handle(&self) -> SupaSimResult<B, WaitHandle<B>> {
         let mut s = self.inner_mut()?;
-        let idx = if let Some(idx) = s.wait_handles.unused.pop() {
-            s.wait_handles.acquire(idx)
+        let _handle;
+        let idx = if let Some(handle) = s.unused_wait_handles.pop() {
+            _handle = handle.clone();
+            s.wait_handles.insert(handle.downgrade())
         } else {
             let semaphore = unsafe { s.inner.create_semaphore() }.map_supasim()?;
-            let id: Id<WaitHandle<B>> = s.wait_handles.add(
-                WaitHandle::from_inner(WaitHandleInner {
-                    instance: self.clone(),
-                    _phantom: Default::default(),
-                    inner: semaphore,
-                    id: Id::default(),
-                })
-                .downgrade(),
-            );
-            s.wait_handles
-                .get_mut(id)
-                .unwrap()
-                .upgrade()?
-                .inner_mut()?
-                .id = id;
+            let wait_handle = WaitHandle::from_inner(WaitHandleInner {
+                instance: self.clone(),
+                _phantom: Default::default(),
+                inner: semaphore,
+                // Yes its UB, but id doesn't have any destructor and just contains two numbers
+                id: Index::DANGLING,
+            });
+            let id = s.wait_handles.insert(wait_handle.downgrade());
+            wait_handle.inner_mut()?.id = id;
             id
         };
         s.wait_handles.get(idx).unwrap().upgrade()
@@ -644,23 +551,23 @@ impl<B: hal::Backend> Instance<B> {
 impl<B: hal::Backend> Drop for InstanceInner<B> {
     fn drop(&mut self) {
         let _ = unsafe { self.inner.wait_for_idle() };
-        self.command_recorders.list.clear(); // These will call their destructors, politely taking care of themselves
-        self.wait_handles.list.clear();
-        self.kernel_caches.list.clear();
-        self.buffers.list.clear();
-        self.kernels.list.clear();
+        self.command_recorders.clear(); // These will call their destructors, politely taking care of themselves
+        self.wait_handles.clear();
+        self.kernel_caches.clear();
+        self.buffers.clear();
+        self.kernels.clear();
     }
 }
 api_type!(Kernel, {
     instance: Instance<B>,
     inner: B::Kernel,
-    id: Id<Kernel<B>>,
+    id: Index,
 },);
 impl<B: hal::Backend> Kernel<B> {}
 impl<B: hal::Backend> Drop for KernelInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
-            instance.kernels.remove(self.id, Some(None));
+            instance.kernels.remove(self.id);
             let _ = unsafe { instance.inner.destroy_kernel(std::ptr::read(&self.inner)) };
         }
     }
@@ -668,7 +575,7 @@ impl<B: hal::Backend> Drop for KernelInner<B> {
 api_type!(KernelCache, {
     instance: Instance<B>,
     inner: B::KernelCache,
-    id: Id<KernelCache<B>>,
+    id: Index,
 },);
 impl<B: hal::Backend> KernelCache<B> {
     pub fn get_data(self) -> SupaSimResult<B, Vec<u8>> {
@@ -687,7 +594,7 @@ impl<B: hal::Backend> KernelCache<B> {
 impl<B: hal::Backend> Drop for KernelCacheInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
-            instance.kernel_caches.remove(self.id, Some(None));
+            instance.kernel_caches.remove(self.id);
             let _ = unsafe {
                 instance
                     .inner
@@ -706,7 +613,6 @@ enum BufferCommandInner<B: hal::Backend> {
     KernelDispatch(Kernel<B>, [u32; 3]),
     /// Kernel, buffer and offset, needs validation
     KernelDispatchIndirect(Kernel<B>, BufferSlice<B>, bool),
-    CpuCode(UserBufferAccessClosure<B>),
     Dummy,
 }
 struct CommandRecorderData<B: hal::Backend> {
@@ -716,7 +622,7 @@ struct CommandRecorderData<B: hal::Backend> {
 }
 api_type!(CommandRecorder, {
     instance: Instance<B>,
-    id: Id<CommandRecorder<B>>,
+    id: Index,
     recorded: bool,
     cleared: bool,
     commands: Vec<BufferCommand<B>>,
@@ -726,7 +632,7 @@ api_type!(CommandRecorder, {
     command_recorders: Vec<CommandRecorderData<B>>,
     reusable: bool,
     num_semaphores: u32,
-    semaphores: Vec<Id<WaitHandle<B>>>,
+    semaphores: Vec<Index>,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
     pub fn dispatch_kernel(
@@ -792,30 +698,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
         s.recorded = false;
         Ok(wait_handle)
     }
-    pub fn cpu_code(
-        &self,
-        closure: UserBufferAccessClosure<B>,
-        buffers: &[&BufferSlice<B>],
-        return_wait: bool,
-    ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
-        for b in buffers {
-            b.validate()?;
-            self.inner_mut()?.used_buffers.push((*b).clone());
-        }
-        let wait_handle = if return_wait {
-            Some(self.as_inner()?.instance.acquire_wait_handle()?)
-        } else {
-            None
-        };
-        let mut s = self.inner_mut()?;
-        s.commands.push(BufferCommand {
-            inner: BufferCommandInner::CpuCode(closure),
-            buffers: buffers.iter().map(|&b| b.clone()).collect(),
-            wait_handle: wait_handle.clone(),
-        });
-        s.recorded = false;
-        Ok(wait_handle)
-    }
     pub fn clear(&self) -> SupaSimResult<B, ()> {
         let mut s = self.inner_mut()?;
         s.commands.clear();
@@ -862,7 +744,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
 impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
-            instance.command_recorders.remove(self.id, Some(None));
+            instance.command_recorders.remove(self.id);
         }
     }
 }
@@ -893,15 +775,15 @@ impl BufferRange {
 api_type!(Buffer, {
     instance: Instance<B>,
     inner: B::Buffer,
-    id: Id<Buffer<B>>,
-    _semaphores: Vec<(Id<WaitHandle<B>>, BufferRange)>,
+    id: Index,
+    _semaphores: Vec<(Index, BufferRange)>,
     host_using: Vec<BufferRange>,
     create_info: BufferDescriptor,
 },);
 impl<B: hal::Backend> Drop for BufferInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
-            instance.buffers.remove(self.id, Some(None));
+            instance.buffers.remove(self.id);
             let _ = unsafe { instance.inner.destroy_buffer(std::ptr::read(&self.inner)) };
         }
     }
@@ -911,7 +793,7 @@ pub struct MappedBuffer<B: hal::Backend> {
     instance: Instance<B>,
     inner: *mut u8,
     len: u64,
-    buffer: Id<Buffer<B>>,
+    buffer: Index,
     has_mut: bool,
     was_used_mut: bool,
 }
@@ -968,12 +850,12 @@ impl<B: hal::Backend> MappedBuffer<B> {
 api_type!(WaitHandle, {
     instance: Instance<B>,
     inner: B::Semaphore,
-    id: Id<WaitHandle<B>>,
+    id: Index,
 },);
 impl<B: hal::Backend> Drop for WaitHandleInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
-            instance.wait_handles.remove(self.id, None);
+            instance.wait_handles.remove(self.id);
             let _ = unsafe {
                 instance
                     .inner
@@ -992,6 +874,6 @@ impl<B: hal::Backend> WaitHandle<B> {
     }
 }
 struct Event<B: hal::Backend> {
-    id: Id<Self>,
+    id: Index,
     inner: B::Event,
 }

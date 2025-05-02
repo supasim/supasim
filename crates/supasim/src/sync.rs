@@ -18,46 +18,44 @@
 END LICENSE */
 use std::collections::{HashMap, hash_map::Entry};
 
-use hal::{BackendInstance, CommandRecorder, Dummy, dummy::DummyResource};
+use hal::{BackendInstance, CommandRecorder};
+use thunderdome::Index;
 use types::{Dag, NodeIndex, SyncOperations};
 
 use crate::{
-    Buffer, BufferCommand, BufferCommandInner, BufferRange, CommandRecorderInner, Event, Id,
-    Kernel, MapSupasimError, SupaSimError, SupaSimResult, UserBufferAccessClosure, convert_id,
+    BufferCommand, BufferCommandInner, BufferRange, CommandRecorderInner, MapSupasimError,
+    SupaSimError, SupaSimResult, UserBufferAccessClosure,
 };
 
 pub type CommandDag<B> = Dag<BufferCommand<B>>;
 
 pub enum HalCommandBuilder {
     CopyBuffer {
-        src_buffer: Id<Buffer<hal::Dummy>>,
-        dst_buffer: Id<Buffer<hal::Dummy>>,
+        src_buffer: Index,
+        dst_buffer: Index,
         src_offset: u64,
         dst_offset: u64,
         size: u64,
     },
     DispatchKernel {
-        kernel: Id<Kernel<hal::Dummy>>,
+        kernel: Index,
         bg: u32,
         push_constants: Vec<u8>,
         workgroup_dims: [u32; 3],
     },
     DispatchKernelIndirect {
-        kernel: Id<Kernel<hal::Dummy>>,
+        kernel: Index,
         bg: u32,
         push_constants: Vec<u8>,
-        indirect_buffer: Id<Buffer<hal::Dummy>>,
+        indirect_buffer: Index,
         buffer_offset: u64,
         validate: bool,
     },
     /// Only for vulkan like synchronization
-    SetEvent {
-        event: Id<Event<hal::Dummy>>,
-        wait: SyncOperations,
-    },
+    SetEvent { event: Index, wait: SyncOperations },
     /// Only for vulkan like synchronization
     WaitEvent {
-        event: Id<Event<hal::Dummy>>,
+        event: Index,
         signal: SyncOperations,
     },
     /// Only for vulkan like synchronization
@@ -66,11 +64,11 @@ pub enum HalCommandBuilder {
         after: SyncOperations,
     },
     /// Only for vulkan like synchronization. Will hitch a ride with the previous PipelineBarrier or WaitEvent
-    MemoryBarrier { resource: Id<Buffer<hal::Dummy>> },
+    MemoryBarrier { resource: Index },
     UpdateBindGroup {
-        bg: Id<DummyResource>,
-        kernel: Id<Kernel<Dummy>>,
-        resources: Vec<Id<Buffer<Dummy>>>,
+        bg: Index,
+        kernel: Index,
+        resources: Vec<Index>,
     },
 }
 
@@ -87,14 +85,14 @@ pub struct CpuOperation<B: hal::Backend> {
 pub struct StreamingCommands<B: hal::Backend> {
     pub num_semaphores: u32,
     #[allow(clippy::type_complexity)] // Clippy's right but I'm lazy
-    pub bindgroups: Vec<(Id<Kernel<B>>, Vec<(Id<Buffer<B>>, BufferRange)>)>,
+    pub bindgroups: Vec<(Index, Vec<(Index, BufferRange)>)>,
     pub streams: Vec<CommandStream>,
     pub cpu_ops: Vec<CpuOperation<B>>,
 }
 pub fn assemble_dag<B: hal::Backend>(
     cr: &mut CommandRecorderInner<B>,
 ) -> SupaSimResult<B, CommandDag<B>> {
-    let mut buffers_tracker: HashMap<Id<Buffer<B>>, Vec<(BufferRange, usize)>> = HashMap::new();
+    let mut buffers_tracker: HashMap<Index, Vec<(BufferRange, usize)>> = HashMap::new();
 
     let commands = std::mem::take(&mut cr.commands);
 
@@ -234,13 +232,13 @@ pub fn record_command_streams<B: hal::Backend>(
                     buffer_locks.push(
                         instance
                             .buffers
-                            .get::<Buffer<B>>(convert_id(*src_buffer))
+                            .get(*src_buffer)
                             .ok_or(SupaSimError::AlreadyDestroyed)?,
                     );
                     buffer_locks.push(
                         instance
                             .buffers
-                            .get::<Buffer<B>>(convert_id(*dst_buffer))
+                            .get(*dst_buffer)
                             .ok_or(SupaSimError::AlreadyDestroyed)?,
                     );
                 }
@@ -248,7 +246,7 @@ pub fn record_command_streams<B: hal::Backend>(
                     kernel_locks.push(
                         instance
                             .kernels
-                            .get::<Kernel<B>>(convert_id(*kernel))
+                            .get(*kernel)
                             .ok_or(SupaSimError::AlreadyDestroyed)?,
                     );
                 }
@@ -260,13 +258,13 @@ pub fn record_command_streams<B: hal::Backend>(
                     kernel_locks.push(
                         instance
                             .kernels
-                            .get::<Kernel<B>>(convert_id(*kernel))
+                            .get(*kernel)
                             .ok_or(SupaSimError::AlreadyDestroyed)?,
                     );
                     buffer_locks.push(
                         instance
                             .buffers
-                            .get::<Buffer<B>>(convert_id(*indirect_buffer))
+                            .get(*indirect_buffer)
                             .ok_or(SupaSimError::AlreadyDestroyed)?,
                     );
                 }
@@ -274,7 +272,7 @@ pub fn record_command_streams<B: hal::Backend>(
                     buffer_locks.push(
                         instance
                             .buffers
-                            .get::<Buffer<B>>(convert_id(*resource))
+                            .get(*resource)
                             .ok_or(SupaSimError::AlreadyDestroyed)?,
                     );
                 }
