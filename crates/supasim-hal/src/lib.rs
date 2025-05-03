@@ -248,7 +248,7 @@ pub enum BufferCommand<'a, B: Backend> {
         dst_buffer: &'a B::Buffer,
         src_offset: u64,
         dst_offset: u64,
-        size: u64,
+        len: u64,
     },
     DispatchKernel {
         kernel: &'a B::Kernel,

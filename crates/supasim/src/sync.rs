@@ -24,7 +24,7 @@ use types::{Dag, NodeIndex, SyncOperations};
 
 use crate::{
     BufferCommand, BufferCommandInner, BufferRange, CommandRecorderInner, MapSupasimError,
-    SupaSimError, SupaSimResult, UserBufferAccessClosure,
+    SupaSimError, SupaSimResult,
 };
 
 pub type CommandDag<B> = Dag<BufferCommand<B>>;
@@ -74,20 +74,14 @@ pub enum HalCommandBuilder {
 
 pub struct CommandStream {
     pub commands: Vec<HalCommandBuilder>,
-    pub wait_semaphores: Vec<u32>,
     pub signal_semaphore: Option<u32>,
 }
-pub struct CpuOperation<B: hal::Backend> {
-    pub closure: UserBufferAccessClosure<B>,
-    pub wait_semaphores: Vec<u32>,
-    pub signal_semaphore: Option<u32>,
-}
-pub struct StreamingCommands<B: hal::Backend> {
+/// These are split into multiple streams so that certain operations can be waited without waiting for all
+pub struct StreamingCommands {
     pub num_semaphores: u32,
     #[allow(clippy::type_complexity)] // Clippy's right but I'm lazy
     pub bindgroups: Vec<(Index, Vec<(Index, BufferRange)>)>,
     pub streams: Vec<CommandStream>,
-    pub cpu_ops: Vec<CpuOperation<B>>,
 }
 pub fn assemble_dag<B: hal::Backend>(
     cr: &mut CommandRecorderInner<B>,
@@ -125,7 +119,6 @@ pub fn assemble_dag<B: hal::Backend>(
     dag.add_node(BufferCommand {
         inner: BufferCommandInner::Dummy,
         buffers: vec![],
-        wait_handle: None,
     });
     for i in 0..dag.node_count() - 1 {
         dag.add_edge(NodeIndex::new(dag.node_count() - 1), NodeIndex::new(i), ())
@@ -144,12 +137,12 @@ pub fn record_dag<B: hal::Backend>(
 pub fn dag_to_command_streams<B: hal::Backend>(
     _dag: &CommandDag<B>,
     _vulkan_style: bool,
-) -> SupaSimResult<B, StreamingCommands<B>> {
+) -> SupaSimResult<B, StreamingCommands> {
     // TODO: priority
     todo!()
 }
 pub fn record_command_streams<B: hal::Backend>(
-    streams: &StreamingCommands<B>,
+    streams: &StreamingCommands,
     cr: &mut CommandRecorderInner<B>,
 ) -> SupaSimResult<B, ()> {
     let mut instance = cr.instance.inner_mut()?;
@@ -210,9 +203,6 @@ pub fn record_command_streams<B: hal::Backend>(
             }
         };
         bindgroups.push(bg);
-    }
-    if !streams.cpu_ops.is_empty() {
-        unimplemented!()
     }
     cr.command_recorders.clear();
     for stream in &streams.streams {

@@ -520,14 +520,14 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                     dst_buffer,
                     src_offset,
                     dst_offset,
-                    size,
+                    len,
                 } => {
                     r.copy_buffer_to_buffer(
                         &src_buffer.inner,
                         *src_offset,
                         &dst_buffer.inner,
                         *dst_offset,
-                        *size,
+                        *len,
                     );
                 }
                 BufferCommand::DispatchKernel {

@@ -89,7 +89,7 @@ pub fn main() {
         )
         .unwrap();
     recorder
-        .dispatch_kernel(kernel.clone(), &buffers, [1, 1, 1], false)
+        .dispatch_kernel(kernel.clone(), &buffers, [1, 1, 1])
         .unwrap();
     instance.submit_commands(&[recorder]).unwrap();
     instance

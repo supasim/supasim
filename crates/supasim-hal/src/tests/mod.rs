@@ -132,21 +132,21 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
                     dst_buffer: &sb1,
                     src_offset: 0,
                     dst_offset: 0,
-                    size: 4,
+                    len: 4,
                 },
                 BufferCommand::CopyBuffer {
                     src_buffer: &upload_buffer,
                     dst_buffer: &sb2,
                     src_offset: 4,
                     dst_offset: 0,
-                    size: 4,
+                    len: 4,
                 },
                 BufferCommand::CopyBuffer {
                     src_buffer: &upload_buffer,
                     dst_buffer: &sbout,
                     src_offset: 8,
                     dst_offset: 0,
-                    size: 4,
+                    len: 4,
                 },
                 BufferCommand::MemoryBarrier {
                     resource: GpuResource::Buffer {
@@ -212,7 +212,7 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
                     dst_buffer: &download_buffer,
                     src_offset: 0,
                     dst_offset: 0,
-                    size: 16,
+                    len: 16,
                 },
             ],
         )?;

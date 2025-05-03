@@ -1406,14 +1406,14 @@ impl VulkanCommandRecorder {
                 dst_buffer,
                 src_offset,
                 dst_offset,
-                size,
+                len,
             } => self.copy_buffer(
                 instance,
                 src_buffer,
                 dst_buffer,
                 *src_offset,
                 *dst_offset,
-                *size,
+                *len,
                 cb,
             )?,
             BufferCommand::DispatchKernel {
