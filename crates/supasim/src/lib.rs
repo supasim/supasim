@@ -795,6 +795,10 @@ impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
             instance.command_recorders.remove(self.id);
+            let recorders = std::mem::take(&mut self.command_recorders);
+            for r in recorders {
+                instance.hal_command_recorders.push(r.inner);
+            }
         }
     }
 }
