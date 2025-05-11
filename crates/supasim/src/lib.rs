@@ -96,9 +96,9 @@ impl From<BufferDescriptor> for types::BufferDescriptor {
         types::BufferDescriptor {
             size: s.size,
             memory_type: if s.indirect_capable || s.uniform {
-                types::BufferType::Other
+                BufferType::Other
             } else {
-                types::BufferType::Storage
+                BufferType::Storage
             },
             visible_to_renderer: false,
             indirect_capable: s.indirect_capable,
@@ -154,7 +154,7 @@ impl<B: hal::Backend> BufferSlice<B> {
             len: self.len,
             needs_mut: self.needs_mut,
         };
-        // I don't understand clippy's recommendation here. It gives invalid code that is nonsensical
+        // I don't understand Clippy's recommendation here. It gives invalid code that is nonsensical
         #[allow(clippy::unnecessary_filter_map)]
         s.host_using
             .iter()
@@ -248,7 +248,7 @@ macro_rules! api_type {
 #[must_use]
 #[derive(Error, Debug)]
 pub enum SupaSimError<B: hal::Backend> {
-    // Rust thinks that B::Error could be SupaSimError. Nevermind that this would be a recursive definition
+    // Rust thinks that B::Error could be SupaSimError. Never mind that this would be a recursive definition
     HalError(B::Error),
     Poison(String),
     Other(anyhow::Error),
@@ -279,7 +279,7 @@ pub type SupaSimResult<B, T> = Result<T, SupaSimError<B>>;
 pub struct InstanceProperties {
     pub supports_pipeline_cache: bool,
     pub supports_indirect_dispatch: bool,
-    pub shader_type: types::ShaderTarget,
+    pub shader_type: ShaderTarget,
     pub is_unified_memory: bool,
 }
 api_type!(Instance, {
@@ -852,9 +852,9 @@ pub struct MappedBuffer<B: hal::Backend> {
     was_used_mut: bool,
 }
 impl<B: hal::Backend> MappedBuffer<B> {
-    pub fn readable<T: bytemuck::Pod>(&self) -> SupaSimResult<B, &[T]> {
+    fn buffer_align(&self) -> SupaSimResult<B, u64> {
         // This code lol... maybe I need to do some major refactor this is gross
-        let buffer_align = self
+        Ok(self
             .instance
             .inner()?
             .buffers
@@ -866,7 +866,10 @@ impl<B: hal::Backend> MappedBuffer<B> {
             .upgrade()?
             .inner()?
             .create_info
-            .contents_align;
+            .contents_align)
+    }
+    pub fn readable<T: bytemuck::Pod>(&self) -> SupaSimResult<B, &[T]> {
+        let buffer_align = self.buffer_align()?;
         let s = unsafe { std::slice::from_raw_parts(self.inner, self.len as usize) };
         if (s.len() % size_of::<T>()) == 0 && (s.len() as u64 % buffer_align) == 0 {
             Ok(bytemuck::cast_slice(s))
@@ -879,19 +882,7 @@ impl<B: hal::Backend> MappedBuffer<B> {
             return Err(SupaSimError::BufferRegionNotValid);
         }
         self.was_used_mut = true;
-        let buffer_align = self
-            .instance
-            .inner()?
-            .buffers
-            .get(self.buffer)
-            .as_ref()
-            .ok_or(SupaSimError::AlreadyDestroyed)?
-            .as_ref()
-            .ok_or(SupaSimError::AlreadyDestroyed)?
-            .upgrade()?
-            .inner()?
-            .create_info
-            .contents_align;
+        let buffer_align = self.buffer_align()?;
         let s = unsafe { std::slice::from_raw_parts_mut(self.inner, self.len as usize) };
         if (s.len() % size_of::<T>()) == 0 && (s.len() as u64 % buffer_align) == 0 {
             Ok(bytemuck::cast_slice_mut(s))
