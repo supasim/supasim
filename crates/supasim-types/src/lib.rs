@@ -18,6 +18,7 @@
 END LICENSE */
 use serde::{Deserialize, Serialize};
 
+pub use daggy::Walker;
 pub use daggy::petgraph::algo::toposort;
 pub use daggy::petgraph::graph::NodeIndex;
 

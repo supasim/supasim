@@ -638,7 +638,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                         Storage => gpu_allocator::MemoryLocation::GpuOnly,
                         Upload => gpu_allocator::MemoryLocation::CpuToGpu,
                         Download => gpu_allocator::MemoryLocation::GpuToCpu,
-                        Other => gpu_allocator::MemoryLocation::GpuOnly,
+                        Other => gpu_allocator::MemoryLocation::CpuToGpu,
                     },
                     linear: true,
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,

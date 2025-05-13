@@ -16,13 +16,29 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
-use supasim::{BufferDescriptor, Instance};
+use supasim::{BufferDescriptor, Instance, UserBufferAccessClosure};
 use supasim::{BufferSlice, shaders};
 
 pub fn main() {
     println!("Hello, world!");
     let instance: Instance<supasim::hal::vulkan::Vulkan> =
         Instance::from_hal(supasim::hal::vulkan::Vulkan::create_instance(true).unwrap());
+    let upload_buffer = instance
+        .create_buffer(&BufferDescriptor {
+            size: 64,
+            buffer_type: supasim::BufferType::Upload,
+            contents_align: 4,
+            ..Default::default()
+        })
+        .unwrap();
+    let download_buffer = instance
+        .create_buffer(&BufferDescriptor {
+            size: 16,
+            buffer_type: supasim::BufferType::Download,
+            contents_align: 4,
+            ..Default::default()
+        })
+        .unwrap();
     let buffer1 = instance
         .create_buffer(&BufferDescriptor {
             size: 16,
@@ -66,11 +82,19 @@ pub fn main() {
         .compile_kernel(&spirv, reflection_info, Some(&cache))
         .unwrap();
     let recorder = instance.create_recorder().unwrap();
-    let buffers = [
-        &BufferSlice::entire_buffer(&buffer1, false).unwrap(),
-        &BufferSlice::entire_buffer(&buffer2, false).unwrap(),
-        &BufferSlice::entire_buffer(&buffer3, true).unwrap(),
-    ];
+    let buffers = [&BufferSlice::entire_buffer(&upload_buffer, true).unwrap()];
+    instance
+        .access_buffers(
+            Box::new(|buffers| {
+                buffers[0]
+                    .writeable::<u32>()
+                    .unwrap()
+                    .clone_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 1, 1, 1, 1]);
+                Ok(())
+            }),
+            &buffers,
+        )
+        .unwrap();
     instance
         .access_buffers(
             Box::new(|buffers| {
@@ -89,13 +113,31 @@ pub fn main() {
         )
         .unwrap();
     recorder
+        .copy_buffer(upload_buffer.clone(), buffer1.clone(), 0, 0, 16)
+        .unwrap();
+    recorder
+        .copy_buffer(upload_buffer.clone(), buffer2.clone(), 16, 0, 16)
+        .unwrap();
+    recorder
+        .copy_buffer(upload_buffer.clone(), buffer3.clone(), 32, 0, 16)
+        .unwrap();
+    let buffers = [
+        &BufferSlice::entire_buffer(&buffer1, false).unwrap(),
+        &BufferSlice::entire_buffer(&buffer2, false).unwrap(),
+        &BufferSlice::entire_buffer(&buffer3, true).unwrap(),
+    ];
+    recorder
         .dispatch_kernel(kernel.clone(), &buffers, [1, 1, 1])
         .unwrap();
+    recorder
+        .copy_buffer(buffer3.clone(), download_buffer.clone(), 0, 0, 16)
+        .unwrap();
     instance.submit_commands(&mut [recorder]).unwrap();
+    let buffers = [&BufferSlice::entire_buffer(&download_buffer, false).unwrap()];
     instance
         .access_buffers(
             Box::new(|buffers| {
-                println!("{:?}", buffers[2].readable::<u32>()?);
+                println!("{:?}", buffers[0].readable::<u32>()?);
                 Ok(())
             }),
             &buffers,

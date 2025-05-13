@@ -43,7 +43,7 @@ pub use bytemuck;
 pub use hal;
 pub use shaders;
 pub use types::{
-    BufferType, ShaderModel, ShaderReflectionInfo, ShaderResourceType, ShaderTarget, SpirvVersion,
+    ShaderModel, ShaderReflectionInfo, ShaderResourceType, ShaderTarget, SpirvVersion,
 };
 
 pub type UserBufferAccessClosure<B> = Box<dyn FnOnce(&mut [MappedBuffer<B>]) -> anyhow::Result<()>>;
@@ -67,15 +67,25 @@ impl<T> DerefMut for InnerRefMut<'_, T> {
         self.0.as_mut().unwrap()
     }
 }
-
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BufferType {
+    /// Used by kernels
+    Storage,
+    /// Used as an indirect buffer for indirect dispatch calls
+    Indirect,
+    /// Used for uniform data for kernels
+    Uniform,
+    /// Used to upload data to GPU
+    Upload,
+    /// Used to download data from GPU
+    Download,
+}
 #[derive(Clone, Copy, Debug)]
 pub struct BufferDescriptor {
     /// The size needed in bytes
     pub size: u64,
-    /// Whether this can be used as an indirect buffer for indirect dispatch calls
-    pub indirect_capable: bool,
-    /// Whether the buffer is used for uniform data(small amount of data which can be **read** from all threads in a dispatch quickly)
-    pub uniform: bool,
+    /// The type of the buffer
+    pub buffer_type: BufferType,
     /// The value that the contents of the buffer must be aligned to. This is important for when supasim must detect
     pub contents_align: u64,
     /// Currently unused. In the future this may be used to prefer keeping some buffers in memory when device runs out of memory and swapping becomes necessary
@@ -85,8 +95,7 @@ impl Default for BufferDescriptor {
     fn default() -> Self {
         Self {
             size: 0,
-            indirect_capable: false,
-            uniform: false,
+            buffer_type: BufferType::Storage,
             contents_align: 0,
             priority: 1.0,
         }
@@ -96,14 +105,15 @@ impl From<BufferDescriptor> for types::BufferDescriptor {
     fn from(s: BufferDescriptor) -> types::BufferDescriptor {
         types::BufferDescriptor {
             size: s.size,
-            memory_type: if s.indirect_capable || s.uniform {
-                BufferType::Other
-            } else {
-                BufferType::Storage
+            memory_type: match s.buffer_type {
+                BufferType::Storage => types::BufferType::Storage,
+                BufferType::Indirect | BufferType::Uniform => types::BufferType::Other,
+                BufferType::Upload => types::BufferType::Upload,
+                BufferType::Download => types::BufferType::Download,
             },
             visible_to_renderer: false,
-            indirect_capable: s.indirect_capable,
-            uniform: s.uniform,
+            indirect_capable: s.buffer_type == BufferType::Indirect,
+            uniform: s.buffer_type == BufferType::Uniform,
             needs_flush: true,
         }
     }
@@ -138,15 +148,15 @@ impl<B: hal::Backend> BufferSlice<B> {
     fn acquire(&self) -> SupaSimResult<B, ()> {
         let mut s = self.buffer.inner_mut()?;
         let _instance = s.instance.clone();
-        let _instance = _instance.inner_mut()?;
+        let mut _instance = _instance.inner_mut()?;
+        _instance.wait_for_submission(true, s.last_used)?;
 
         s.host_using.push(BufferRange {
             start: self.start,
             len: self.len,
             needs_mut: self.needs_mut,
         });
-        // We also need to check it isn't in use
-        todo!()
+        Ok(())
     }
     fn release(&self) -> SupaSimResult<B, ()> {
         let s = self.buffer.inner_mut()?;
@@ -163,8 +173,7 @@ impl<B: hal::Backend> BufferSlice<B> {
             .filter_map(|a| if *a.1 == range { Some(a) } else { None })
             .next()
             .unwrap();
-        // Check it isn't in use
-        todo!()
+        Ok(())
     }
 }
 
@@ -325,8 +334,9 @@ impl<B: hal::Backend> Instance<B> {
             unused_semaphores: Vec::new(),
             command_recorders: Arena::default(),
             submitted_command_recorders: VecDeque::new(),
-            submitted_semaphore_count: 0,
-            submitted_command_recorders_start: 0,
+            // These are 1 so that we can always wait for zero
+            submitted_semaphore_count: 1,
+            submitted_command_recorders_start: 1,
             hal_command_recorders: Vec::new(),
             hal_bind_groups: Vec::new(),
         })
@@ -406,12 +416,13 @@ impl<B: hal::Backend> Instance<B> {
         let b = Buffer::from_inner(BufferInner {
             _phantom: Default::default(),
             instance: self.clone(),
-            inner,
+            inner: Some(inner),
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
             _semaphores: Vec::new(),
             host_using: Vec::new(),
             create_info: *desc,
+            last_used: 0,
         });
         b.inner_mut()?.id = s.buffers.insert(Some(b.downgrade()));
         Ok(b)
@@ -439,8 +450,17 @@ impl<B: hal::Backend> Instance<B> {
             } else {
                 unsafe { s.inner.create_recorder() }.map_supasim()?
             };
-            // All previous submissions are guaranteed to have completed when this starts so we don't need extra sync info
-            let (dag, _) = sync::assemble_dag(&mut recorder_inners)?;
+            let (dag, sync_info) = sync::assemble_dag(&mut recorder_inners)?;
+            for (buf_id, _) in sync_info {
+                let b = s
+                    .buffers
+                    .get(buf_id)
+                    .ok_or(SupaSimError::AlreadyDestroyed)?
+                    .as_ref()
+                    .unwrap()
+                    .upgrade()?;
+                b.inner_mut()?.last_used = s.submitted_semaphore_count;
+            }
             match s.inner_properties.sync_mode {
                 SyncMode::Dag => sync::record_dag(&dag, &mut recorder)?,
                 SyncMode::VulkanStyle => {
@@ -517,7 +537,7 @@ impl<B: hal::Backend> Instance<B> {
                     _instance
                         .inner_mut()?
                         .inner
-                        .read_buffer(&buffer.inner, b.start, &mut data)
+                        .read_buffer(buffer.inner.as_ref().unwrap(), b.start, &mut data)
                         .map_supasim()?;
                 };
             };
@@ -576,6 +596,9 @@ impl<B: hal::Backend> InstanceInner<B> {
             let item = self.submitted_command_recorders.pop_front().unwrap();
             for b in item.buffers_to_destroy {
                 unsafe { self.inner.destroy_buffer(b).map_supasim()? };
+            }
+            for bg in item.bind_groups {
+                self.hal_bind_groups.push(bg);
             }
             self.hal_command_recorders.extend(item.command_recorders);
             self.unused_semaphores.push(item.used_semaphore);
@@ -645,8 +668,11 @@ enum BufferCommandInner<B: hal::Backend> {
         kernel: Kernel<B>,
         workgroup_dims: [u32; 3],
     },
-    /// Kernel, buffer and offset, needs validation
-    KernelDispatchIndirect(Kernel<B>, BufferSlice<B>, bool),
+    KernelDispatchIndirect {
+        kernel: Kernel<B>,
+        indirect_buffer: BufferSlice<B>,
+        needs_validation: bool,
+    },
     Dummy,
 }
 struct SubmittedCommandRecorder<B: hal::Backend> {
@@ -655,6 +681,7 @@ struct SubmittedCommandRecorder<B: hal::Backend> {
     used_semaphore: B::Semaphore,
     /// Buffers that are waiting for this to be destroyed
     buffers_to_destroy: Vec<B::Buffer>,
+    bind_groups: Vec<B::BindGroup>,
 }
 api_type!(CommandRecorder, {
     instance: Instance<B>,
@@ -725,7 +752,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch_kernel_indirect(
         &self,
-        shader: Kernel<B>,
+        kernel: Kernel<B>,
         buffers: &[&BufferSlice<B>],
         indirect_buffer: &BufferSlice<B>,
         validate_dispatch: bool,
@@ -739,11 +766,11 @@ impl<B: hal::Backend> CommandRecorder<B> {
         }
         let mut s = self.inner_mut()?;
         s.commands.push(BufferCommand {
-            inner: BufferCommandInner::KernelDispatchIndirect(
-                shader,
-                indirect_buffer.clone(),
-                validate_dispatch,
-            ),
+            inner: BufferCommandInner::KernelDispatchIndirect {
+                kernel,
+                indirect_buffer: indirect_buffer.clone(),
+                needs_validation: validate_dispatch,
+            },
             buffers: buffers.iter().map(|&b| b.clone()).collect(),
         });
         Ok(())
@@ -782,17 +809,30 @@ impl BufferRange {
 
 api_type!(Buffer, {
     instance: Instance<B>,
-    inner: B::Buffer,
+    inner: Option<B::Buffer>,
     id: Index,
     _semaphores: Vec<(Index, BufferRange)>,
     host_using: Vec<BufferRange>,
     create_info: BufferDescriptor,
+    last_used: u64,
 },);
 impl<B: hal::Backend> Drop for BufferInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
             instance.buffers.remove(self.id);
-            let _ = unsafe { instance.inner.destroy_buffer(std::ptr::read(&self.inner)) };
+
+            if instance.submitted_command_recorders_start <= self.last_used {
+                let start = instance.submitted_command_recorders_start;
+                instance.submitted_command_recorders[(self.last_used - start) as usize]
+                    .buffers_to_destroy
+                    .push(std::mem::take(&mut self.inner).unwrap());
+            } else {
+                let _ = unsafe {
+                    instance
+                        .inner
+                        .destroy_buffer(std::mem::take(&mut self.inner).unwrap())
+                };
+            }
         }
     }
 }
