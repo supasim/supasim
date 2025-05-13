@@ -29,6 +29,7 @@ END LICENSE */
 mod sync;
 
 use hal::{BackendInstance as _, RecorderSubmitInfo, Semaphore};
+use std::collections::VecDeque;
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -283,15 +284,31 @@ pub struct InstanceProperties {
     pub is_unified_memory: bool,
 }
 api_type!(Instance, {
+    /// The inner hal instance
     inner: B::Instance,
+    /// The hal instance properties
     inner_properties: types::InstanceProperties,
+    /// All created kernels
     kernels: Arena<Option<KernelWeak<B>>>,
+    /// All created kernel caches
     kernel_caches: Arena<Option<KernelCacheWeak<B>>>,
-    command_recorders: Arena<Option<CommandRecorderWeak<B>>>,
+    /// All created buffers
     buffers: Arena<Option<BufferWeak<B>>>,
+    /// All wait handles created
     wait_handles: Arena<WaitHandleWeak<B>>,
-    unused_wait_handles: Vec<B::Semaphore>,
+    /// Hal wait handles not currently associated with any submission
+    unused_semaphores: Vec<B::Semaphore>,
+    /// All created command recorders
+    command_recorders: Arena<Option<CommandRecorderWeak<B>>>,
+    /// All command recorders that have already been submitted and the associated usage data
+    submitted_command_recorders: VecDeque<SubmittedCommandRecorder<B>>,
+    /// The number of command recorder sets that have been submitted so far
+    submitted_semaphore_count: u64,
+    /// The index of the first command recorder in the queue
+    submitted_command_recorders_start: u64,
+    /// Hal command recorders not currently in use
     hal_command_recorders: Vec<B::CommandRecorder>,
+    /// Unused hal bind groups
     hal_bind_groups: Vec<B::BindGroup>,
 },);
 impl<B: hal::Backend> Instance<B> {
@@ -303,10 +320,13 @@ impl<B: hal::Backend> Instance<B> {
             inner_properties,
             kernels: Arena::default(),
             kernel_caches: Arena::default(),
-            command_recorders: Arena::default(),
             buffers: Arena::default(),
             wait_handles: Arena::default(),
-            unused_wait_handles: Vec::new(),
+            unused_semaphores: Vec::new(),
+            command_recorders: Arena::default(),
+            submitted_command_recorders: VecDeque::new(),
+            submitted_semaphore_count: 0,
+            submitted_command_recorders_start: 0,
             hal_command_recorders: Vec::new(),
             hal_bind_groups: Vec::new(),
         })
@@ -368,20 +388,14 @@ impl<B: hal::Backend> Instance<B> {
         k.inner_mut()?.id = s.kernel_caches.insert(Some(k.downgrade()));
         Ok(k)
     }
-    pub fn create_recorder(&self, reusable: bool) -> SupaSimResult<B, CommandRecorder<B>> {
+    pub fn create_recorder(&self) -> SupaSimResult<B, CommandRecorder<B>> {
         let mut s = self.inner_mut()?;
         let r = CommandRecorder::from_inner(CommandRecorderInner {
             _phantom: Default::default(),
             instance: self.clone(),
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
-            recorded: false,
-            cleared: true,
             commands: Vec::new(),
-            reusable,
-            used_buffers: Vec::new(),
-            current_iteration: 0,
-            command_recorders: Vec::new(),
         });
         r.inner_mut()?.id = s.command_recorders.insert(Some(r.downgrade()));
         Ok(r)
@@ -404,71 +418,59 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn submit_commands(
         &self,
-        recorders: &[CommandRecorder<B>],
-    ) -> SupaSimResult<B, Vec<WaitHandle<B>>> {
+        recorders: &mut [CommandRecorder<B>],
+    ) -> SupaSimResult<B, WaitHandle<B>> {
         // This code is terrible
         // I sincerely apologize to anyone trying to read(my future self)
 
-        // First, make all command recorders record their commands
-        for recorder_ref in recorders {
-            let mut recorder = recorder_ref.inner_mut()?;
-            let _instance = recorder.instance.clone();
-            if !recorder.cleared && !recorder.recorded {
-                todo!()
+        let mut recorder_locks = Vec::new();
+        for r in recorders {
+            recorder_locks.push(r.inner_mut()?);
+        }
+        let mut recorder_inners = Vec::new();
+        for r in &mut recorder_locks {
+            recorder_inners.push(&mut **r);
+        }
+
+        let mut s = self.inner_mut()?;
+        let mut recorder = if let Some(r) = s.hal_command_recorders.pop() {
+            r
+        } else {
+            unsafe { s.inner.create_recorder() }.map_supasim()?
+        };
+        let mut used_slices = Vec::new();
+        let dag = sync::assemble_dag(&mut recorder_inners, &mut used_slices)?;
+        match s.inner_properties.sync_mode {
+            SyncMode::Dag => sync::record_dag(&dag, &mut recorder)?,
+            SyncMode::VulkanStyle => {
+                let streams = sync::dag_to_command_streams(&dag, true)?;
+                sync::record_command_streams(&streams, self.clone(), &mut recorder)?;
             }
-            let needs_record = !recorder.recorded;
-            if !recorder.reusable {
-                recorder.recorded = false;
-            }
-            drop(recorder);
-            if needs_record {
-                recorder_ref.record()?;
+            SyncMode::Automatic => {
+                let streams = sync::dag_to_command_streams(&dag, false)?;
+                sync::record_command_streams(&streams, self.clone(), &mut recorder)?;
             }
         }
-        // Acquire a read lock on every recorder, so that we can later use references to inner
-        let mut recorded_locks = Vec::new();
-        for recorder in recorders {
-            recorded_locks.push(recorder.inner_mut()?);
-        }
-        let mut recorders = Vec::new();
-        let mut recorder_semaphores = Vec::new();
-        let mut semaphore_locks = Vec::new();
-        let mut submit_infos: Vec<RecorderSubmitInfo<'_, B>> = Vec::new();
-        {
-            for recorder in &mut recorded_locks {
-                recorder_semaphores.push(self.acquire_wait_handle()?);
-                semaphore_locks.push(recorder_semaphores.last().unwrap().as_inner()?);
-                for cb in &mut recorder.command_recorders {
-                    // More semaphore magic
-                    recorders.push(cb);
-                    submit_infos.push(RecorderSubmitInfo {
-                        #[allow(invalid_value)]
-                        command_recorder: unsafe { std::mem::zeroed() },
-                        wait_semaphore: None,
-                        signal_semaphore: None,
-                    });
-                }
-            }
-            for (i, r) in recorders.iter_mut().enumerate() {
-                unsafe {
-                    std::ptr::write(
-                        &mut submit_infos[i].command_recorder as *mut _,
-                        &mut r.inner,
-                    );
-                }
-            }
-            for (i, s) in submit_infos.iter_mut().enumerate() {
-                s.wait_semaphore = Some(semaphore_locks[i].inner.as_ref().unwrap());
-            }
-            // TODO: finish this by working with semaphores
-        }
+        let semaphore = self.acquire_semaphore()?;
+        let mut submit_info = RecorderSubmitInfo {
+            command_recorder: &mut recorder,
+            wait_semaphore: None,
+            signal_semaphore: Some(&semaphore),
+        };
         unsafe {
             self.inner_mut()?
                 .inner
-                .submit_recorders(&mut submit_infos)
+                .submit_recorders(std::slice::from_mut(&mut submit_info))
                 .map_supasim()?;
         }
-        Ok(recorder_semaphores)
+        let index = s.submitted_semaphore_count;
+        s.submitted_semaphore_count += 1;
+        Ok(WaitHandle::from_inner(WaitHandleInner {
+            _phantom: Default::default(),
+            instance: self.clone(),
+            index,
+            id: Index::DANGLING,
+        }))
     }
     pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
         let mut _s = self.inner_mut()?;
@@ -484,29 +486,12 @@ impl<B: hal::Backend> Instance<B> {
         todo!();
         //Ok(())
     }
-    fn acquire_wait_handle(&self) -> SupaSimResult<B, WaitHandle<B>> {
+    fn acquire_semaphore(&self) -> SupaSimResult<B, B::Semaphore> {
         let mut s = self.inner_mut()?;
-        let handle;
-        if let Some(sem) = s.unused_wait_handles.pop() {
-            handle = WaitHandle::from_inner(WaitHandleInner {
-                _phantom: Default::default(),
-                instance: self.clone(),
-                inner: Some(sem),
-                id: Index::DANGLING,
-            });
-            let id = s.wait_handles.insert(handle.downgrade());
-            handle.inner_mut()?.id = id;
+        let handle = if let Some(sem) = s.unused_semaphores.pop() {
+            sem
         } else {
-            let semaphore = unsafe { s.inner.create_semaphore() }.map_supasim()?;
-            handle = WaitHandle::from_inner(WaitHandleInner {
-                instance: self.clone(),
-                _phantom: Default::default(),
-                inner: Some(semaphore),
-                // Yes its UB, but id doesn't have any destructor and just contains two numbers
-                id: Index::DANGLING,
-            });
-            let id = s.wait_handles.insert(handle.downgrade());
-            handle.inner_mut()?.id = id;
+            unsafe { s.inner.create_semaphore() }.map_supasim()?
         };
         Ok(handle)
     }
@@ -568,6 +553,34 @@ impl<B: hal::Backend> Drop for InstanceInner<B> {
         self.kernel_caches.clear();
         self.buffers.clear();
         self.kernels.clear();
+    }
+}
+impl<B: hal::Backend> InstanceInner<B> {
+    /// Returns whether the operation has completed
+    pub fn wait_for_submission(&mut self, force_wait: bool, id: u64) -> SupaSimResult<B, bool> {
+        if id < self.submitted_command_recorders_start {
+            return Ok(true);
+        }
+        while self.submitted_command_recorders_start >= id {
+            let thing = &mut self.submitted_command_recorders[0];
+            if force_wait {
+                unsafe { thing.used_semaphore.wait(&mut self.inner).map_supasim()? };
+            } else if !unsafe {
+                thing
+                    .used_semaphore
+                    .is_signalled(&mut self.inner)
+                    .map_supasim()?
+            } {
+                return Ok(false);
+            }
+            let item = self.submitted_command_recorders.pop_front().unwrap();
+            for b in item.buffers_to_destroy {
+                unsafe { self.inner.destroy_buffer(b).map_supasim()? };
+            }
+            self.hal_command_recorders.extend(item.command_recorders);
+            self.unused_semaphores.push(item.used_semaphore);
+        }
+        Ok(true)
     }
 }
 api_type!(Kernel, {
@@ -636,22 +649,17 @@ enum BufferCommandInner<B: hal::Backend> {
     KernelDispatchIndirect(Kernel<B>, BufferSlice<B>, bool),
     Dummy,
 }
-struct CommandRecorderData<B: hal::Backend> {
-    inner: B::CommandRecorder,
-    out_semaphore: u32,
-    wait_semaphores: Vec<u32>,
+struct SubmittedCommandRecorder<B: hal::Backend> {
+    used_buffers: Vec<BufferSlice<B>>,
+    command_recorders: Vec<B::CommandRecorder>,
+    used_semaphore: B::Semaphore,
+    /// Buffers that are waiting for this to be destroyed
+    buffers_to_destroy: Vec<B::Buffer>,
 }
 api_type!(CommandRecorder, {
     instance: Instance<B>,
     id: Index,
-    recorded: bool,
-    cleared: bool,
     commands: Vec<BufferCommand<B>>,
-    /// Used for tracking if the command recorder is cleared so previously used resources don't need to wait
-    current_iteration: u64,
-    used_buffers: Vec<BufferSlice<B>>,
-    command_recorders: Vec<CommandRecorderData<B>>,
-    reusable: bool,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
     pub fn copy_buffer(
@@ -678,8 +686,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
         dst_slice.validate()?;
         {
             let mut lock = self.inner_mut()?;
-            lock.used_buffers.push(src_slice.clone());
-            lock.used_buffers.push(dst_slice.clone());
             lock.commands.push(BufferCommand {
                 inner: BufferCommandInner::CopyBufferToBuffer {
                     src_buffer,
@@ -701,7 +707,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
     ) -> SupaSimResult<B, ()> {
         for b in buffers {
             b.validate()?;
-            self.inner_mut()?.used_buffers.push((*b).clone());
         }
         let mut s = self.inner_mut()?;
         s.commands.push(BufferCommand {
@@ -711,7 +716,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
             },
             buffers: buffers.iter().map(|&b| b.clone()).collect(),
         });
-        s.recorded = false;
         Ok(())
     }
     /// ### WARNING
@@ -726,10 +730,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
         indirect_buffer: &BufferSlice<B>,
         validate_dispatch: bool,
     ) -> SupaSimResult<B, ()> {
-        for b in buffers {
-            b.validate()?;
-            self.inner_mut()?.used_buffers.push((*b).clone());
-        }
         indirect_buffer.validate()?;
         if (indirect_buffer.start % 4) != 0 || indirect_buffer.len != 12 {
             return Err(SupaSimError::BufferRegionNotValid);
@@ -746,48 +746,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
             ),
             buffers: buffers.iter().map(|&b| b.clone()).collect(),
         });
-        s.recorded = false;
-        Ok(())
-    }
-    pub fn clear(&self) -> SupaSimResult<B, ()> {
-        let mut s = self.inner_mut()?;
-        s.commands.clear();
-        s.recorded = false;
-        s.cleared = true;
-        s.current_iteration += 1;
-        s.used_buffers.clear();
-        let instance = s.instance.clone();
-        for cb in &mut s.command_recorders {
-            unsafe {
-                instance
-                    .inner_mut()?
-                    .inner
-                    .clear_recorders(&mut [&mut cb.inner])
-                    .map_supasim()?;
-            };
-        }
-        while let Some(cr) = s.command_recorders.pop() {
-            instance.inner_mut()?.hal_command_recorders.push(cr.inner);
-        }
-        todo!(); // Return command recorders, semaphores to pool
-    }
-    fn record(&self) -> SupaSimResult<B, ()> {
-        let mut s = self.inner_mut()?;
-        s.recorded = true;
-        s.cleared = false;
-        let _instance = s.instance.clone();
-        let instance = _instance.inner_mut()?;
-        match instance.inner_properties.sync_mode {
-            SyncMode::Dag => todo!(), // We will work on this when cuda lands with cuda graphs
-            SyncMode::Automatic | SyncMode::VulkanStyle => {
-                let dag = sync::assemble_dag(&mut s)?;
-                let streams = sync::dag_to_command_streams(
-                    &dag,
-                    instance.inner_properties.sync_mode == SyncMode::VulkanStyle,
-                )?;
-                sync::record_command_streams(&streams, &mut s)?;
-            }
-        }
         Ok(())
     }
 }
@@ -795,10 +753,6 @@ impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
             instance.command_recorders.remove(self.id);
-            let recorders = std::mem::take(&mut self.command_recorders);
-            for r in recorders {
-                instance.hal_command_recorders.push(r.inner);
-            }
         }
     }
 }
@@ -894,32 +848,23 @@ impl<B: hal::Backend> MappedBuffer<B> {
 
 api_type!(WaitHandle, {
     instance: Instance<B>,
-    /// This is an option so that it can be saved after destroy
-    inner: Option<B::Semaphore>,
+    /// Index of the submission
+    index: u64,
     id: Index,
 },);
 impl<B: hal::Backend> Drop for WaitHandleInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
             instance.wait_handles.remove(self.id);
-            instance
-                .unused_wait_handles
-                .push(std::mem::take(&mut self.inner).unwrap());
         }
     }
 }
 impl<B: hal::Backend> WaitHandle<B> {
     pub fn wait(&self) -> SupaSimResult<B, ()> {
-        let mut s = self.inner_mut()?;
+        let s = self.inner_mut()?;
         let _i = s.instance.clone();
         let mut instance = _i.inner_mut()?;
-        unsafe {
-            s.inner
-                .as_mut()
-                .unwrap()
-                .wait(&mut instance.inner)
-                .map_supasim()?
-        }
+        instance.wait_for_submission(true, s.index)?;
         Ok(())
     }
 }

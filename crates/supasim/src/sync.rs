@@ -23,8 +23,8 @@ use thunderdome::Index;
 use types::{Dag, NodeIndex, SyncOperations};
 
 use crate::{
-    BufferCommand, BufferCommandInner, BufferRange, CommandRecorderInner, MapSupasimError,
-    SupaSimError, SupaSimResult,
+    BufferCommand, BufferCommandInner, BufferRange, CommandRecorderInner, Instance,
+    MapSupasimError, SupaSimError, SupaSimResult,
 };
 
 pub type CommandDag<B> = Dag<BufferCommand<B>>;
@@ -84,11 +84,17 @@ pub struct StreamingCommands {
     pub streams: Vec<CommandStream>,
 }
 pub fn assemble_dag<B: hal::Backend>(
-    cr: &mut CommandRecorderInner<B>,
+    cr: &mut [&mut CommandRecorderInner<B>],
+    _used_slices: &mut Vec<crate::BufferSlice<B>>,
 ) -> SupaSimResult<B, CommandDag<B>> {
+    let _ = _used_slices;
     let mut buffers_tracker: HashMap<Index, Vec<(BufferRange, usize)>> = HashMap::new();
 
-    let commands = std::mem::take(&mut cr.commands);
+    let mut commands = Vec::new();
+    for cr in cr {
+        let cmds = std::mem::take(&mut cr.commands);
+        commands.extend(cmds);
+    }
 
     let mut dag = Dag::new();
     for cmd in commands {
@@ -129,7 +135,7 @@ pub fn assemble_dag<B: hal::Backend>(
 }
 pub fn record_dag<B: hal::Backend>(
     _dag: &CommandDag<B>,
-    _cr: &mut CommandRecorderInner<B>,
+    _cr: &mut B::CommandRecorder,
 ) -> SupaSimResult<B, ()> {
     // TODO: work on this when cuda support lands
     todo!()
@@ -143,14 +149,10 @@ pub fn dag_to_command_streams<B: hal::Backend>(
 }
 pub fn record_command_streams<B: hal::Backend>(
     streams: &StreamingCommands,
-    cr: &mut CommandRecorderInner<B>,
+    instance: Instance<B>,
+    _recorder: &mut B::CommandRecorder,
 ) -> SupaSimResult<B, ()> {
-    let mut instance = cr.instance.inner_mut()?;
-    let _supports_signal = instance.inner_properties.semaphore_signal;
-    let mut semaphores = Vec::new();
-    for _ in 0..streams.num_semaphores {
-        semaphores.push(cr.instance.acquire_wait_handle()?);
-    }
+    let mut instance = instance.inner_mut()?;
     let mut bindgroups = Vec::new();
     for bg in &streams.bindgroups {
         let _k = instance
@@ -204,7 +206,6 @@ pub fn record_command_streams<B: hal::Backend>(
         };
         bindgroups.push(bg);
     }
-    cr.command_recorders.clear();
     for stream in &streams.streams {
         let mut cr = match instance.hal_command_recorders.pop() {
             Some(a) => a,
