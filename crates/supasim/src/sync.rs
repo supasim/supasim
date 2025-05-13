@@ -83,11 +83,11 @@ pub struct StreamingCommands {
     pub bindgroups: Vec<(Index, Vec<(Index, BufferRange)>)>,
     pub streams: Vec<CommandStream>,
 }
+
+#[allow(clippy::type_complexity)]
 pub fn assemble_dag<B: hal::Backend>(
     cr: &mut [&mut CommandRecorderInner<B>],
-    _used_slices: &mut Vec<crate::BufferSlice<B>>,
-) -> SupaSimResult<B, CommandDag<B>> {
-    let _ = _used_slices;
+) -> SupaSimResult<B, (CommandDag<B>, HashMap<Index, Vec<BufferRange>>)> {
     let mut buffers_tracker: HashMap<Index, Vec<(BufferRange, usize)>> = HashMap::new();
 
     let mut commands = Vec::new();
@@ -131,7 +131,11 @@ pub fn assemble_dag<B: hal::Backend>(
             .unwrap();
     }
     dag.transitive_reduce(vec![NodeIndex::new(dag.node_count() - 1)]);
-    Ok(dag)
+    let out_map = buffers_tracker
+        .into_iter()
+        .map(|(key, value)| (key, value.iter().map(|a| a.0).collect()))
+        .collect();
+    Ok((dag, out_map))
 }
 pub fn record_dag<B: hal::Backend>(
     _dag: &CommandDag<B>,

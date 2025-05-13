@@ -423,45 +423,54 @@ impl<B: hal::Backend> Instance<B> {
         // This code is terrible
         // I sincerely apologize to anyone trying to read(my future self)
 
-        let mut recorder_locks = Vec::new();
-        for r in recorders {
-            recorder_locks.push(r.inner_mut()?);
-        }
-        let mut recorder_inners = Vec::new();
-        for r in &mut recorder_locks {
-            recorder_inners.push(&mut **r);
-        }
-
         let mut s = self.inner_mut()?;
-        let mut recorder = if let Some(r) = s.hal_command_recorders.pop() {
-            r
-        } else {
-            unsafe { s.inner.create_recorder() }.map_supasim()?
-        };
-        let mut used_slices = Vec::new();
-        let dag = sync::assemble_dag(&mut recorder_inners, &mut used_slices)?;
-        match s.inner_properties.sync_mode {
-            SyncMode::Dag => sync::record_dag(&dag, &mut recorder)?,
-            SyncMode::VulkanStyle => {
-                let streams = sync::dag_to_command_streams(&dag, true)?;
-                sync::record_command_streams(&streams, self.clone(), &mut recorder)?;
+        {
+            let mut recorder_locks = Vec::new();
+            for r in recorders.iter_mut() {
+                recorder_locks.push(r.inner_mut()?);
             }
-            SyncMode::Automatic => {
-                let streams = sync::dag_to_command_streams(&dag, false)?;
-                sync::record_command_streams(&streams, self.clone(), &mut recorder)?;
+            let mut recorder_inners = Vec::new();
+            for r in &mut recorder_locks {
+                recorder_inners.push(&mut **r);
+            }
+
+            let mut recorder = if let Some(r) = s.hal_command_recorders.pop() {
+                r
+            } else {
+                unsafe { s.inner.create_recorder() }.map_supasim()?
+            };
+            // All previous submissions are guaranteed to have completed when this starts so we don't need extra sync info
+            let (dag, _) = sync::assemble_dag(&mut recorder_inners)?;
+            match s.inner_properties.sync_mode {
+                SyncMode::Dag => sync::record_dag(&dag, &mut recorder)?,
+                SyncMode::VulkanStyle => {
+                    let streams = sync::dag_to_command_streams(&dag, true)?;
+                    sync::record_command_streams(&streams, self.clone(), &mut recorder)?;
+                }
+                SyncMode::Automatic => {
+                    let streams = sync::dag_to_command_streams(&dag, false)?;
+                    sync::record_command_streams(&streams, self.clone(), &mut recorder)?;
+                }
+            }
+            let semaphore = if let Some(s) = s.unused_semaphores.pop() {
+                s
+            } else {
+                unsafe { s.inner.create_semaphore().map_supasim()? }
+            };
+            let mut submit_info = RecorderSubmitInfo {
+                command_recorder: &mut recorder,
+                wait_semaphore: None,
+                signal_semaphore: Some(&semaphore),
+            };
+            unsafe {
+                self.inner_mut()?
+                    .inner
+                    .submit_recorders(std::slice::from_mut(&mut submit_info))
+                    .map_supasim()?;
             }
         }
-        let semaphore = self.acquire_semaphore()?;
-        let mut submit_info = RecorderSubmitInfo {
-            command_recorder: &mut recorder,
-            wait_semaphore: None,
-            signal_semaphore: Some(&semaphore),
-        };
-        unsafe {
-            self.inner_mut()?
-                .inner
-                .submit_recorders(std::slice::from_mut(&mut submit_info))
-                .map_supasim()?;
+        for recorder in recorders {
+            recorder.destroy()?;
         }
         let index = s.submitted_semaphore_count;
         s.submitted_semaphore_count += 1;
@@ -485,15 +494,6 @@ impl<B: hal::Backend> Instance<B> {
         unsafe { s.inner.cleanup_cached_resources() }.map_supasim()?;
         todo!();
         //Ok(())
-    }
-    fn acquire_semaphore(&self) -> SupaSimResult<B, B::Semaphore> {
-        let mut s = self.inner_mut()?;
-        let handle = if let Some(sem) = s.unused_semaphores.pop() {
-            sem
-        } else {
-            unsafe { s.inner.create_semaphore() }.map_supasim()?
-        };
-        Ok(handle)
     }
 
     #[allow(clippy::type_complexity)]

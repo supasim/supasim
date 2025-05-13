@@ -65,7 +65,7 @@ pub fn main() {
     let kernel = instance
         .compile_kernel(&spirv, reflection_info, Some(&cache))
         .unwrap();
-    let recorder = instance.create_recorder(false).unwrap();
+    let recorder = instance.create_recorder().unwrap();
     let buffers = [
         &BufferSlice::entire_buffer(&buffer1, false).unwrap(),
         &BufferSlice::entire_buffer(&buffer2, false).unwrap(),
@@ -91,7 +91,7 @@ pub fn main() {
     recorder
         .dispatch_kernel(kernel.clone(), &buffers, [1, 1, 1])
         .unwrap();
-    instance.submit_commands(&[recorder]).unwrap();
+    instance.submit_commands(&mut [recorder]).unwrap();
     instance
         .access_buffers(
             Box::new(|buffers| {
