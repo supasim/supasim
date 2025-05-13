@@ -71,14 +71,17 @@ pub enum HalCommandBuilder {
         resources: Vec<Index>,
     },
 }
-
+pub struct BindGroupDesc {
+    kernel_idx: Index,
+    items: Vec<(Index, BufferRange)>,
+}
 pub struct CommandStream {
     pub commands: Vec<HalCommandBuilder>,
 }
 /// These are split into multiple streams so that certain operations can be waited without waiting for all
 pub struct StreamingCommands {
     /// Contains the index of the kernel, the index of the buffer, and the range of the buffer
-    pub bind_groups: Vec<(Index, Vec<(Index, BufferRange)>)>,
+    pub bind_groups: Vec<BindGroupDesc>,
     pub streams: Vec<CommandStream>,
 }
 
@@ -138,7 +141,7 @@ pub fn assemble_dag<B: hal::Backend>(
 pub fn record_dag<B: hal::Backend>(
     _dag: &CommandDag<B>,
     _cr: &mut B::CommandRecorder,
-) -> SupaSimResult<B, ()> {
+) -> SupaSimResult<B, Vec<B::BindGroup>> {
     // TODO: work on this when cuda support lands
     todo!()
 }
@@ -211,7 +214,7 @@ pub fn dag_to_command_streams<B: hal::Backend>(
             for idx in layer {
                 let cmd = &nodes[idx].weight;
                 let hal = match &cmd.inner {
-                    BufferCommandInner::Dummy => unreachable!(),
+                    BufferCommandInner::Dummy => continue,
                     BufferCommandInner::CopyBufferToBuffer {
                         src_buffer,
                         dst_buffer,
@@ -230,9 +233,10 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                         workgroup_dims,
                     } => {
                         let bg_index = bind_groups.len() as u32;
-                        let bg = (
-                            kernel.inner()?.id,
-                            cmd.buffers
+                        let bg = BindGroupDesc {
+                            kernel_idx: kernel.inner()?.id,
+                            items: cmd
+                                .buffers
                                 .iter()
                                 .map(|a| {
                                     (
@@ -245,7 +249,7 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                                     )
                                 })
                                 .collect(),
-                        );
+                        };
                         bind_groups.push(bg);
                         HalCommandBuilder::DispatchKernel {
                             kernel: kernel.inner()?.id,
@@ -260,9 +264,10 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                         needs_validation,
                     } => {
                         let bg_index = bind_groups.len() as u32;
-                        let bg = (
-                            kernel.inner()?.id,
-                            cmd.buffers
+                        let bg = BindGroupDesc {
+                            kernel_idx: kernel.inner()?.id,
+                            items: cmd
+                                .buffers
                                 .iter()
                                 .map(|a| {
                                     (
@@ -275,7 +280,7 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                                     )
                                 })
                                 .collect(),
-                        );
+                        };
                         bind_groups.push(bg);
                         HalCommandBuilder::DispatchKernelIndirect {
                             kernel: kernel.inner()?.id,
@@ -301,20 +306,20 @@ pub fn record_command_streams<B: hal::Backend>(
     streams: &StreamingCommands,
     instance: Instance<B>,
     _recorder: &mut B::CommandRecorder,
-) -> SupaSimResult<B, ()> {
+) -> SupaSimResult<B, Vec<B::BindGroup>> {
     let mut instance = instance.inner_mut()?;
     let mut bindgroups = Vec::new();
     for bg in &streams.bind_groups {
         let _k = instance
             .kernels
-            .get(bg.0)
+            .get(bg.kernel_idx)
             .ok_or(SupaSimError::AlreadyDestroyed)?
             .as_ref()
             .ok_or(SupaSimError::AlreadyDestroyed)?
             .upgrade()?;
         let mut kernel = _k.inner_mut()?;
         let mut resources_a = Vec::new();
-        for res in &bg.1 {
+        for res in &bg.items {
             resources_a.push(
                 instance
                     .buffers
@@ -327,11 +332,11 @@ pub fn record_command_streams<B: hal::Backend>(
         }
         let mut resource_locks = Vec::new();
         for res in &resources_a {
-            resource_locks.push(res.as_inner()?);
+            resource_locks.push(res.inner()?);
         }
         let mut resources = Vec::new();
         for (i, res) in resource_locks.iter().enumerate() {
-            let range = bg.1[i].1;
+            let range = bg.items[i].1;
             resources.push(hal::GpuResource::Buffer {
                 buffer: res.inner.as_ref().unwrap(),
                 offset: range.start,
@@ -426,9 +431,6 @@ pub fn record_command_streams<B: hal::Backend>(
                 .map_supasim()?
         };
     }
-    if instance.inner_properties.easily_update_bind_groups {
-        instance.hal_bind_groups.extend(bindgroups);
-    }
     // TODO: priority
-    Ok(())
+    Ok(bindgroups)
 }

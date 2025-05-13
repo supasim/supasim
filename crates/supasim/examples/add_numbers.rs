@@ -16,7 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
-use supasim::{BufferDescriptor, Instance, UserBufferAccessClosure};
+use supasim::{BufferDescriptor, Instance};
 use supasim::{BufferSlice, shaders};
 
 pub fn main() {
@@ -82,7 +82,12 @@ pub fn main() {
         .compile_kernel(&spirv, reflection_info, Some(&cache))
         .unwrap();
     let recorder = instance.create_recorder().unwrap();
-    let buffers = [&BufferSlice::entire_buffer(&upload_buffer, true).unwrap()];
+    let buffers = [&BufferSlice {
+        buffer: upload_buffer.clone(),
+        start: 0,
+        len: 48,
+        needs_mut: true,
+    }];
     instance
         .access_buffers(
             Box::new(|buffers| {
@@ -95,23 +100,23 @@ pub fn main() {
             &buffers,
         )
         .unwrap();
-    instance
-        .access_buffers(
-            Box::new(|buffers| {
-                buffers[0]
-                    .writeable::<u32>()?
-                    .copy_from_slice(&[1, 2, 3, 4]);
-                buffers[1]
-                    .writeable::<u32>()?
-                    .copy_from_slice(&[5, 6, 7, 8]);
-                buffers[2]
-                    .writeable::<u32>()?
-                    .copy_from_slice(&[1, 1, 1, 1]);
-                Ok(())
-            }),
-            &buffers,
-        )
-        .unwrap();
+    /*instance
+    .access_buffers(
+        Box::new(|buffers| {
+            buffers[0]
+                .writeable::<u32>()?
+                .copy_from_slice(&[1, 2, 3, 4]);
+            buffers[1]
+                .writeable::<u32>()?
+                .copy_from_slice(&[5, 6, 7, 8]);
+            buffers[2]
+                .writeable::<u32>()?
+                .copy_from_slice(&[1, 1, 1, 1]);
+            Ok(())
+        }),
+        &buffers,
+    )
+    .unwrap();*/
     recorder
         .copy_buffer(upload_buffer.clone(), buffer1.clone(), 0, 0, 16)
         .unwrap();

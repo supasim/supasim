@@ -451,7 +451,8 @@ impl<B: hal::Backend> Instance<B> {
                 unsafe { s.inner.create_recorder() }.map_supasim()?
             };
             let (dag, sync_info) = sync::assemble_dag(&mut recorder_inners)?;
-            for (buf_id, _) in sync_info {
+            let mut used_buffers = Vec::new();
+            for (buf_id, ranges) in sync_info {
                 let b = s
                     .buffers
                     .get(buf_id)
@@ -460,18 +461,29 @@ impl<B: hal::Backend> Instance<B> {
                     .unwrap()
                     .upgrade()?;
                 b.inner_mut()?.last_used = s.submitted_semaphore_count;
+                for range in ranges {
+                    used_buffers.push(BufferSlice {
+                        buffer: b.clone(),
+                        start: range.start,
+                        len: range.len,
+                        needs_mut: range.needs_mut,
+                    })
+                }
             }
-            match s.inner_properties.sync_mode {
+            let sync_mode = s.inner_properties.sync_mode;
+            drop(s);
+            let bind_groups = match sync_mode {
                 SyncMode::Dag => sync::record_dag(&dag, &mut recorder)?,
                 SyncMode::VulkanStyle => {
                     let streams = sync::dag_to_command_streams(&dag, true)?;
-                    sync::record_command_streams(&streams, self.clone(), &mut recorder)?;
+                    sync::record_command_streams(&streams, self.clone(), &mut recorder)?
                 }
                 SyncMode::Automatic => {
                     let streams = sync::dag_to_command_streams(&dag, false)?;
-                    sync::record_command_streams(&streams, self.clone(), &mut recorder)?;
+                    sync::record_command_streams(&streams, self.clone(), &mut recorder)?
                 }
-            }
+            };
+            let mut s = self.inner_mut()?;
             let semaphore = if let Some(s) = s.unused_semaphores.pop() {
                 s
             } else {
@@ -483,15 +495,23 @@ impl<B: hal::Backend> Instance<B> {
                 signal_semaphore: Some(&semaphore),
             };
             unsafe {
-                self.inner_mut()?
-                    .inner
+                s.inner
                     .submit_recorders(std::slice::from_mut(&mut submit_info))
                     .map_supasim()?;
             }
+            s.submitted_command_recorders
+                .push_back(SubmittedCommandRecorder {
+                    command_recorders: vec![recorder],
+                    buffers_to_destroy: Vec::new(),
+                    bind_groups,
+                    used_semaphore: semaphore,
+                    used_buffers,
+                })
         }
         for recorder in recorders {
             recorder.destroy()?;
         }
+        let mut s = self.inner_mut()?;
         let index = s.submitted_semaphore_count;
         s.submitted_semaphore_count += 1;
         Ok(WaitHandle::from_inner(WaitHandleInner {
@@ -521,7 +541,7 @@ impl<B: hal::Backend> Instance<B> {
         &self,
         closure: UserBufferAccessClosure<B>,
         buffers: &[&BufferSlice<B>],
-    ) -> SupaSimResult<B, Option<WaitHandle<B>>> {
+    ) -> SupaSimResult<B, ()> {
         let mut buffer_datas = Vec::new();
         for b in buffers {
             b.validate()?;
@@ -550,7 +570,7 @@ impl<B: hal::Backend> Instance<B> {
                 instance: self.clone(),
                 inner: a.as_mut_ptr(),
                 len: b.len,
-                buffer: b.buffer.as_inner()?.id,
+                buffer: b.buffer.inner()?.id,
                 has_mut: b.needs_mut,
                 was_used_mut: false,
             };
@@ -562,7 +582,7 @@ impl<B: hal::Backend> Instance<B> {
         for b in buffers {
             b.release()?;
         }
-        todo!()
+        Ok(())
     }
 }
 impl<B: hal::Backend> Drop for InstanceInner<B> {
@@ -848,15 +868,14 @@ pub struct MappedBuffer<B: hal::Backend> {
 impl<B: hal::Backend> MappedBuffer<B> {
     fn buffer_align(&self) -> SupaSimResult<B, u64> {
         // This code lol... maybe I need to do some major refactor this is gross
-        Ok(self
-            .instance
-            .inner()?
+        let _instance = self.instance.inner()?;
+        let a = _instance
             .buffers
             .get(self.buffer)
             .as_ref()
             .ok_or(SupaSimError::AlreadyDestroyed)?
-            .as_ref()
-            .ok_or(SupaSimError::AlreadyDestroyed)?
+            .as_ref();
+        Ok(a.ok_or(SupaSimError::AlreadyDestroyed)?
             .upgrade()?
             .inner()?
             .create_info
