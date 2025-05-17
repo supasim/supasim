@@ -16,8 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
-use supasim::{shaders, BufferSlice};
-use supasim::{BufferDescriptor, Instance};
+use supasim::{BufferDescriptor, BufferSlice, Instance, shaders};
 
 pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
     println!("Hello, world!");
