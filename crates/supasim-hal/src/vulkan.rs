@@ -840,7 +840,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 GpuResource::Buffer {
                     buffer,
                     offset,
-                    size,
+                    len: size,
                 } => {
                     buffer_infos.push(
                         vk::DescriptorBufferInfo::default()
@@ -1134,6 +1134,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         Ok(())
     }
 }
+#[derive(Debug)]
 pub struct VulkanKernel {
     pub shader: vk::ShaderModule,
     pub pipeline: vk::Pipeline,
@@ -1142,6 +1143,8 @@ pub struct VulkanKernel {
     pub descriptor_pools: Vec<DescriptorPoolData>,
 }
 impl Kernel<Vulkan> for VulkanKernel {}
+
+#[derive(Debug)]
 pub struct VulkanBuffer {
     pub buffer: vk::Buffer,
     pub allocation: Allocation,
@@ -1337,7 +1340,7 @@ impl VulkanCommandRecorder {
                         GpuResource::Buffer {
                             buffer,
                             offset,
-                            size,
+                            len: size,
                         },
                 } => barriers.push(
                     vk::BufferMemoryBarrier2KHR::default()
@@ -1509,11 +1512,14 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         Ok(())
     }
 }
+#[derive(Debug)]
 pub struct DescriptorPoolData {
     pub pool: vk::DescriptorPool,
     pub max_size: u32,
     pub current_size: u32,
 }
+
+#[derive(Debug)]
 pub struct VulkanBindGroup {
     inner: vk::DescriptorSet,
     pool_idx: u32,
@@ -1562,6 +1568,7 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
     }
 }
 
+#[derive(Debug)]
 pub struct VulkanEvent {
     inner: vk::Event,
     operations: Cell<SyncOperations>,

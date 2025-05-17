@@ -16,13 +16,12 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+use supasim::{shaders, BufferSlice};
 use supasim::{BufferDescriptor, Instance};
-use supasim::{BufferSlice, shaders};
 
-pub fn main() {
+pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
     println!("Hello, world!");
-    let instance: Instance<supasim::hal::vulkan::Vulkan> =
-        Instance::from_hal(supasim::hal::vulkan::Vulkan::create_instance(true).unwrap());
+    let instance: Instance<Backend> = Instance::from_hal(hal);
     let upload_buffer = instance
         .create_buffer(&BufferDescriptor {
             size: 64,
@@ -85,7 +84,7 @@ pub fn main() {
     let buffers = [&BufferSlice {
         buffer: upload_buffer.clone(),
         start: 0,
-        len: 48,
+        len: 64,
         needs_mut: true,
     }];
     instance
@@ -94,7 +93,16 @@ pub fn main() {
                 buffers[0]
                     .writeable::<u32>()
                     .unwrap()
-                    .clone_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 1, 1, 1, 1]);
+                    .clone_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 1, 1, 1, 1, 22, 22, 22, 22]);
+                Ok(())
+            }),
+            &buffers,
+        )
+        .unwrap();
+    instance
+        .access_buffers(
+            Box::new(|buffers| {
+                println!("Buffer 0: {:?}", buffers[0].readable::<u32>());
                 Ok(())
             }),
             &buffers,
@@ -126,6 +134,9 @@ pub fn main() {
     recorder
         .copy_buffer(upload_buffer.clone(), buffer3.clone(), 32, 0, 16)
         .unwrap();
+    recorder
+        .copy_buffer(upload_buffer.clone(), download_buffer.clone(), 48, 0, 16)
+        .unwrap();
     let buffers = [
         &BufferSlice::entire_buffer(&buffer1, false).unwrap(),
         &BufferSlice::entire_buffer(&buffer2, false).unwrap(),
@@ -138,11 +149,16 @@ pub fn main() {
         .copy_buffer(buffer3.clone(), download_buffer.clone(), 0, 0, 16)
         .unwrap();
     instance.submit_commands(&mut [recorder]).unwrap();
-    let buffers = [&BufferSlice::entire_buffer(&download_buffer, false).unwrap()];
+    let buffers = [
+        &BufferSlice::entire_buffer(&download_buffer, false).unwrap(),
+        &BufferSlice::entire_buffer(&upload_buffer, false).unwrap(),
+    ];
     instance
         .access_buffers(
             Box::new(|buffers| {
-                println!("{:?}", buffers[0].readable::<u32>()?);
+                for buffer in buffers {
+                    println!("{:?}", buffer.readable::<u32>()?);
+                }
                 Ok(())
             }),
             &buffers,
@@ -151,4 +167,14 @@ pub fn main() {
     // If all goes well, these will be cleaned up
 
     instance.destroy().unwrap();
+}
+pub fn main() {
+    if true {
+        let instance =
+            hal::Wgpu::create_instance(true, hal::wgpu::wgpu::Backends::PRIMARY, None).unwrap();
+        main_test::<hal::Wgpu>(instance);
+    } else {
+        let instance = hal::Vulkan::create_instance(true).unwrap();
+        main_test::<hal::Vulkan>(instance);
+    }
 }

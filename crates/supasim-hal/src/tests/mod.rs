@@ -152,21 +152,21 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
                     resource: GpuResource::Buffer {
                         buffer: &sb1,
                         offset: 0,
-                        size: 16,
+                        len: 16,
                     },
                 },
                 BufferCommand::MemoryBarrier {
                     resource: GpuResource::Buffer {
                         buffer: &sb2,
                         offset: 0,
-                        size: 16,
+                        len: 16,
                     },
                 },
                 BufferCommand::MemoryBarrier {
                     resource: GpuResource::Buffer {
                         buffer: &sbout,
                         offset: 0,
-                        size: 16,
+                        len: 16,
                     },
                 },
                 BufferCommand::PipelineBarrier {
@@ -187,7 +187,7 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
                     resource: GpuResource::Buffer {
                         buffer: &sbout,
                         offset: 0,
-                        size: 16,
+                        len: 16,
                     },
                 },
                 BufferCommand::DispatchKernel {
@@ -200,7 +200,7 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
                     resource: GpuResource::Buffer {
                         buffer: &sbout,
                         offset: 0,
-                        size: 16,
+                        len: 16,
                     },
                 },
                 BufferCommand::PipelineBarrier {

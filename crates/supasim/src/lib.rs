@@ -159,20 +159,22 @@ impl<B: hal::Backend> BufferSlice<B> {
         Ok(())
     }
     fn release(&self) -> SupaSimResult<B, ()> {
-        let s = self.buffer.inner_mut()?;
+        let mut s = self.buffer.inner_mut()?;
         let range = BufferRange {
             start: self.start,
             len: self.len,
             needs_mut: self.needs_mut,
         };
-        // I don't understand Clippy's recommendation here. It gives invalid code that is nonsensical
+        // Clippy generates a confusing warning and nonsense solution
         #[allow(clippy::unnecessary_filter_map)]
-        s.host_using
+        let (index_to_remove, _) = s
+            .host_using
             .iter()
             .enumerate()
             .filter_map(|a| if *a.1 == range { Some(a) } else { None })
             .next()
             .unwrap();
+        s.host_using.remove(index_to_remove);
         Ok(())
     }
 }
@@ -506,7 +508,7 @@ impl<B: hal::Backend> Instance<B> {
                     bind_groups,
                     used_semaphore: semaphore,
                     used_buffers,
-                })
+                });
         }
         for recorder in recorders {
             recorder.destroy()?;
@@ -579,6 +581,20 @@ impl<B: hal::Backend> Instance<B> {
         closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e))?;
         // TODO: write buffers that need it
         drop(mapped_buffers);
+        let _instance = buffers[0].buffer.inner()?.instance.clone();
+        let mut instance = _instance.inner_mut()?;
+        for (i, b) in buffer_datas.iter().enumerate() {
+            unsafe {
+                instance
+                    .inner
+                    .write_buffer(
+                        buffers[i].buffer.inner()?.inner.as_ref().unwrap(),
+                        buffers[i].start,
+                        b,
+                    )
+                    .map_supasim()?;
+            }
+        }
         for b in buffers {
             b.release()?;
         }
@@ -601,7 +617,7 @@ impl<B: hal::Backend> InstanceInner<B> {
         if id < self.submitted_command_recorders_start {
             return Ok(true);
         }
-        while self.submitted_command_recorders_start >= id {
+        while self.submitted_command_recorders_start <= id {
             let thing = &mut self.submitted_command_recorders[0];
             if force_wait {
                 unsafe { thing.used_semaphore.wait(&mut self.inner).map_supasim()? };
@@ -614,6 +630,7 @@ impl<B: hal::Backend> InstanceInner<B> {
                 return Ok(false);
             }
             let item = self.submitted_command_recorders.pop_front().unwrap();
+            self.submitted_command_recorders_start += 1;
             for b in item.buffers_to_destroy {
                 unsafe { self.inner.destroy_buffer(b).map_supasim()? };
             }

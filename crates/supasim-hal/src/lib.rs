@@ -34,7 +34,7 @@ pub use wgpu::Wgpu;
 use types::*;
 
 /// Backend traits should not have their own destructors, as higher level operations may replace them with uninitialized memory by destructor time.
-pub trait Backend: Sized + std::fmt::Debug + Clone {
+pub trait Backend: Sized + std::fmt::Debug + Clone + 'static {
     type Instance: BackendInstance<Self>;
     type Kernel: Kernel<Self>;
     type Buffer: Buffer<Self>;
@@ -175,11 +175,12 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     /// * All device work must be completed
     unsafe fn destroy(self) -> Result<(), B::Error>;
 }
+#[derive(Debug)]
 pub enum GpuResource<'a, B: Backend> {
     Buffer {
         buffer: &'a B::Buffer,
         offset: u64,
-        size: u64,
+        len: u64,
     },
 }
 impl<'a, B: Backend> GpuResource<'a, B> {
@@ -187,7 +188,7 @@ impl<'a, B: Backend> GpuResource<'a, B> {
         Self::Buffer {
             buffer,
             offset,
-            size,
+            len: size,
         }
     }
 }
@@ -236,12 +237,12 @@ pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub signal_semaphore: Option<&'a B::Semaphore>,
 }
 #[must_use]
-pub trait Error<B: Backend<Error = Self>>: std::error::Error {
+pub trait Error<B: Backend<Error = Self>>: std::error::Error + Send + Sync {
     fn is_out_of_device_memory(&self) -> bool;
     fn is_out_of_host_memory(&self) -> bool;
     fn is_timeout(&self) -> bool;
 }
-
+#[derive(Debug)]
 pub enum BufferCommand<'a, B: Backend> {
     CopyBuffer {
         src_buffer: &'a B::Buffer,

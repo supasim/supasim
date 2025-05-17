@@ -21,8 +21,9 @@ END LICENSE */
 use std::{borrow::Cow, cell::Cell, num::NonZero};
 
 use crate::*;
-use ::wgpu;
 use wgpu::RequestAdapterError;
+
+pub use ::wgpu;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Wgpu;
@@ -378,7 +379,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                     GpuResource::Buffer {
                         buffer,
                         offset,
-                        size,
+                        len: size,
                     } => wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &buffer.inner,
                         offset: *offset,
@@ -487,18 +488,21 @@ impl WgpuInstance {
         Ok(())
     }
 }
+#[derive(Debug)]
 pub struct WgpuKernel {
     shader: wgpu::ShaderModule,
     pipeline: wgpu::ComputePipeline,
     bgl: wgpu::BindGroupLayout,
 }
 impl Kernel<Wgpu> for WgpuKernel {}
+#[derive(Debug)]
 pub struct WgpuBuffer {
     inner: wgpu::Buffer,
     mapped_ptr: Cell<Option<*mut u8>>,
     map_mut: Option<bool>,
 }
 impl Buffer<Wgpu> for WgpuBuffer {}
+#[derive(Debug)]
 pub enum WgpuCommandRecorder {
     Unrecorded(wgpu::CommandEncoder),
     Recorded(wgpu::CommandBuffer),
@@ -592,10 +596,12 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
         unreachable!()
     }
 }
+#[derive(Debug)]
 pub struct WgpuBindGroup {
     inner: wgpu::BindGroup,
 }
 impl BindGroup<Wgpu> for WgpuBindGroup {}
+#[derive(Debug)]
 pub struct WgpuKernelCache {
     inner: wgpu::PipelineCache,
 }
@@ -636,6 +642,7 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
         unreachable!()
     }
 }
+#[derive(Debug)]
 pub struct WgpuEvent;
 impl Event<Wgpu> for WgpuEvent {}
 #[derive(thiserror::Error, Debug)]

@@ -16,9 +16,9 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+use hal::{BackendInstance, CommandRecorder, GpuResource};
 use std::collections::{HashMap, hash_map::Entry};
-
-use hal::{BackendInstance, CommandRecorder};
+use std::ops::Deref;
 use thunderdome::Index;
 use types::{Dag, NodeIndex, SyncOperations, Walker};
 
@@ -64,7 +64,11 @@ pub enum HalCommandBuilder {
         after: SyncOperations,
     },
     /// Only for vulkan like synchronization. Will hitch a ride with the previous PipelineBarrier or WaitEvent
-    MemoryBarrier { resource: Index },
+    MemoryBarrier {
+        resource: Index,
+        offset: u64,
+        len: u64,
+    },
     UpdateBindGroup {
         bg: Index,
         kernel: Index,
@@ -159,16 +163,19 @@ pub fn dag_to_command_streams<B: hal::Backend>(
         already_in.resize(dag.node_count(), false);
         let mut layers = Vec::new();
         layers.push(Vec::new());
+        // I think it looks nicer
+        #[allow(clippy::needless_range_loop)]
         for i in 0..dag.node_count() {
             if dag.parents(NodeIndex::new(i)).walk_next(dag).is_none() {
                 layers[0].push(i);
+                already_in[i] = true;
             }
         }
         while !layers.last().unwrap().is_empty() {
             let mut next_layer = Vec::new();
             let last_layer = layers.last().unwrap();
             for &node in last_layer {
-                let mut walker = dag.parents(NodeIndex::new(node));
+                let mut walker = dag.children(NodeIndex::new(node));
                 while let Some((_, child)) = walker.walk_next(dag) {
                     if !already_in[child.index()] {
                         next_layer.push(child.index());
@@ -190,24 +197,32 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                     let cmd = &nodes[idx].weight;
                     for buffer in &cmd.buffers {
                         let id = buffer.buffer.inner()?.id;
-                        stream
-                            .commands
-                            .push(HalCommandBuilder::MemoryBarrier { resource: id });
+                        stream.commands.push(HalCommandBuilder::MemoryBarrier {
+                            resource: id,
+                            offset: buffer.start,
+                            len: buffer.len,
+                        });
                     }
                     if let BufferCommandInner::CopyBufferToBuffer {
                         src_buffer,
                         dst_buffer,
-                        ..
+                        src_offset,
+                        dst_offset,
+                        len,
                     } = &cmd.inner
                     {
                         let src_id = src_buffer.inner()?.id;
                         let dst_id = dst_buffer.inner()?.id;
-                        stream
-                            .commands
-                            .push(HalCommandBuilder::MemoryBarrier { resource: src_id });
-                        stream
-                            .commands
-                            .push(HalCommandBuilder::MemoryBarrier { resource: dst_id });
+                        stream.commands.push(HalCommandBuilder::MemoryBarrier {
+                            resource: src_id,
+                            offset: *src_offset,
+                            len: *len,
+                        });
+                        stream.commands.push(HalCommandBuilder::MemoryBarrier {
+                            resource: dst_id,
+                            offset: *dst_offset,
+                            len: *len,
+                        });
                     }
                 }
             }
@@ -340,7 +355,7 @@ pub fn record_command_streams<B: hal::Backend>(
             resources.push(hal::GpuResource::Buffer {
                 buffer: res.inner.as_ref().unwrap(),
                 offset: range.start,
-                size: range.len,
+                len: range.len,
             });
         }
         let bg = if let Some(mut bg) = instance.hal_bind_groups.pop() {
@@ -366,8 +381,8 @@ pub fn record_command_streams<B: hal::Backend>(
             Some(a) => a,
             None => unsafe { instance.inner.create_recorder().map_supasim()? },
         };
-        let mut buffer_locks = Vec::new();
-        let mut kernel_locks = Vec::new();
+        let mut buffer_refs = Vec::new();
+        let mut kernel_refs = Vec::new();
         for cmd in &stream.commands {
             match cmd {
                 HalCommandBuilder::CopyBuffer {
@@ -375,25 +390,34 @@ pub fn record_command_streams<B: hal::Backend>(
                     dst_buffer,
                     ..
                 } => {
-                    buffer_locks.push(
+                    buffer_refs.push(
                         instance
                             .buffers
                             .get(*src_buffer)
-                            .ok_or(SupaSimError::AlreadyDestroyed)?,
+                            .ok_or(SupaSimError::AlreadyDestroyed)?
+                            .as_ref()
+                            .unwrap()
+                            .upgrade()?,
                     );
-                    buffer_locks.push(
+                    buffer_refs.push(
                         instance
                             .buffers
                             .get(*dst_buffer)
-                            .ok_or(SupaSimError::AlreadyDestroyed)?,
+                            .ok_or(SupaSimError::AlreadyDestroyed)?
+                            .as_ref()
+                            .unwrap()
+                            .upgrade()?,
                     );
                 }
                 HalCommandBuilder::DispatchKernel { kernel, .. } => {
-                    kernel_locks.push(
+                    kernel_refs.push(
                         instance
                             .kernels
                             .get(*kernel)
-                            .ok_or(SupaSimError::AlreadyDestroyed)?,
+                            .ok_or(SupaSimError::AlreadyDestroyed)?
+                            .as_ref()
+                            .unwrap()
+                            .upgrade()?,
                     );
                 }
                 HalCommandBuilder::DispatchKernelIndirect {
@@ -401,31 +425,126 @@ pub fn record_command_streams<B: hal::Backend>(
                     indirect_buffer,
                     ..
                 } => {
-                    kernel_locks.push(
+                    kernel_refs.push(
                         instance
                             .kernels
                             .get(*kernel)
-                            .ok_or(SupaSimError::AlreadyDestroyed)?,
+                            .ok_or(SupaSimError::AlreadyDestroyed)?
+                            .as_ref()
+                            .unwrap()
+                            .upgrade()?,
                     );
-                    buffer_locks.push(
+                    buffer_refs.push(
                         instance
                             .buffers
                             .get(*indirect_buffer)
-                            .ok_or(SupaSimError::AlreadyDestroyed)?,
+                            .ok_or(SupaSimError::AlreadyDestroyed)?
+                            .as_ref()
+                            .unwrap()
+                            .upgrade()?,
                     );
                 }
-                HalCommandBuilder::MemoryBarrier { resource } => {
-                    buffer_locks.push(
+                HalCommandBuilder::MemoryBarrier { resource, .. } => {
+                    buffer_refs.push(
                         instance
                             .buffers
                             .get(*resource)
-                            .ok_or(SupaSimError::AlreadyDestroyed)?,
+                            .ok_or(SupaSimError::AlreadyDestroyed)?
+                            .as_ref()
+                            .unwrap()
+                            .upgrade()?,
                     );
                 }
                 _ => (),
             }
         }
+        let mut buffer_locks = Vec::new();
+        for buffer_ref in &buffer_refs {
+            buffer_locks.push(buffer_ref.inner()?);
+        }
+        let mut kernel_locks = Vec::new();
+        for kernel_ref in &kernel_refs {
+            kernel_locks.push(kernel_ref.inner()?);
+        }
         let mut hal_commands = Vec::new();
+        {
+            let mut current_buffer_index = 0;
+            let mut current_kernel_index = 0;
+            let mut get_buffer = || {
+                let buffer = buffer_locks[current_buffer_index]
+                    .deref()
+                    .inner
+                    .as_ref()
+                    .unwrap();
+                current_buffer_index += 1;
+                buffer
+            };
+            let mut get_kernel = || {
+                let kernel = &kernel_locks[current_kernel_index].deref().inner;
+                current_kernel_index += 1;
+                kernel
+            };
+            for cmd in &stream.commands {
+                let cmd = match cmd {
+                    HalCommandBuilder::CopyBuffer {
+                        src_offset,
+                        dst_offset,
+                        len,
+                        ..
+                    } => hal::BufferCommand::CopyBuffer {
+                        src_buffer: get_buffer(),
+                        dst_buffer: get_buffer(),
+                        src_offset: *src_offset,
+                        dst_offset: *dst_offset,
+                        len: *len,
+                    },
+                    HalCommandBuilder::DispatchKernel {
+                        bg,
+                        push_constants,
+                        workgroup_dims,
+                        ..
+                    } => hal::BufferCommand::DispatchKernel {
+                        kernel: get_kernel(),
+                        bind_group: &bindgroups[*bg as usize],
+                        push_constants,
+                        workgroup_dims: *workgroup_dims,
+                    },
+                    HalCommandBuilder::DispatchKernelIndirect {
+                        bg,
+                        push_constants,
+                        buffer_offset,
+                        validate,
+                        ..
+                    } => hal::BufferCommand::DispatchKernelIndirect {
+                        kernel: get_kernel(),
+                        bind_group: &bindgroups[*bg as usize],
+                        push_constants,
+                        indirect_buffer: get_buffer(),
+                        buffer_offset: *buffer_offset,
+                        validate: *validate,
+                    },
+                    HalCommandBuilder::MemoryBarrier { offset, len, .. } => {
+                        hal::BufferCommand::MemoryBarrier {
+                            resource: GpuResource::Buffer {
+                                buffer: get_buffer(),
+                                offset: *offset,
+                                len: *len,
+                            },
+                        }
+                    }
+                    HalCommandBuilder::PipelineBarrier { before, after } => {
+                        hal::BufferCommand::PipelineBarrier {
+                            before: *before,
+                            after: *after,
+                        }
+                    }
+                    // TODO: implement stuff for events and bind group updates
+                    _ => unreachable!(),
+                };
+                hal_commands.push(cmd);
+                // Add the commands n shit
+            }
+        }
         unsafe {
             cr.record_commands(&mut instance.inner, &mut hal_commands)
                 .map_supasim()?
