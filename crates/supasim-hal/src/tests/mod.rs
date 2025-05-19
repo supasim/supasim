@@ -23,6 +23,7 @@ use crate::{
     Semaphore,
 };
 use log::info;
+use tracing_subscriber::filter::LevelFilter;
 use types::{BufferDescriptor, ShaderReflectionInfo, ShaderResourceType, SyncOperations};
 
 unsafe fn create_storage_buf<B: Backend>(
@@ -270,6 +271,11 @@ macro_rules! gpu_test {
                 return;
             }
             let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(LevelFilter::TRACE)
+                .json()
+                .flatten_event(true)
+                .try_init();
             let _ = env_logger::builder()
                 .filter_level(log::LevelFilter::Info)
                 .try_init();

@@ -16,10 +16,17 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+use std::time::Duration;
 use supasim::{BufferDescriptor, BufferSlice, Instance, shaders};
+use tracing_subscriber::filter::LevelFilter;
 
 pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
     println!("Hello, world!");
+    tracing_subscriber::fmt()
+        .with_max_level(LevelFilter::TRACE)
+        .json()
+        .flatten_event(true)
+        .init();
     let instance: Instance<Backend> = Instance::from_hal(hal);
     let upload_buffer = instance
         .create_buffer(&BufferDescriptor {
@@ -142,7 +149,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
         &BufferSlice::entire_buffer(&buffer3, true).unwrap(),
     ];
     recorder
-        .dispatch_kernel(kernel.clone(), &buffers, [1, 1, 1])
+        .dispatch_kernel(kernel.clone(), &buffers, [4, 1, 1])
         .unwrap();
     recorder
         .copy_buffer(buffer3.clone(), download_buffer.clone(), 0, 0, 16)
@@ -152,6 +159,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
         &BufferSlice::entire_buffer(&download_buffer, false).unwrap(),
         &BufferSlice::entire_buffer(&upload_buffer, false).unwrap(),
     ];
+    std::thread::sleep(Duration::from_secs(2));
     instance
         .access_buffers(
             Box::new(|buffers| {

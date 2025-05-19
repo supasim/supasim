@@ -18,9 +18,9 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
 
-use std::{borrow::Cow, cell::Cell, num::NonZero};
-
 use crate::*;
+use std::fmt::Debug;
+use std::{borrow::Cow, cell::Cell, num::NonZero};
 use wgpu::RequestAdapterError;
 
 pub use ::wgpu;
@@ -47,6 +47,7 @@ impl Backend for Wgpu {
     type Error = WgpuError;
 }
 impl Wgpu {
+    #[tracing::instrument]
     pub fn create_instance(
         advanced_dbg: bool,
         backends: wgpu::Backends,
@@ -105,6 +106,7 @@ impl Wgpu {
     }
 }
 
+#[derive(Debug)]
 pub struct WgpuInstance {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
@@ -113,6 +115,7 @@ pub struct WgpuInstance {
     unified_memory: bool,
 }
 impl BackendInstance<Wgpu> for WgpuInstance {
+    #[tracing::instrument]
     fn get_properties(&mut self) -> InstanceProperties {
         InstanceProperties {
             sync_mode: SyncMode::Automatic,
@@ -134,6 +137,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         }
     }
 
+    #[tracing::instrument]
     unsafe fn compile_kernel(
         &mut self,
         binary: &[u8],
@@ -179,6 +183,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         })
     }
 
+    #[tracing::instrument]
     unsafe fn create_kernel_cache(
         &mut self,
         initial_data: &[u8],
@@ -199,6 +204,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         }
     }
 
+    #[tracing::instrument]
     unsafe fn destroy_kernel_cache(
         &mut self,
         cache: <Wgpu as Backend>::KernelCache,
@@ -207,6 +213,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn get_kernel_cache_data(
         &mut self,
         cache: &mut <Wgpu as Backend>::KernelCache,
@@ -214,6 +221,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(cache.inner.get_data().unwrap())
     }
 
+    #[tracing::instrument]
     unsafe fn destroy_kernel(
         &mut self,
         kernel: <Wgpu as Backend>::Kernel,
@@ -222,11 +230,13 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn wait_for_idle(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
         self.device.poll(wgpu::MaintainBase::Wait)?;
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn create_recorder(
         &mut self,
     ) -> Result<<Wgpu as Backend>::CommandRecorder, <Wgpu as Backend>::Error> {
@@ -236,6 +246,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(WgpuCommandRecorder::Unrecorded(encoder))
     }
 
+    #[tracing::instrument]
     unsafe fn submit_recorders(
         &mut self,
         infos: &mut [RecorderSubmitInfo<Wgpu>],
@@ -259,6 +270,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn destroy_recorder(
         &mut self,
         recorder: <Wgpu as Backend>::CommandRecorder,
@@ -267,6 +279,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn clear_recorders(
         &mut self,
         buffers: &mut [&mut <Wgpu as Backend>::CommandRecorder],
@@ -277,6 +290,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn create_buffer(
         &mut self,
         alloc_info: &BufferDescriptor,
@@ -324,6 +338,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         })
     }
 
+    #[tracing::instrument]
     unsafe fn destroy_buffer(
         &mut self,
         buffer: <Wgpu as Backend>::Buffer,
@@ -335,6 +350,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn write_buffer(
         &mut self,
         buffer: &<Wgpu as Backend>::Buffer,
@@ -350,6 +366,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn read_buffer(
         &mut self,
         buffer: &<Wgpu as Backend>::Buffer,
@@ -365,6 +382,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn create_bind_group(
         &mut self,
         kernel: &mut <Wgpu as Backend>::Kernel,
@@ -396,6 +414,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(WgpuBindGroup { inner: bg })
     }
 
+    #[tracing::instrument]
     unsafe fn update_bind_group(
         &mut self,
         bg: &mut <Wgpu as Backend>::BindGroup,
@@ -406,6 +425,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         todo!()
     }
 
+    #[tracing::instrument]
     unsafe fn destroy_bind_group(
         &mut self,
         kernel: &mut <Wgpu as Backend>::Kernel,
@@ -415,6 +435,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn create_semaphore(
         &mut self,
     ) -> Result<<Wgpu as Backend>::Semaphore, <Wgpu as Backend>::Error> {
@@ -423,6 +444,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         })
     }
 
+    #[tracing::instrument]
     unsafe fn destroy_semaphore(
         &mut self,
         semaphore: <Wgpu as Backend>::Semaphore,
@@ -431,12 +453,14 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn create_event(
         &mut self,
     ) -> Result<<Wgpu as Backend>::Event, <Wgpu as Backend>::Error> {
         unreachable!()
     }
 
+    #[tracing::instrument]
     unsafe fn destroy_event(
         &mut self,
         event: <Wgpu as Backend>::Event,
@@ -444,16 +468,19 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         unreachable!()
     }
 
+    #[tracing::instrument]
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn destroy(self) -> Result<(), <Wgpu as Backend>::Error> {
         // Destroyed on drop
         Ok(())
     }
 }
 impl WgpuInstance {
+    #[tracing::instrument]
     unsafe fn map_buffer(
         &mut self,
         buffer: &<Wgpu as Backend>::Buffer,
@@ -478,7 +505,7 @@ impl WgpuInstance {
         buffer.mapped_ptr.set(Some(ptr));
         Ok(ptr)
     }
-
+    #[tracing::instrument]
     unsafe fn unmap_buffer(
         &mut self,
         buffer: &<Wgpu as Backend>::Buffer,
@@ -508,6 +535,7 @@ pub enum WgpuCommandRecorder {
     Recorded(wgpu::CommandBuffer),
 }
 impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
+    #[tracing::instrument]
     unsafe fn record_commands(
         &mut self,
         instance: &mut <Wgpu as Backend>::Instance,
@@ -587,6 +615,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
 
         Ok(())
     }
+    #[tracing::instrument]
     unsafe fn record_dag(
         &mut self,
         instance: &mut <Wgpu as Backend>::Instance,
@@ -609,7 +638,13 @@ impl KernelCache<Wgpu> for WgpuKernelCache {}
 pub struct WgpuSemaphore {
     inner: Cell<Option<wgpu::SubmissionIndex>>,
 }
+impl Debug for WgpuSemaphore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WgpuSemaphore")
+    }
+}
 impl Semaphore<Wgpu> for WgpuSemaphore {
+    #[tracing::instrument]
     unsafe fn wait(
         &mut self,
         instance: &mut <Wgpu as Backend>::Instance,
@@ -622,6 +657,7 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
         self.inner.set(None);
         Ok(())
     }
+    #[tracing::instrument]
     unsafe fn is_signalled(
         &mut self,
         instance: &mut <Wgpu as Backend>::Instance,
@@ -635,6 +671,7 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
             Ok(true)
         }
     }
+    #[tracing::instrument]
     unsafe fn signal(
         &mut self,
         instance: &mut <Wgpu as Backend>::Instance,

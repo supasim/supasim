@@ -39,3 +39,9 @@ macros.workspace = true
 shaders.workspace = true
 types.workspace = true
 hal.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+env_logger.workspace = true
+log.workspace = true
+tracing-log.workspace = true

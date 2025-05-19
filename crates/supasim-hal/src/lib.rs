@@ -231,6 +231,7 @@ pub trait Semaphore<B: Backend<Semaphore = Self>> {
     unsafe fn signal(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
 pub trait Event<B: Backend<Event = Self>> {}
+#[derive(Debug)]
 pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub command_recorder: &'a mut B::CommandRecorder,
     pub wait_semaphore: Option<&'a B::Semaphore>,

@@ -16,28 +16,28 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+use crate::{
+    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, Event,
+    GpuResource, Kernel, KernelCache, RecorderSubmitInfo, Semaphore,
+};
+use ash::{khr, vk, Entry};
 use core::ffi;
+use gpu_allocator::{
+    vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc}, AllocationError, AllocationSizes,
+    AllocatorDebugSettings,
+};
+use log::{warn, Level};
+use std::fmt::Debug;
 use std::{
     borrow::Cow,
     cell::Cell,
     ffi::{CStr, CString},
     sync::Mutex,
 };
-
-use crate::{
-    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, Event,
-    GpuResource, Kernel, KernelCache, RecorderSubmitInfo, Semaphore,
-};
-use ash::{Entry, khr, vk};
-use gpu_allocator::{
-    AllocationError, AllocationSizes, AllocatorDebugSettings,
-    vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
-};
-use log::{Level, warn};
 use thiserror::Error;
 use types::{
-    BufferDescriptor, BufferType, Dag, InstanceProperties, ShaderReflectionInfo,
-    ShaderResourceType, SyncOperations, to_static_lifetime,
+    to_static_lifetime, BufferDescriptor, BufferType, Dag, InstanceProperties,
+    ShaderReflectionInfo, ShaderResourceType, SyncOperations,
 };
 
 use scopeguard::defer;
@@ -402,7 +402,13 @@ pub struct VulkanInstance {
     debug: Option<vk::DebugUtilsMessengerEXT>,
     sync2_dev: khr::synchronization2::Device,
 }
+impl Debug for VulkanInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("VulkanInstance")
+    }
+}
 impl VulkanInstance {
+    #[tracing::instrument]
     pub fn get_command_buffer(&mut self) -> Result<vk::CommandBuffer, VulkanError> {
         match self.unused_command_buffers.pop() {
             Some(c) => Ok(c),
@@ -423,6 +429,7 @@ impl VulkanInstance {
     }
 }
 impl BackendInstance<Vulkan> for VulkanInstance {
+    #[tracing::instrument]
     unsafe fn destroy(mut self) -> Result<(), VulkanError> {
         unsafe {
             self.alloc
@@ -440,6 +447,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
+    #[tracing::instrument]
     fn get_properties(&mut self) -> InstanceProperties {
         let is_unified_memory = unsafe {
             let memory_props = self
@@ -468,6 +476,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             is_unified_memory,
         }
     }
+    #[tracing::instrument]
     unsafe fn compile_kernel(
         &mut self,
         binary: &[u8],
@@ -564,6 +573,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             })
         }
     }
+    #[tracing::instrument]
     unsafe fn destroy_kernel(
         &mut self,
         kernel: <Vulkan as Backend>::Kernel,
@@ -581,6 +591,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(())
         }
     }
+    #[tracing::instrument]
     unsafe fn create_buffer(
         &mut self,
         alloc_info: &types::BufferDescriptor,
@@ -664,6 +675,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             })
         }
     }
+    #[tracing::instrument]
     unsafe fn destroy_buffer(
         &mut self,
         buffer: <Vulkan as Backend>::Buffer,
@@ -677,6 +689,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(())
         }
     }
+    #[tracing::instrument]
     unsafe fn create_kernel_cache(
         &mut self,
         initial_data: &[u8],
@@ -689,6 +702,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             })
         }
     }
+    #[tracing::instrument]
     unsafe fn destroy_kernel_cache(
         &mut self,
         cache: <Vulkan as Backend>::KernelCache,
@@ -703,6 +717,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(())
         }
     }
+    #[tracing::instrument]
     unsafe fn get_kernel_cache_data(
         &mut self,
         cache: &mut <Vulkan as Backend>::KernelCache,
@@ -717,6 +732,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(data)
         }
     }
+    #[tracing::instrument]
     unsafe fn create_bind_group(
         &mut self,
         kernel: &mut VulkanKernel,
@@ -807,6 +823,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             }
         }
     }
+    #[tracing::instrument]
     unsafe fn update_bind_group(
         &mut self,
         bg: &mut <Vulkan as Backend>::BindGroup,
@@ -861,6 +878,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
+    #[tracing::instrument]
     unsafe fn destroy_bind_group(
         &mut self,
         kernel: &mut <Vulkan as Backend>::Kernel,
@@ -874,6 +892,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
+    #[tracing::instrument]
     unsafe fn create_recorder(
         &mut self,
     ) -> Result<<Vulkan as Backend>::CommandRecorder, <Vulkan as Backend>::Error> {
@@ -882,6 +901,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             used_events: Vec::new(),
         })
     }
+    #[tracing::instrument]
     unsafe fn destroy_recorder(
         &mut self,
         recorder: <Vulkan as Backend>::CommandRecorder,
@@ -891,6 +911,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             .extend(recorder.cbs.into_iter().map(|a| a.cb));
         Ok(())
     }
+    #[tracing::instrument]
     unsafe fn submit_recorders(
         &mut self,
         infos: &mut [RecorderSubmitInfo<Vulkan>],
@@ -1021,6 +1042,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
+    #[tracing::instrument]
     unsafe fn clear_recorders(
         &mut self,
         recorders: &mut [&mut VulkanCommandRecorder],
@@ -1035,12 +1057,14 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
+    #[tracing::instrument]
     unsafe fn wait_for_idle(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             self.device.queue_wait_idle(self.queue)?;
             Ok(())
         }
     }
+    #[tracing::instrument]
     unsafe fn write_buffer(
         &mut self,
         buffer: &<Vulkan as Backend>::Buffer,
@@ -1055,6 +1079,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(())
         }
     }
+    #[tracing::instrument]
     unsafe fn read_buffer(
         &mut self,
         buffer: &<Vulkan as Backend>::Buffer,
@@ -1069,6 +1094,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
+    #[tracing::instrument]
     unsafe fn create_semaphore(&mut self) -> std::result::Result<VulkanSemaphore, VulkanError> {
         unsafe {
             let mut next = vk::SemaphoreTypeCreateInfo::default()
@@ -1082,6 +1108,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             })
         }
     }
+    #[tracing::instrument]
     unsafe fn destroy_semaphore(
         &mut self,
         semaphore: VulkanSemaphore,
@@ -1091,6 +1118,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
+    #[tracing::instrument]
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         if !self.unused_command_buffers.is_empty() {
             unsafe {
@@ -1110,6 +1138,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         Ok(())
     }
 
+    #[tracing::instrument]
     unsafe fn create_event(
         &mut self,
     ) -> Result<<Vulkan as Backend>::Event, <Vulkan as Backend>::Error> {
@@ -1124,6 +1153,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         })
     }
 
+    #[tracing::instrument]
     unsafe fn destroy_event(
         &mut self,
         event: <Vulkan as Backend>::Event,
@@ -1151,6 +1181,7 @@ pub struct VulkanBuffer {
     pub create_info: types::BufferDescriptor,
 }
 impl Buffer<Vulkan> for VulkanBuffer {}
+#[derive(Debug)]
 struct CommandBufferSubmit {
     cb: vk::CommandBuffer,
     wait_semaphores: Vec<vk::Semaphore>,
@@ -1158,11 +1189,13 @@ struct CommandBufferSubmit {
     is_tail: bool,
     is_head: bool,
 }
+#[derive(Debug)]
 pub struct VulkanCommandRecorder {
     cbs: Vec<CommandBufferSubmit>,
     used_events: Vec<vk::Event>,
 }
 impl VulkanCommandRecorder {
+    #[tracing::instrument]
     fn begin(
         &mut self,
         instance: &mut <Vulkan as Backend>::Instance,
@@ -1177,6 +1210,7 @@ impl VulkanCommandRecorder {
             Ok(())
         }
     }
+    #[tracing::instrument]
     fn end(
         &mut self,
         instance: &mut <Vulkan as Backend>::Instance,
@@ -1187,6 +1221,7 @@ impl VulkanCommandRecorder {
             Ok(())
         }
     }
+    #[tracing::instrument]
     #[allow(clippy::too_many_arguments)]
     fn copy_buffer(
         &mut self,
@@ -1211,6 +1246,7 @@ impl VulkanCommandRecorder {
         }
         Ok(())
     }
+    #[tracing::instrument]
     fn dispatch_kernel(
         &mut self,
         instance: &mut <Vulkan as Backend>::Instance,
@@ -1250,6 +1286,7 @@ impl VulkanCommandRecorder {
         }
         Ok(())
     }
+    #[tracing::instrument]
     #[allow(clippy::too_many_arguments)]
     fn dispatch_kernel_indirect(
         &mut self,
@@ -1397,6 +1434,7 @@ impl VulkanCommandRecorder {
         }
         Ok(())
     }
+    #[tracing::instrument]
     fn record_command(
         &mut self,
         instance: &mut VulkanInstance,
@@ -1467,6 +1505,7 @@ impl VulkanCommandRecorder {
     }
 }
 impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
+    #[tracing::instrument]
     unsafe fn record_dag(
         &mut self,
         _instance: &mut <Vulkan as Backend>::Instance,
@@ -1475,6 +1514,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unreachable!()
     }
+    #[tracing::instrument]
     unsafe fn record_commands(
         &mut self,
         instance: &mut VulkanInstance,
@@ -1525,14 +1565,17 @@ pub struct VulkanBindGroup {
     pool_idx: u32,
 }
 impl BindGroup<Vulkan> for VulkanBindGroup {}
+#[derive(Debug)]
 pub struct VulkanPipelineCache {
     inner: Mutex<vk::PipelineCache>,
 }
 impl KernelCache<Vulkan> for VulkanPipelineCache {}
+#[derive(Debug)]
 pub struct VulkanSemaphore {
     inner: vk::Semaphore,
 }
 impl Semaphore<Vulkan> for VulkanSemaphore {
+    #[tracing::instrument]
     unsafe fn wait(
         &mut self,
         instance: &mut VulkanInstance,
@@ -1547,12 +1590,14 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         }
         Ok(())
     }
+    #[tracing::instrument]
     unsafe fn is_signalled(
         &mut self,
         instance: &mut <Vulkan as Backend>::Instance,
     ) -> Result<bool, <Vulkan as Backend>::Error> {
         Ok(unsafe { instance.device.get_semaphore_counter_value(self.inner)? } != 0)
     }
+    #[tracing::instrument]
     unsafe fn signal(
         &mut self,
         instance: &mut <Vulkan as Backend>::Instance,
