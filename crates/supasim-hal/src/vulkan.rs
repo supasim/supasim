@@ -20,13 +20,13 @@ use crate::{
     Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, Event,
     GpuResource, Kernel, KernelCache, RecorderSubmitInfo, Semaphore,
 };
-use ash::{khr, vk, Entry};
+use ash::{Entry, khr, vk};
 use core::ffi;
 use gpu_allocator::{
-    vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc}, AllocationError, AllocationSizes,
-    AllocatorDebugSettings,
+    AllocationError, AllocationSizes, AllocatorDebugSettings,
+    vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
 };
-use log::{warn, Level};
+use log::{Level, warn};
 use std::fmt::Debug;
 use std::{
     borrow::Cow,
@@ -36,8 +36,8 @@ use std::{
 };
 use thiserror::Error;
 use types::{
-    to_static_lifetime, BufferDescriptor, BufferType, Dag, InstanceProperties,
-    ShaderReflectionInfo, ShaderResourceType, SyncOperations,
+    BufferDescriptor, BufferType, Dag, InstanceProperties, ShaderReflectionInfo,
+    ShaderResourceType, SyncOperations, to_static_lifetime,
 };
 
 use scopeguard::defer;
