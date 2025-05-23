@@ -16,16 +16,46 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+use std::fmt::Write;
 use std::time::Duration;
 use supasim::{BufferDescriptor, BufferSlice, Instance, shaders};
-use tracing_subscriber::filter::LevelFilter;
+use tracing_subscriber::{
+    layer::{Context, SubscriberExt},
+    util::SubscriberInitExt,
+};
+
+struct EnterSpanPrinter;
+
+impl<S> tracing_subscriber::Layer<S> for EnterSpanPrinter
+where
+    S: tracing::Subscriber,
+    S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    fn on_enter(&self, id: &tracing::Id, ctx: Context<'_, S>) {
+        if let Some(span_ref) = ctx.span(id) {
+            let name = span_ref.name();
+
+            // Get all field values as a string
+            let mut fields = String::new();
+            if let Some(ext) = span_ref
+                .extensions()
+                .get::<tracing_subscriber::fmt::FormattedFields<
+                    tracing_subscriber::fmt::format::DefaultFields,
+                >>()
+            {
+                write!(fields, "{}", ext).ok();
+            }
+
+            println!("\t{} [{}]", name, fields);
+        }
+    }
+}
 
 pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
     println!("Hello, world!");
-    tracing_subscriber::fmt()
-        .with_max_level(LevelFilter::TRACE)
-        .json()
-        .flatten_event(true)
+    tracing_subscriber::registry()
+        .with(EnterSpanPrinter)
+        .with(tracing_subscriber::fmt::layer())
         .init();
     let instance: Instance<Backend> = Instance::from_hal(hal);
     let upload_buffer = instance
@@ -93,6 +123,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
         len: 64,
         needs_mut: true,
     }];
+
     instance
         .access_buffers(
             Box::new(|buffers| {
@@ -114,23 +145,6 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
             &buffers,
         )
         .unwrap();
-    /*instance
-    .access_buffers(
-        Box::new(|buffers| {
-            buffers[0]
-                .writeable::<u32>()?
-                .copy_from_slice(&[1, 2, 3, 4]);
-            buffers[1]
-                .writeable::<u32>()?
-                .copy_from_slice(&[5, 6, 7, 8]);
-            buffers[2]
-                .writeable::<u32>()?
-                .copy_from_slice(&[1, 1, 1, 1]);
-            Ok(())
-        }),
-        &buffers,
-    )
-    .unwrap();*/
     recorder
         .copy_buffer(upload_buffer.clone(), buffer1.clone(), 0, 0, 16)
         .unwrap();
@@ -176,7 +190,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
     instance.destroy().unwrap();
 }
 pub fn main() {
-    if true {
+    if false {
         let instance =
             hal::Wgpu::create_instance(true, hal::wgpu::wgpu::Backends::PRIMARY, None).unwrap();
         main_test::<hal::Wgpu>(instance);

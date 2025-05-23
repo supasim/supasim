@@ -42,7 +42,6 @@ pub trait Backend: Sized + std::fmt::Debug + Clone + 'static {
     type BindGroup: BindGroup<Self>;
     type KernelCache: KernelCache<Self>;
     type Semaphore: Semaphore<Self>;
-    type Event: Event<Self>;
 
     type Error: Error<Self>;
 }
@@ -95,12 +94,6 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     /// # Safety
     /// * All submissions using this recorder must have completed
     unsafe fn destroy_recorder(&mut self, recorder: B::CommandRecorder) -> Result<(), B::Error>;
-    /// # Safety
-    /// * All submissions using any of these recorders must have completed
-    unsafe fn clear_recorders(
-        &mut self,
-        buffers: &mut [&mut B::CommandRecorder],
-    ) -> Result<(), B::Error>;
     /// # Safety
     /// * Indirect must only be set if the instance supports it
     unsafe fn create_buffer(
@@ -160,14 +153,6 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
 
     /// # Safety
     /// Currently no safety requirements. This is subject to change
-    unsafe fn create_event(&mut self) -> Result<B::Event, B::Error>;
-
-    /// # Safety
-    /// * All command recorders using this event must've completed
-    unsafe fn destroy_event(&mut self, event: B::Event) -> Result<(), B::Error>;
-
-    /// # Safety
-    /// Currently no safety requirements. This is subject to change
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), B::Error>;
 
     /// # Safety
@@ -214,6 +199,9 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
         instance: &mut B::Instance,
         commands: &mut [BufferCommand<B>],
     ) -> Result<(), B::Error>;
+    /// # Safety
+    /// * The recorder must not be queued and incomplete on the GPU
+    unsafe fn clear(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
 pub trait Kernel<B: Backend<Kernel = Self>> {}
 pub trait Buffer<B: Backend<Buffer = Self>> {}
@@ -229,8 +217,10 @@ pub trait Semaphore<B: Backend<Semaphore = Self>> {
     /// # Safety
     /// * The semaphore must not be waited on by any CPU side wait command
     unsafe fn signal(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
+    /// # Safety
+    /// * The semaphore must not be waited on by any CPU side wait command or signalled by any CPU or GPU side signal command
+    unsafe fn reset(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
-pub trait Event<B: Backend<Event = Self>> {}
 #[derive(Debug)]
 pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub command_recorder: &'a mut B::CommandRecorder,
@@ -265,16 +255,6 @@ pub enum BufferCommand<'a, B: Backend> {
         indirect_buffer: &'a B::Buffer,
         buffer_offset: u64,
         validate: bool,
-    },
-    /// Only for vulkan like synchronization
-    SetEvent {
-        event: &'a B::Event,
-        wait: SyncOperations,
-    },
-    /// Only for vulkan like synchronization
-    WaitEvent {
-        event: &'a B::Event,
-        signal: SyncOperations,
     },
     /// Only for vulkan like synchronization
     PipelineBarrier {

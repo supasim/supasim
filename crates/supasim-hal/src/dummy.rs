@@ -30,7 +30,6 @@ impl Backend for Dummy {
     type KernelCache = DummyResource;
     type BindGroup = DummyResource;
     type Semaphore = DummyResource;
-    type Event = DummyResource;
     type Error = DummyResource;
 }
 impl Dummy {
@@ -116,13 +115,6 @@ impl BackendInstance<Dummy> for DummyResource {
         Ok(())
     }
 
-    unsafe fn clear_recorders(
-        &mut self,
-        buffers: &mut [&mut <Dummy as Backend>::CommandRecorder],
-    ) -> Result<(), <Dummy as Backend>::Error> {
-        Ok(())
-    }
-
     unsafe fn create_buffer(
         &mut self,
         alloc_info: &types::BufferDescriptor,
@@ -193,19 +185,6 @@ impl BackendInstance<Dummy> for DummyResource {
         Ok(())
     }
 
-    unsafe fn create_event(
-        &mut self,
-    ) -> Result<<Dummy as Backend>::Event, <Dummy as Backend>::Error> {
-        unreachable!()
-    }
-
-    unsafe fn destroy_event(
-        &mut self,
-        event: <Dummy as Backend>::Event,
-    ) -> Result<(), <Dummy as Backend>::Error> {
-        unreachable!()
-    }
-
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
     }
@@ -231,6 +210,12 @@ impl CommandRecorder<Dummy> for DummyResource {
     ) -> Result<(), <Dummy as Backend>::Error> {
         unreachable!()
     }
+    unsafe fn clear(
+        &mut self,
+        instance: &mut <Dummy as Backend>::Instance,
+    ) -> Result<(), <Dummy as Backend>::Error> {
+        Ok(())
+    }
 }
 impl KernelCache<Dummy> for DummyResource {}
 impl BindGroup<Dummy> for DummyResource {}
@@ -253,8 +238,13 @@ impl Semaphore<Dummy> for DummyResource {
     ) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
     }
+    unsafe fn reset(
+        &mut self,
+        instance: &mut <Dummy as Backend>::Instance,
+    ) -> Result<(), <Dummy as Backend>::Error> {
+        Ok(())
+    }
 }
-impl Event<Dummy> for DummyResource {}
 impl Error<Dummy> for DummyResource {
     // Error will never be constructed
     fn is_out_of_device_memory(&self) -> bool {

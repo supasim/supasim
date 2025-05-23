@@ -629,7 +629,8 @@ impl<B: hal::Backend> InstanceInner<B> {
             } {
                 return Ok(false);
             }
-            let item = self.submitted_command_recorders.pop_front().unwrap();
+            //unsafe { self.inner.wait_for_idle().map_supasim()? };
+            let mut item = self.submitted_command_recorders.pop_front().unwrap();
             self.submitted_command_recorders_start += 1;
             for b in item.buffers_to_destroy {
                 unsafe { self.inner.destroy_buffer(b).map_supasim()? };
@@ -638,6 +639,7 @@ impl<B: hal::Backend> InstanceInner<B> {
                 self.hal_bind_groups.push(bg);
             }
             self.hal_command_recorders.extend(item.command_recorders);
+            unsafe { item.used_semaphore.reset(&mut self.inner).map_supasim()? };
             self.unused_semaphores.push(item.used_semaphore);
         }
         Ok(true)
@@ -838,6 +840,9 @@ impl<B: hal::Backend> From<&BufferSlice<B>> for BufferRange {
 }
 impl BufferRange {
     pub fn overlaps(&self, other: &Self) -> bool {
+        // Starts before the end of the other
+        // and the other starts before the end of this
+        // and at least one of them is mutable
         self.start < other.start + other.len
             && other.start < self.start + self.len
             && (self.needs_mut || other.needs_mut)
@@ -943,8 +948,4 @@ impl<B: hal::Backend> WaitHandle<B> {
         instance.wait_for_submission(true, s.index)?;
         Ok(())
     }
-}
-struct Event<B: hal::Backend> {
-    id: Index,
-    inner: B::Event,
 }

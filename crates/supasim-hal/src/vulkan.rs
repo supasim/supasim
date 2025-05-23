@@ -17,17 +17,20 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
 use crate::{
-    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, Event,
-    GpuResource, Kernel, KernelCache, RecorderSubmitInfo, Semaphore,
+    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, GpuResource,
+    Kernel, KernelCache, RecorderSubmitInfo, Semaphore,
 };
-use ash::{Entry, khr, vk};
+use ash::{
+    Entry, khr,
+    vk::{self, Handle},
+};
 use core::ffi;
 use gpu_allocator::{
     AllocationError, AllocationSizes, AllocatorDebugSettings,
     vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
 };
 use log::{Level, warn};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::{
     borrow::Cow,
     cell::Cell,
@@ -52,7 +55,6 @@ impl Backend for Vulkan {
     type Kernel = VulkanKernel;
     type KernelCache = VulkanPipelineCache;
     type Semaphore = VulkanSemaphore;
-    type Event = VulkanEvent;
 
     type Error = VulkanError;
 }
@@ -407,6 +409,11 @@ impl Debug for VulkanInstance {
         f.write_str("VulkanInstance")
     }
 }
+impl Display for VulkanInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "VulkanInstance({})", self.device.handle().as_raw())
+    }
+}
 impl VulkanInstance {
     #[tracing::instrument]
     pub fn get_command_buffer(&mut self) -> Result<vk::CommandBuffer, VulkanError> {
@@ -476,7 +483,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             is_unified_memory,
         }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(binary))]
     unsafe fn compile_kernel(
         &mut self,
         binary: &[u8],
@@ -689,7 +696,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(())
         }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(initial_data))]
     unsafe fn create_kernel_cache(
         &mut self,
         initial_data: &[u8],
@@ -916,6 +923,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         &mut self,
         infos: &mut [RecorderSubmitInfo<Vulkan>],
     ) -> Result<(), <Vulkan as Backend>::Error> {
+        // Holy shit this function can't be right
         let mut cbs = Vec::new();
         let mut semaphores: Vec<vk::Semaphore> = Vec::new();
         let mut pipeline_stage_flags = Vec::new();
@@ -924,6 +932,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 pipeline_stage_flags.push(vk::PipelineStageFlags::ALL_COMMANDS);
             }
         };
+        // TODO: make this work with new semaphores
         let mut values = Vec::new();
         let mut ensure_enough_values = |num| {
             while values.len() < num {
@@ -1043,28 +1052,13 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         Ok(())
     }
     #[tracing::instrument]
-    unsafe fn clear_recorders(
-        &mut self,
-        recorders: &mut [&mut VulkanCommandRecorder],
-    ) -> Result<(), VulkanError> {
-        unsafe {
-            for recorder in recorders {
-                for cb in &recorder.cbs {
-                    self.device
-                        .reset_command_buffer(cb.cb, vk::CommandBufferResetFlags::empty())?;
-                }
-            }
-        }
-        Ok(())
-    }
-    #[tracing::instrument]
     unsafe fn wait_for_idle(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             self.device.queue_wait_idle(self.queue)?;
             Ok(())
         }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(data), fields(len=data.len()))]
     unsafe fn write_buffer(
         &mut self,
         buffer: &<Vulkan as Backend>::Buffer,
@@ -1079,7 +1073,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(())
         }
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(data), fields(len=data.len()))]
     unsafe fn read_buffer(
         &mut self,
         buffer: &<Vulkan as Backend>::Buffer,
@@ -1105,6 +1099,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .push_next(&mut next);
             Ok(VulkanSemaphore {
                 inner: self.device.create_semaphore(&create_info, None)?,
+                current_value: 0,
             })
         }
     }
@@ -1135,32 +1130,6 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         self.unused_command_buffers.clear();
         self.unused_command_buffers.clear();
-        Ok(())
-    }
-
-    #[tracing::instrument]
-    unsafe fn create_event(
-        &mut self,
-    ) -> Result<<Vulkan as Backend>::Event, <Vulkan as Backend>::Error> {
-        Ok(VulkanEvent {
-            inner: unsafe {
-                self.device.create_event(
-                    &vk::EventCreateInfo::default().flags(vk::EventCreateFlags::DEVICE_ONLY_KHR),
-                    None,
-                )?
-            },
-            operations: Cell::new(SyncOperations::Both),
-        })
-    }
-
-    #[tracing::instrument]
-    unsafe fn destroy_event(
-        &mut self,
-        event: <Vulkan as Backend>::Event,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            self.device.destroy_event(event.inner, None);
-        }
         Ok(())
     }
 }
@@ -1246,7 +1215,7 @@ impl VulkanCommandRecorder {
         }
         Ok(())
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(push_constants), fields(push_constants_len=push_constants.len()))]
     fn dispatch_kernel(
         &mut self,
         instance: &mut <Vulkan as Backend>::Instance,
@@ -1286,7 +1255,7 @@ impl VulkanCommandRecorder {
         }
         Ok(())
     }
-    #[tracing::instrument]
+    #[tracing::instrument(skip(push_constants), fields(push_constants_len=push_constants.len()))]
     #[allow(clippy::too_many_arguments)]
     fn dispatch_kernel_indirect(
         &mut self,
@@ -1329,34 +1298,12 @@ impl VulkanCommandRecorder {
         }
         Ok(())
     }
-    fn stage_mask(sync_ops: SyncOperations) -> vk::PipelineStageFlags {
-        match sync_ops {
-            SyncOperations::Transfer => vk::PipelineStageFlags::TRANSFER,
-            SyncOperations::ComputeDispatch => vk::PipelineStageFlags::COMPUTE_SHADER,
-            SyncOperations::Both => vk::PipelineStageFlags::ALL_COMMANDS,
-        }
-    }
     fn stage_mask_khr(sync_ops: SyncOperations) -> vk::PipelineStageFlags2KHR {
         match sync_ops {
             SyncOperations::Transfer => vk::PipelineStageFlags2KHR::TRANSFER,
             SyncOperations::ComputeDispatch => vk::PipelineStageFlags2KHR::COMPUTE_SHADER,
             SyncOperations::Both => vk::PipelineStageFlags2KHR::ALL_COMMANDS,
         }
-    }
-    fn set_event(
-        &mut self,
-        instance: &mut VulkanInstance,
-        wait: SyncOperations,
-        event: &VulkanEvent,
-        cb: vk::CommandBuffer,
-    ) -> Result<(), VulkanError> {
-        unsafe {
-            event.operations.set(wait);
-            instance
-                .device
-                .cmd_set_event(cb, event.inner, Self::stage_mask(wait));
-        }
-        Ok(())
     }
     /// First command must be a pipeline barrier or wait event command. Following commands must be memory barriers
     fn sync_command<'a>(
@@ -1365,8 +1312,6 @@ impl VulkanCommandRecorder {
         cb: vk::CommandBuffer,
         commands: impl IntoIterator<Item = &'a BufferCommand<'a, Vulkan>>,
     ) -> Result<(), VulkanError> {
-        let mut events = Vec::new();
-        let mut is_event_wait = None; // True if event wait, false if pipeline barrier
         let mut barriers = Vec::new();
         let mut pre_flags = vk::PipelineStageFlags2KHR::empty();
         let mut post_flags = vk::PipelineStageFlags2KHR::empty();
@@ -1395,16 +1340,7 @@ impl VulkanCommandRecorder {
                                 | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
                         ),
                 ),
-                BufferCommand::WaitEvent { event, signal } => {
-                    assert!(is_event_wait != Some(false));
-                    is_event_wait = Some(true);
-                    events.push(event.inner);
-                    pre_flags |= Self::stage_mask_khr(event.operations.get());
-                    post_flags |= Self::stage_mask_khr(*signal);
-                }
                 BufferCommand::PipelineBarrier { before, after } => {
-                    assert!(is_event_wait != Some(true));
-                    is_event_wait = Some(false);
                     pre_flags |= Self::stage_mask_khr(*before);
                     post_flags |= Self::stage_mask_khr(*after);
                 }
@@ -1418,20 +1354,11 @@ impl VulkanCommandRecorder {
             *barrier = barrier.src_stage_mask(pre_flags).dst_stage_mask(post_flags);
         }
         let dependency_info = vk::DependencyInfoKHR::default().buffer_memory_barriers(&barriers);
-        match is_event_wait.unwrap() {
-            false => unsafe {
-                instance
-                    .sync2_dev
-                    .cmd_pipeline_barrier2(cb, &dependency_info);
-            },
-            true => unsafe {
-                let mut dependencies = Vec::new();
-                dependencies.resize(events.len(), dependency_info);
-                instance
-                    .sync2_dev
-                    .cmd_wait_events2(cb, &events, &dependencies);
-            },
-        }
+        unsafe {
+            instance
+                .sync2_dev
+                .cmd_pipeline_barrier2(cb, &dependency_info)
+        };
         Ok(())
     }
     #[tracing::instrument]
@@ -1487,13 +1414,7 @@ impl VulkanCommandRecorder {
                 *validate,
                 cb,
             )?,
-            BufferCommand::SetEvent { event, wait } => {
-                self.set_event(instance, *wait, event, cb)?
-            }
             BufferCommand::PipelineBarrier { .. } => {
-                unreachable!()
-            }
-            BufferCommand::WaitEvent { .. } => {
                 unreachable!()
             }
             BufferCommand::MemoryBarrier { .. } => {
@@ -1505,7 +1426,6 @@ impl VulkanCommandRecorder {
     }
 }
 impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
-    #[tracing::instrument]
     unsafe fn record_dag(
         &mut self,
         _instance: &mut <Vulkan as Backend>::Instance,
@@ -1525,9 +1445,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         let mut pipeline_chain_start = None;
         for i in 0..commands.len() {
             match &commands[i] {
-                BufferCommand::MemoryBarrier { .. }
-                | BufferCommand::WaitEvent { .. }
-                | BufferCommand::PipelineBarrier { .. } => {
+                BufferCommand::MemoryBarrier { .. } | BufferCommand::PipelineBarrier { .. } => {
                     if pipeline_chain_start.is_none() {
                         pipeline_chain_start = Some(i);
                     }
@@ -1551,6 +1469,12 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         });
         Ok(())
     }
+    unsafe fn clear(
+        &mut self,
+        _instance: &mut <Vulkan as Backend>::Instance,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        todo!()
+    }
 }
 #[derive(Debug)]
 pub struct DescriptorPoolData {
@@ -1573,6 +1497,7 @@ impl KernelCache<Vulkan> for VulkanPipelineCache {}
 #[derive(Debug)]
 pub struct VulkanSemaphore {
     inner: vk::Semaphore,
+    current_value: u64,
 }
 impl Semaphore<Vulkan> for VulkanSemaphore {
     #[tracing::instrument]
@@ -1584,7 +1509,7 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
             instance.device.wait_semaphores(
                 &vk::SemaphoreWaitInfo::default()
                     .semaphores(std::slice::from_ref(&self.inner))
-                    .values(&[1]),
+                    .values(&[self.current_value + 1]),
                 u64::MAX,
             )?;
         }
@@ -1595,7 +1520,10 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         &mut self,
         instance: &mut <Vulkan as Backend>::Instance,
     ) -> Result<bool, <Vulkan as Backend>::Error> {
-        Ok(unsafe { instance.device.get_semaphore_counter_value(self.inner)? } != 0)
+        Ok(
+            unsafe { instance.device.get_semaphore_counter_value(self.inner)? }
+                == self.current_value + 1,
+        )
     }
     #[tracing::instrument]
     unsafe fn signal(
@@ -1606,16 +1534,16 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
             instance.device.signal_semaphore(
                 &vk::SemaphoreSignalInfo::default()
                     .semaphore(self.inner)
-                    .value(1),
+                    .value(self.current_value + 1),
             )?;
         }
         Ok(())
     }
+    unsafe fn reset(
+        &mut self,
+        _instance: &mut <Vulkan as Backend>::Instance,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        self.current_value += 1;
+        Ok(())
+    }
 }
-
-#[derive(Debug)]
-pub struct VulkanEvent {
-    inner: vk::Event,
-    operations: Cell<SyncOperations>,
-}
-impl Event<Vulkan> for VulkanEvent {}

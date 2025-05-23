@@ -23,7 +23,7 @@ use thunderdome::Index;
 use types::{Dag, NodeIndex, SyncOperations, Walker};
 
 use crate::{
-    BufferCommand, BufferCommandInner, BufferRange, CommandRecorderInner, Instance,
+    BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner, Instance,
     MapSupasimError, SupaSimError, SupaSimResult,
 };
 
@@ -107,23 +107,52 @@ pub fn assemble_dag<B: hal::Backend>(
     }
 
     for i in 0..dag.node_count() {
-        for bf_idx in 0..dag[NodeIndex::new(i)].buffers.len() {
-            let buffer = &dag[NodeIndex::new(i)].buffers[bf_idx];
-            let range: BufferRange = buffer.into();
-            let id = buffer.buffer.inner()?.id;
-            match buffers_tracker.entry(id) {
-                Entry::Occupied(mut entry) => {
-                    for (range2, j) in entry.get().iter() {
-                        if range.overlaps(range2) {
-                            dag.add_edge(NodeIndex::new(*j), NodeIndex::new(i), ())
-                                .unwrap();
+        let mut work_on_buffer =
+            |buffer: &BufferSlice<B>, dag: &mut Dag<BufferCommand<B>>| -> SupaSimResult<B, ()> {
+                let range: BufferRange = buffer.into();
+                let id = buffer.buffer.inner()?.id;
+                match buffers_tracker.entry(id) {
+                    Entry::Occupied(mut entry) => {
+                        for (range2, j) in entry.get().iter() {
+                            if range.overlaps(range2) {
+                                dag.add_edge(NodeIndex::new(*j), NodeIndex::new(i), ())
+                                    .unwrap();
+                            }
                         }
+                        entry.get_mut().push((range, i));
                     }
-                    entry.get_mut().push((range, i));
+                    Entry::Vacant(entry) => {
+                        entry.insert(vec![(range, i)]);
+                    }
                 }
-                Entry::Vacant(entry) => {
-                    entry.insert(vec![(range, i)]);
-                }
+                Ok(())
+            };
+        if let BufferCommandInner::CopyBufferToBuffer {
+            src_buffer,
+            dst_buffer,
+            src_offset,
+            dst_offset,
+            len,
+        } = &dag[NodeIndex::new(i)].inner
+        {
+            let src_slice = BufferSlice {
+                buffer: src_buffer.clone(),
+                start: *src_offset,
+                len: *len,
+                needs_mut: false,
+            };
+            let dst_slice = BufferSlice {
+                buffer: dst_buffer.clone(),
+                start: *dst_offset,
+                len: *len,
+                needs_mut: true,
+            };
+            work_on_buffer(&src_slice, &mut dag)?;
+            work_on_buffer(&dst_slice, &mut dag)?;
+        } else {
+            for bf_idx in 0..dag[NodeIndex::new(i)].buffers.len() {
+                let buffer = dag[NodeIndex::new(i)].buffers[bf_idx].clone();
+                work_on_buffer(&buffer, &mut dag)?;
             }
         }
     }

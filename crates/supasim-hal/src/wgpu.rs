@@ -42,8 +42,6 @@ impl Backend for Wgpu {
 
     type Semaphore = WgpuSemaphore;
 
-    type Event = WgpuEvent;
-
     type Error = WgpuError;
 }
 impl Wgpu {
@@ -280,17 +278,6 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     }
 
     #[tracing::instrument]
-    unsafe fn clear_recorders(
-        &mut self,
-        buffers: &mut [&mut <Wgpu as Backend>::CommandRecorder],
-    ) -> Result<(), <Wgpu as Backend>::Error> {
-        for b in buffers {
-            **b = unsafe { self.create_recorder()? };
-        }
-        Ok(())
-    }
-
-    #[tracing::instrument]
     unsafe fn create_buffer(
         &mut self,
         alloc_info: &BufferDescriptor,
@@ -454,21 +441,6 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     }
 
     #[tracing::instrument]
-    unsafe fn create_event(
-        &mut self,
-    ) -> Result<<Wgpu as Backend>::Event, <Wgpu as Backend>::Error> {
-        unreachable!()
-    }
-
-    #[tracing::instrument]
-    unsafe fn destroy_event(
-        &mut self,
-        event: <Wgpu as Backend>::Event,
-    ) -> Result<(), <Wgpu as Backend>::Error> {
-        unreachable!()
-    }
-
-    #[tracing::instrument]
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
         Ok(())
     }
@@ -606,10 +578,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                 } => {
                     unreachable!()
                 }
-                BufferCommand::MemoryBarrier { .. }
-                | BufferCommand::PipelineBarrier { .. }
-                | BufferCommand::SetEvent { .. }
-                | BufferCommand::WaitEvent { .. } => (),
+                BufferCommand::MemoryBarrier { .. } | BufferCommand::PipelineBarrier { .. } => (),
             }
         }
 
@@ -623,6 +592,14 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
         dag: &mut Dag<BufferCommand<Wgpu>>,
     ) -> Result<(), <Wgpu as Backend>::Error> {
         unreachable!()
+    }
+    #[tracing::instrument]
+    unsafe fn clear(
+        &mut self,
+        instance: &mut <Wgpu as Backend>::Instance,
+    ) -> Result<(), <Wgpu as Backend>::Error> {
+        *self = unsafe { instance.create_recorder()? };
+        Ok(())
     }
 }
 #[derive(Debug)]
@@ -678,10 +655,14 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
     ) -> Result<(), <Wgpu as Backend>::Error> {
         unreachable!()
     }
+    unsafe fn reset(
+        &mut self,
+        instance: &mut <Wgpu as Backend>::Instance,
+    ) -> Result<(), <Wgpu as Backend>::Error> {
+        self.inner.set(None);
+        Ok(())
+    }
 }
-#[derive(Debug)]
-pub struct WgpuEvent;
-impl Event<Wgpu> for WgpuEvent {}
 #[derive(thiserror::Error, Debug)]
 pub enum WgpuError {
     #[error("Wgpu internal error: {0}")]

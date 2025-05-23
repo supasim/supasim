@@ -1402,6 +1402,7 @@ dependencies = [
  "supasim-types",
  "thiserror 2.0.12",
  "thunderdome",
+ "tracing",
  "tracing-log",
  "tracing-subscriber",
 ]
