@@ -2,4 +2,6 @@
 /lib/
 /crates/supasim-shaders/shader-tests/**
 /test.*
+/.env
+/.vscode
 /.idea
