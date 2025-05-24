@@ -973,7 +973,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     #[tracing::instrument]
     unsafe fn wait_for_idle(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            self.device.queue_wait_idle(self.queue)?;
+            self.device.device_wait_idle()?;
             Ok(())
         }
     }

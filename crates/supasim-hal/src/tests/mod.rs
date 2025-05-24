@@ -23,25 +23,7 @@ use crate::{
     Semaphore,
 };
 use log::info;
-use tracing_subscriber::layer::Context;
-use tracing_subscriber::prelude::*;
 use types::{BufferDescriptor, ShaderReflectionInfo, ShaderResourceType, SyncOperations};
-
-struct EnterSpanPrinter;
-
-impl<S> tracing_subscriber::Layer<S> for EnterSpanPrinter
-where
-    S: tracing::Subscriber,
-    S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
-{
-    fn on_enter(&self, id: &tracing::Id, ctx: Context<'_, S>) {
-        if let Some(span_ref) = ctx.span(id) {
-            let span = span_ref.name();
-            let fields = span_ref.fields();
-            println!("\t{} {:?}", span, fields);
-        }
-    }
-}
 
 unsafe fn create_storage_buf<B: Backend>(
     instance: &mut B::Instance,
@@ -288,10 +270,6 @@ macro_rules! gpu_test {
                 return;
             }
             let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
-            let _ = tracing_subscriber::registry()
-                .with(EnterSpanPrinter)
-                .with(tracing_subscriber::fmt::layer())
-                .try_init();
             let _ = env_logger::builder()
                 .filter_level(log::LevelFilter::Info)
                 .try_init();

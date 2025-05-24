@@ -27,7 +27,6 @@ keywords.workspace = true
 license.workspace = true
 
 [features]
-#default = ["msl-out", "wgsl-out"]
 msl-stable-out = ["spirv-cross"]
 wgsl-out = ["naga"]
 dxil-out = ["hassle-rs"]
@@ -58,3 +57,6 @@ name = "simple-shaders"
 path = "examples/simple-shaders.rs"
 required-features = ["msl-stable-out", "wgsl-out", "dxil-out", "opt-valid"]
 # Run command: cargo run --example simple-shaders --features="msl-stable-out wgsl-out dxil-out opt-valid"
+
+[dev-dependencies]
+serde_json.workspace = true

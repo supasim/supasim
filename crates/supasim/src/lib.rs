@@ -604,11 +604,39 @@ impl<B: hal::Backend> Instance<B> {
 impl<B: hal::Backend> Drop for InstanceInner<B> {
     fn drop(&mut self) {
         let _ = unsafe { self.inner.wait_for_idle() };
-        self.command_recorders.clear(); // These will call their destructors, politely taking care of themselves
-        self.wait_handles.clear();
-        self.kernel_caches.clear();
-        self.buffers.clear();
-        self.kernels.clear();
+        for (_, cr) in &self.command_recorders {
+            if let Some(cr) = cr {
+                if let Ok(cr) = cr.upgrade() {
+                    let _ = cr.destroy();
+                }
+            }
+        }
+        for (_, wh) in &self.wait_handles {
+            if let Ok(wh) = wh.upgrade() {
+                let _ = wh.destroy();
+            }
+        }
+        for (_, kc) in &self.kernel_caches {
+            if let Some(kc) = kc {
+                if let Ok(kc) = kc.upgrade() {
+                    let _ = kc.destroy();
+                }
+            }
+        }
+        for (_, b) in &self.buffers {
+            if let Some(b) = b {
+                if let Ok(b) = b.upgrade() {
+                    let _ = b.destroy();
+                }
+            }
+        }
+        for (_, k) in &self.kernels {
+            if let Some(k) = k {
+                if let Ok(k) = k.upgrade() {
+                    let _ = k.destroy();
+                }
+            }
+        }
     }
 }
 impl<B: hal::Backend> InstanceInner<B> {

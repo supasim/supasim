@@ -22,7 +22,7 @@ pub use daggy::Walker;
 pub use daggy::petgraph::algo::toposort;
 pub use daggy::petgraph::graph::NodeIndex;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BufferType {
     /// Driver decides
     #[default]
@@ -36,7 +36,7 @@ pub enum BufferType {
     /// Can be copied to from GPU and used in other use cases such as uniform buffers.
     Other,
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BufferDescriptor {
     pub size: u64,
     pub memory_type: BufferType,
@@ -46,7 +46,7 @@ pub struct BufferDescriptor {
     pub needs_flush: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpirvVersion {
     V1_0,
     V1_1,
@@ -61,7 +61,7 @@ pub enum SpirvVersion {
     Cl2_1,
     Cl2_2,
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShaderModel {
     #[default]
     Sm6_0,
@@ -88,7 +88,7 @@ impl ShaderModel {
         }
     }
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MetalVersion {
     #[default]
     V2_3,
@@ -103,7 +103,7 @@ impl MetalVersion {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShaderTarget {
     CudaCpp,
     Ptx,
@@ -137,19 +137,19 @@ impl ShaderTarget {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SyncMode {
     VulkanStyle,
     Dag,
     Automatic,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SyncOperations {
     ComputeDispatch,
     Transfer,
     Both,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct InstanceProperties {
     /// What synchronization requirements the backend has
     pub sync_mode: SyncMode,

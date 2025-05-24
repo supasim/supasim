@@ -181,4 +181,7 @@ jobs:
           export SUPASIM_SKIP_SHADERS_DXIL=1
         fi
 
+        echo -e "Running all tests\n"
         cargo test --verbose --all-targets --all-features -- --nocapture
+        echo -e "\nRunning tests with no features\n"
+        cargo test --verbose --all-targets --no-default features -- --nocapture
