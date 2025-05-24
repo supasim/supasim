@@ -493,7 +493,7 @@ impl<B: hal::Backend> Instance<B> {
             };
             let mut submit_info = RecorderSubmitInfo {
                 command_recorder: &mut recorder,
-                wait_semaphore: None,
+                wait_semaphores: &mut [],
                 signal_semaphore: Some(&semaphore),
             };
             unsafe {

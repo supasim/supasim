@@ -330,7 +330,6 @@ impl Vulkan {
                 queue_family_idx,
                 command_pool: pool,
                 unused_command_buffers: Vec::new(),
-                unused_events: Vec::new(),
                 debug: debug_callback,
             };
             err.set(false);
@@ -400,7 +399,6 @@ pub struct VulkanInstance {
     queue_family_idx: u32,
     command_pool: vk::CommandPool,
     unused_command_buffers: Vec<vk::CommandBuffer>,
-    unused_events: Vec<vk::Event>,
     debug: Option<vk::DebugUtilsMessengerEXT>,
     sync2_dev: khr::synchronization2::Device,
 }
@@ -904,8 +902,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         &mut self,
     ) -> Result<<Vulkan as Backend>::CommandRecorder, <Vulkan as Backend>::Error> {
         Ok(VulkanCommandRecorder {
-            cbs: Vec::new(),
-            used_events: Vec::new(),
+            inner: self.get_command_buffer()?,
         })
     }
     #[tracing::instrument]
@@ -913,9 +910,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         &mut self,
         recorder: <Vulkan as Backend>::CommandRecorder,
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        self.unused_events.extend(&recorder.used_events);
-        self.unused_command_buffers
-            .extend(recorder.cbs.into_iter().map(|a| a.cb));
+        self.unused_command_buffers.push(recorder.inner);
         Ok(())
     }
     #[tracing::instrument]
@@ -923,131 +918,55 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         &mut self,
         infos: &mut [RecorderSubmitInfo<Vulkan>],
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        // Holy shit this function can't be right
-        let mut cbs = Vec::new();
-        let mut semaphores: Vec<vk::Semaphore> = Vec::new();
-        let mut pipeline_stage_flags = Vec::new();
-        let mut ensure_enough_flags = |num| {
-            while pipeline_stage_flags.len() < num {
-                pipeline_stage_flags.push(vk::PipelineStageFlags::ALL_COMMANDS);
-            }
-        };
-        // TODO: make this work with new semaphores
-        let mut values = Vec::new();
-        let mut ensure_enough_values = |num| {
-            while values.len() < num {
-                values.push(1);
-            }
-        };
-        let mut timeline_ext = Vec::new();
+        let mut submits = Vec::new();
+        let mut wait_semaphores = Vec::new();
+        let mut signal_semaphores = Vec::new();
+        let mut cb_infos = Vec::new();
         for info in &*infos {
-            for &event in &info.command_recorder.used_events {
-                unsafe {
-                    self.device.reset_event(event)?;
-                }
-            }
-            let num_tails = info
-                .command_recorder
-                .cbs
-                .iter()
-                .filter_map(|a| if a.is_tail { Some(()) } else { None })
-                .count();
-            if num_tails == 0 {
-                return Ok(());
-            }
-            if num_tails > 1 && info.signal_semaphore.is_some() {
-                return Err(VulkanError::SemaphoreSignalInDag);
-            }
-            for a in &info.command_recorder.cbs {
-                cbs.push(a.cb);
-                let num_wait_semaphores = a.wait_semaphores.len()
-                    + if a.is_head {
-                        info.wait_semaphore.is_some() as usize
-                    } else {
-                        0
-                    };
-                let num_signal_semaphores = a.signal_semaphores.len()
-                    + if a.is_tail {
-                        info.signal_semaphore.is_some() as usize
-                    } else {
-                        0
-                    };
-                ensure_enough_values(num_wait_semaphores);
-                ensure_enough_values(num_signal_semaphores);
-                ensure_enough_flags(num_signal_semaphores);
-                for &s in &a.wait_semaphores {
-                    semaphores.push(s);
-                }
-                if a.is_head {
-                    semaphores.extend(info.wait_semaphore.map(|a| a.inner));
-                }
-                for &s in &a.signal_semaphores {
-                    semaphores.push(s);
-                }
-                if a.is_tail {
-                    semaphores.extend(info.signal_semaphore.iter().map(|a| a.inner));
-                }
-            }
-        }
-        for info in &*infos {
-            for a in &info.command_recorder.cbs {
-                let num_wait_semaphores = a.wait_semaphores.len()
-                    + if a.is_head {
-                        info.wait_semaphore.is_some() as usize
-                    } else {
-                        0
-                    };
-                let num_signal_semaphores = a.signal_semaphores.len()
-                    + if a.is_tail {
-                        info.signal_semaphore.is_some() as usize
-                    } else {
-                        0
-                    };
-                timeline_ext.push(
-                    vk::TimelineSemaphoreSubmitInfo::default()
-                        .wait_semaphore_values(&values[..num_wait_semaphores])
-                        .signal_semaphore_values(&values[..num_signal_semaphores]),
+            for sem in &*info.wait_semaphores {
+                wait_semaphores.push(
+                    vk::SemaphoreSubmitInfoKHR::default()
+                        .semaphore(sem.inner)
+                        .value(sem.current_value + 1)
+                        .stage_mask(vk::PipelineStageFlags2KHR::ALL_COMMANDS_KHR),
                 );
             }
+            if let Some(s) = info.signal_semaphore {
+                signal_semaphores.push(
+                    vk::SemaphoreSubmitInfoKHR::default()
+                        .semaphore(s.inner)
+                        .value(s.current_value + 1)
+                        .stage_mask(vk::PipelineStageFlags2KHR::ALL_COMMANDS_KHR),
+                );
+            }
+            cb_infos.push(
+                vk::CommandBufferSubmitInfoKHR::default()
+                    .command_buffer(info.command_recorder.inner),
+            );
         }
-        let mut submits = Vec::new();
         {
-            let mut cb_idx = 0;
-            let mut semaphore_idx = 0;
-            for info in &*infos {
-                for cb in &info.command_recorder.cbs {
-                    let num_wait_semaphores = cb.wait_semaphores.len()
-                        + if cb.is_head {
-                            info.wait_semaphore.is_some() as usize
-                        } else {
-                            0
-                        };
-                    let num_signal_semaphores = cb.signal_semaphores.len()
-                        + if cb.is_tail {
-                            info.signal_semaphore.is_some() as usize
-                        } else {
-                            0
-                        };
-                    let submit = vk::SubmitInfo::default()
-                        .command_buffers(&cbs[cb_idx..cb_idx + 1])
-                        .wait_dst_stage_mask(&pipeline_stage_flags[..num_signal_semaphores])
-                        .wait_semaphores(
-                            &semaphores[semaphore_idx..semaphore_idx + num_wait_semaphores],
-                        )
-                        .signal_semaphores(
-                            &semaphores[semaphore_idx + num_wait_semaphores
-                                ..semaphore_idx + num_wait_semaphores + num_signal_semaphores],
-                        )
-                        .push_next(unsafe { &mut *timeline_ext.as_mut_ptr().add(cb_idx) });
-                    semaphore_idx += num_wait_semaphores + num_signal_semaphores;
-                    cb_idx += 1;
-                    submits.push(submit);
-                }
+            let mut wait_idx = 0;
+            let mut signal_idx = 0;
+            for (cb_idx, info) in (*infos).iter().enumerate() {
+                let submit = vk::SubmitInfo2KHR::default()
+                    .command_buffer_infos(std::slice::from_ref(&cb_infos[cb_idx]))
+                    .wait_semaphore_infos(
+                        &wait_semaphores[wait_idx..wait_idx + info.wait_semaphores.len()],
+                    )
+                    .signal_semaphore_infos(if info.signal_semaphore.is_some() {
+                        std::slice::from_ref(&signal_semaphores[signal_idx])
+                    } else {
+                        &[]
+                    });
+                submits.push(submit);
+                wait_idx += info.wait_semaphores.len();
+                signal_idx += info.signal_semaphore.is_some() as usize;
             }
         }
+
         unsafe {
             self.device
-                .queue_submit(self.queue, &submits, vk::Fence::null())?;
+                .queue_submit2(self.queue, &submits, vk::Fence::null())?;
         }
         Ok(())
     }
@@ -1121,13 +1040,6 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     .free_command_buffers(self.command_pool, &self.unused_command_buffers);
             }
         }
-        if !self.unused_events.is_empty() {
-            for &event in &self.unused_events {
-                unsafe {
-                    self.device.destroy_event(event, None);
-                }
-            }
-        }
         self.unused_command_buffers.clear();
         self.unused_command_buffers.clear();
         Ok(())
@@ -1151,17 +1063,8 @@ pub struct VulkanBuffer {
 }
 impl Buffer<Vulkan> for VulkanBuffer {}
 #[derive(Debug)]
-struct CommandBufferSubmit {
-    cb: vk::CommandBuffer,
-    wait_semaphores: Vec<vk::Semaphore>,
-    signal_semaphores: Vec<vk::Semaphore>,
-    is_tail: bool,
-    is_head: bool,
-}
-#[derive(Debug)]
 pub struct VulkanCommandRecorder {
-    cbs: Vec<CommandBufferSubmit>,
-    used_events: Vec<vk::Event>,
+    inner: vk::CommandBuffer,
 }
 impl VulkanCommandRecorder {
     #[tracing::instrument]
@@ -1440,7 +1343,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         instance: &mut VulkanInstance,
         commands: &mut [crate::BufferCommand<Vulkan>],
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        let cb = instance.get_command_buffer()?;
+        let cb = self.inner;
         self.begin(instance, cb)?;
         let mut pipeline_chain_start = None;
         for i in 0..commands.len() {
@@ -1460,13 +1363,6 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
             }
         }
         self.end(instance, cb)?;
-        self.cbs.push(CommandBufferSubmit {
-            cb,
-            wait_semaphores: Vec::new(),
-            signal_semaphores: Vec::new(),
-            is_tail: true,
-            is_head: true,
-        });
         Ok(())
     }
     unsafe fn clear(

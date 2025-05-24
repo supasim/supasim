@@ -237,7 +237,7 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
         info!("Recorded commands");
         instance.submit_recorders(std::slice::from_mut(&mut RecorderSubmitInfo {
             command_recorder: &mut recorder,
-            wait_semaphore: None,
+            wait_semaphores: &mut [],
             signal_semaphore: Some(&fun_semaphore),
         }))?;
         info!("Submitted recorders");
