@@ -1,4 +1,5 @@
-target/
-lib/
-crates/supasim-shaders/shader-tests/**
+/target/
+/lib/
+/crates/supasim-shaders/shader-tests/**
 /test.*
+/.idea
