@@ -235,7 +235,10 @@ macro_rules! api_type {
                     }
                 }
                 pub fn destroy(&self) -> SupaSimResult<B, ()> {
-                    *self.0.write().map_err(|e| SupaSimError::Poison(e.to_string()))? = None;
+                    let mut writer = self.0.write().map_err(|e| SupaSimError::Poison(e.to_string()))?;
+                    // We want the destructor to be run after the writer lock is lost
+                    let _temp = std::mem::take(&mut *writer);
+                    drop(writer);
                     Ok(())
                 }
                 pub(crate) fn downgrade(&self) -> [<$name Weak>]<B> {
@@ -524,9 +527,10 @@ impl<B: hal::Backend> Instance<B> {
         }))
     }
     pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
-        let mut _s = self.inner_mut()?;
-        let _s = &mut *_s;
-        todo!()
+        let mut s = self.inner_mut()?;
+        let idx = s.submitted_semaphore_count - 1;
+        s.wait_for_submission(true, idx)?;
+        Ok(())
     }
     pub fn do_busywork(&self) -> SupaSimResult<B, ()> {
         todo!()
@@ -603,7 +607,8 @@ impl<B: hal::Backend> Instance<B> {
 }
 impl<B: hal::Backend> Drop for InstanceInner<B> {
     fn drop(&mut self) {
-        let _ = unsafe { self.inner.wait_for_idle() };
+        self.wait_for_submission(true, self.submitted_semaphore_count - 1)
+            .unwrap();
         for (_, cr) in &self.command_recorders {
             if let Some(cr) = cr {
                 if let Ok(cr) = cr.upgrade() {
@@ -616,6 +621,7 @@ impl<B: hal::Backend> Drop for InstanceInner<B> {
                 let _ = wh.destroy();
             }
         }
+        dbg!();
         for (_, kc) in &self.kernel_caches {
             if let Some(kc) = kc {
                 if let Ok(kc) = kc.upgrade() {
@@ -636,6 +642,9 @@ impl<B: hal::Backend> Drop for InstanceInner<B> {
                     let _ = k.destroy();
                 }
             }
+        }
+        unsafe {
+            self.inner.wait_for_idle().unwrap();
         }
     }
 }
