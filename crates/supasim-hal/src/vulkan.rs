@@ -30,12 +30,15 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
 };
 use log::{Level, warn};
-use std::fmt::{Debug, Display};
 use std::{
     borrow::Cow,
     cell::Cell,
     ffi::{CStr, CString},
     sync::Mutex,
+};
+use std::{
+    fmt::{Debug, Display},
+    str::FromStr,
 };
 use thiserror::Error;
 use types::{
@@ -492,6 +495,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             let err = Cell::new(true);
             let shader_create_info = &vk::ShaderModuleCreateInfo::default();
             let ptr = binary.as_ptr() as *const u32;
+            assert!(binary.len() % 4 == 0);
             let shader = if ptr.is_aligned() {
                 self.device.create_shader_module(
                     &shader_create_info.code(std::slice::from_raw_parts(ptr, binary.len() / 4)),
@@ -499,10 +503,11 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 )?
             } else {
                 let mut v = Vec::<u32>::with_capacity(binary.len() / 4);
+                #[allow(clippy::uninit_vec)]
+                v.set_len(binary.len() / 4);
                 binary
                     .as_ptr()
                     .copy_to(v.as_mut_ptr() as *mut u8, binary.len());
-                v.set_len(binary.len() / 4);
                 self.device
                     .create_shader_module(&shader_create_info.code(&v), None)?
             };
@@ -554,7 +559,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 _cache_lock = None;
                 vk::PipelineCache::null()
             };
-            let entry = CString::new(reflection.entry_name.clone()).unwrap();
+            let entry = CString::from_str(&reflection.entry_name).unwrap();
             let pipeline_create_info = vk::ComputePipelineCreateInfo::default()
                 .stage(
                     vk::PipelineShaderStageCreateInfo::default()
@@ -587,12 +592,12 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             for pool in kernel.descriptor_pools {
                 self.device.destroy_descriptor_pool(pool.pool, None);
             }
-            self.device
-                .destroy_descriptor_set_layout(kernel.descriptor_set_layout, None);
             self.device.destroy_pipeline(kernel.pipeline, None);
             self.device
                 .destroy_pipeline_layout(kernel.pipeline_layout, None);
             self.device.destroy_shader_module(kernel.shader, None);
+            self.device
+                .destroy_descriptor_set_layout(kernel.descriptor_set_layout, None);
             Ok(())
         }
     }

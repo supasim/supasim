@@ -299,7 +299,7 @@ pub struct InstanceProperties {
 }
 api_type!(Instance, {
     /// The inner hal instance
-    inner: B::Instance,
+    inner: Option<B::Instance>,
     /// The hal instance properties
     inner_properties: types::InstanceProperties,
     /// All created kernels
@@ -322,15 +322,13 @@ api_type!(Instance, {
     submitted_command_recorders_start: u64,
     /// Hal command recorders not currently in use
     hal_command_recorders: Vec<B::CommandRecorder>,
-    /// Unused hal bind groups
-    hal_bind_groups: Vec<B::BindGroup>,
 },);
 impl<B: hal::Backend> Instance<B> {
     pub fn from_hal(mut hal: B::Instance) -> Self {
         let inner_properties = hal.get_properties();
         Self::from_inner(InstanceInner {
             _phantom: Default::default(),
-            inner: hal,
+            inner: Some(hal),
             inner_properties,
             kernels: Arena::default(),
             kernel_caches: Arena::default(),
@@ -343,7 +341,6 @@ impl<B: hal::Backend> Instance<B> {
             submitted_semaphore_count: 1,
             submitted_command_recorders_start: 1,
             hal_command_recorders: Vec::new(),
-            hal_bind_groups: Vec::new(),
         })
     }
     pub fn properties(&self) -> SupaSimResult<B, InstanceProperties> {
@@ -369,11 +366,11 @@ impl<B: hal::Backend> Instance<B> {
         let mut s = self.inner_mut()?;
 
         let kernel = unsafe {
-            s.inner.compile_kernel(
+            s.inner.as_mut().unwrap().compile_kernel(
                 binary,
                 &reflection,
                 if let Some(lock) = cache_lock.as_mut() {
-                    Some(&mut lock.inner)
+                    Some(lock.inner.as_mut().unwrap())
                 } else {
                     None
                 },
@@ -383,7 +380,7 @@ impl<B: hal::Backend> Instance<B> {
         let k = Kernel::from_inner(KernelInner {
             _phantom: Default::default(),
             instance: self.clone(),
-            inner: kernel,
+            inner: Some(kernel),
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
         });
@@ -392,11 +389,11 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn create_kernel_cache(&self, data: &[u8]) -> SupaSimResult<B, KernelCache<B>> {
         let mut s = self.inner_mut()?;
-        let inner = unsafe { s.inner.create_kernel_cache(data) }.map_supasim()?;
+        let inner = unsafe { s.inner.as_mut().unwrap().create_kernel_cache(data) }.map_supasim()?;
         let k = KernelCache::from_inner(KernelCacheInner {
             _phantom: Default::default(),
             instance: self.clone(),
-            inner,
+            inner: Some(inner),
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
         });
@@ -417,7 +414,8 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn create_buffer(&self, desc: &BufferDescriptor) -> SupaSimResult<B, Buffer<B>> {
         let mut s = self.inner_mut()?;
-        let inner = unsafe { s.inner.create_buffer(&(*desc).into()) }.map_supasim()?;
+        let inner =
+            unsafe { s.inner.as_mut().unwrap().create_buffer(&(*desc).into()) }.map_supasim()?;
         let b = Buffer::from_inner(BufferInner {
             _phantom: Default::default(),
             instance: self.clone(),
@@ -453,7 +451,7 @@ impl<B: hal::Backend> Instance<B> {
             let mut recorder = if let Some(r) = s.hal_command_recorders.pop() {
                 r
             } else {
-                unsafe { s.inner.create_recorder() }.map_supasim()?
+                unsafe { s.inner.as_mut().unwrap().create_recorder() }.map_supasim()?
             };
             let (dag, sync_info) = sync::assemble_dag(&mut recorder_inners)?;
             let mut used_buffers = Vec::new();
@@ -492,7 +490,7 @@ impl<B: hal::Backend> Instance<B> {
             let semaphore = if let Some(s) = s.unused_semaphores.pop() {
                 s
             } else {
-                unsafe { s.inner.create_semaphore().map_supasim()? }
+                unsafe { s.inner.as_mut().unwrap().create_semaphore().map_supasim()? }
             };
             let mut submit_info = RecorderSubmitInfo {
                 command_recorder: &mut recorder,
@@ -501,6 +499,8 @@ impl<B: hal::Backend> Instance<B> {
             };
             unsafe {
                 s.inner
+                    .as_mut()
+                    .unwrap()
                     .submit_recorders(std::slice::from_mut(&mut submit_info))
                     .map_supasim()?;
             }
@@ -537,7 +537,7 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn clear_cached_resources(&self) -> SupaSimResult<B, ()> {
         let mut s = self.inner_mut()?;
-        unsafe { s.inner.cleanup_cached_resources() }.map_supasim()?;
+        unsafe { s.inner.as_mut().unwrap().cleanup_cached_resources() }.map_supasim()?;
         todo!();
         //Ok(())
     }
@@ -563,6 +563,8 @@ impl<B: hal::Backend> Instance<B> {
                     _instance
                         .inner_mut()?
                         .inner
+                        .as_mut()
+                        .unwrap()
                         .read_buffer(buffer.inner.as_ref().unwrap(), b.start, &mut data)
                         .map_supasim()?;
                 };
@@ -591,6 +593,8 @@ impl<B: hal::Backend> Instance<B> {
             unsafe {
                 instance
                     .inner
+                    .as_mut()
+                    .unwrap()
                     .write_buffer(
                         buffers[i].buffer.inner()?.inner.as_ref().unwrap(),
                         buffers[i].start,
@@ -621,7 +625,6 @@ impl<B: hal::Backend> Drop for InstanceInner<B> {
                 let _ = wh.destroy();
             }
         }
-        dbg!();
         for (_, kc) in &self.kernel_caches {
             if let Some(kc) = kc {
                 if let Ok(kc) = kc.upgrade() {
@@ -644,7 +647,7 @@ impl<B: hal::Backend> Drop for InstanceInner<B> {
             }
         }
         unsafe {
-            self.inner.wait_for_idle().unwrap();
+            self.inner.as_mut().unwrap().wait_for_idle().unwrap();
         }
     }
 }
@@ -657,11 +660,16 @@ impl<B: hal::Backend> InstanceInner<B> {
         while self.submitted_command_recorders_start <= id {
             let thing = &mut self.submitted_command_recorders[0];
             if force_wait {
-                unsafe { thing.used_semaphore.wait(&mut self.inner).map_supasim()? };
+                unsafe {
+                    thing
+                        .used_semaphore
+                        .wait(self.inner.as_mut().unwrap())
+                        .map_supasim()?
+                };
             } else if !unsafe {
                 thing
                     .used_semaphore
-                    .is_signalled(&mut self.inner)
+                    .is_signalled(self.inner.as_mut().unwrap())
                     .map_supasim()?
             } {
                 return Ok(false);
@@ -670,13 +678,30 @@ impl<B: hal::Backend> InstanceInner<B> {
             let mut item = self.submitted_command_recorders.pop_front().unwrap();
             self.submitted_command_recorders_start += 1;
             for b in item.buffers_to_destroy {
-                unsafe { self.inner.destroy_buffer(b).map_supasim()? };
+                unsafe {
+                    self.inner
+                        .as_mut()
+                        .unwrap()
+                        .destroy_buffer(b)
+                        .map_supasim()?
+                };
             }
-            for bg in item.bind_groups {
-                self.hal_bind_groups.push(bg);
+            for (bg, kernel) in item.bind_groups {
+                let mut k = kernel.inner_mut()?;
+                unsafe {
+                    self.inner
+                        .as_mut()
+                        .unwrap()
+                        .destroy_bind_group(k.inner.as_mut().unwrap(), bg)
+                        .map_supasim()?;
+                }
             }
             self.hal_command_recorders.extend(item.command_recorders);
-            unsafe { item.used_semaphore.reset(&mut self.inner).map_supasim()? };
+            unsafe {
+                item.used_semaphore
+                    .reset(self.inner.as_mut().unwrap())
+                    .map_supasim()?
+            };
             self.unused_semaphores.push(item.used_semaphore);
         }
         Ok(true)
@@ -684,7 +709,7 @@ impl<B: hal::Backend> InstanceInner<B> {
 }
 api_type!(Kernel, {
     instance: Instance<B>,
-    inner: B::Kernel,
+    inner: Option<B::Kernel>,
     id: Index,
 },);
 impl<B: hal::Backend> Kernel<B> {}
@@ -692,13 +717,14 @@ impl<B: hal::Backend> Drop for KernelInner<B> {
     fn drop(&mut self) {
         if let Ok(mut instance) = self.instance.clone().inner_mut() {
             instance.kernels.remove(self.id);
-            let _ = unsafe { instance.inner.destroy_kernel(std::ptr::read(&self.inner)) };
+            let kernel = std::mem::take(&mut self.inner).unwrap();
+            let _ = unsafe { instance.inner.as_mut().unwrap().destroy_kernel(kernel) };
         }
     }
 }
 api_type!(KernelCache, {
     instance: Instance<B>,
-    inner: B::KernelCache,
+    inner: Option<B::KernelCache>,
     id: Index,
 },);
 impl<B: hal::Backend> KernelCache<B> {
@@ -709,7 +735,9 @@ impl<B: hal::Backend> KernelCache<B> {
             instance
                 .inner_mut()?
                 .inner
-                .get_kernel_cache_data(&mut inner.inner)
+                .as_mut()
+                .unwrap()
+                .get_kernel_cache_data(inner.inner.as_mut().unwrap())
         }
         .map_supasim()?;
         Ok(data)
@@ -722,7 +750,9 @@ impl<B: hal::Backend> Drop for KernelCacheInner<B> {
             let _ = unsafe {
                 instance
                     .inner
-                    .destroy_kernel_cache(std::ptr::read(&self.inner))
+                    .as_mut()
+                    .unwrap()
+                    .destroy_kernel_cache(std::mem::take(&mut self.inner).unwrap())
             };
         }
     }
@@ -757,7 +787,7 @@ struct SubmittedCommandRecorder<B: hal::Backend> {
     used_semaphore: B::Semaphore,
     /// Buffers that are waiting for this to be destroyed
     buffers_to_destroy: Vec<B::Buffer>,
-    bind_groups: Vec<B::BindGroup>,
+    bind_groups: Vec<(B::BindGroup, Kernel<B>)>,
 }
 api_type!(CommandRecorder, {
     instance: Instance<B>,
@@ -909,6 +939,8 @@ impl<B: hal::Backend> Drop for BufferInner<B> {
                 let _ = unsafe {
                     instance
                         .inner
+                        .as_mut()
+                        .unwrap()
                         .destroy_buffer(std::mem::take(&mut self.inner).unwrap())
                 };
             }

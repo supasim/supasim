@@ -185,7 +185,9 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
             )
             .unwrap();
         // Memory errors if instance is dropped after other things. A double free is mentioned
-        // If instance is destroyed first, we get leaks detected by gpu_allocator
+        // If instance is destroyed first, we get leaks detected by gpu_allocator.
+        // The issue always happens with destroying the global state after destroying the kernel.
+        kernel.destroy().unwrap();
         instance.destroy().unwrap();
     }
     // If all goes well, these will be cleaned up

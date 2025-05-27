@@ -24,7 +24,7 @@ use types::{Dag, NodeIndex, SyncOperations, Walker};
 
 use crate::{
     BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner, Instance,
-    MapSupasimError, SupaSimError, SupaSimResult,
+    Kernel, MapSupasimError, SupaSimError, SupaSimResult,
 };
 
 pub type CommandDag<B> = Dag<BufferCommand<B>>;
@@ -171,10 +171,11 @@ pub fn assemble_dag<B: hal::Backend>(
         .collect();
     Ok((dag, out_map))
 }
+#[allow(clippy::type_complexity)]
 pub fn record_dag<B: hal::Backend>(
     _dag: &CommandDag<B>,
     _cr: &mut B::CommandRecorder,
-) -> SupaSimResult<B, Vec<B::BindGroup>> {
+) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
     // TODO: work on this when cuda support lands
     todo!()
 }
@@ -346,11 +347,12 @@ pub fn dag_to_command_streams<B: hal::Backend>(
         streams: vec![stream],
     })
 }
+#[allow(clippy::type_complexity)]
 pub fn record_command_streams<B: hal::Backend>(
     streams: &StreamingCommands,
     instance: Instance<B>,
     _recorder: &mut B::CommandRecorder,
-) -> SupaSimResult<B, Vec<B::BindGroup>> {
+) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
     let mut instance = instance.inner_mut()?;
     let mut bindgroups = Vec::new();
     for bg in &streams.bind_groups {
@@ -387,28 +389,27 @@ pub fn record_command_streams<B: hal::Backend>(
                 len: range.len,
             });
         }
-        let bg = if let Some(mut bg) = instance.hal_bind_groups.pop() {
-            unsafe {
-                instance
-                    .inner
-                    .update_bind_group(&mut bg, &mut kernel.inner, &resources)
-                    .map_supasim()?
-            }
-            bg
-        } else {
-            unsafe {
-                instance
-                    .inner
-                    .create_bind_group(&mut kernel.inner, &resources)
-                    .map_supasim()?
-            }
+        let bg = unsafe {
+            instance
+                .inner
+                .as_mut()
+                .unwrap()
+                .create_bind_group(kernel.inner.as_mut().unwrap(), &resources)
+                .map_supasim()?
         };
-        bindgroups.push(bg);
+        bindgroups.push((bg, _k.clone()));
     }
     for stream in &streams.streams {
         let mut cr = match instance.hal_command_recorders.pop() {
             Some(a) => a,
-            None => unsafe { instance.inner.create_recorder().map_supasim()? },
+            None => unsafe {
+                instance
+                    .inner
+                    .as_mut()
+                    .unwrap()
+                    .create_recorder()
+                    .map_supasim()?
+            },
         };
         let mut buffer_refs = Vec::new();
         let mut kernel_refs = Vec::new();
@@ -509,7 +510,11 @@ pub fn record_command_streams<B: hal::Backend>(
                 buffer
             };
             let mut get_kernel = || {
-                let kernel = &kernel_locks[current_kernel_index].deref().inner;
+                let kernel = kernel_locks[current_kernel_index]
+                    .deref()
+                    .inner
+                    .as_ref()
+                    .unwrap();
                 current_kernel_index += 1;
                 kernel
             };
@@ -534,7 +539,7 @@ pub fn record_command_streams<B: hal::Backend>(
                         ..
                     } => hal::BufferCommand::DispatchKernel {
                         kernel: get_kernel(),
-                        bind_group: &bindgroups[*bg as usize],
+                        bind_group: &bindgroups[*bg as usize].0,
                         push_constants,
                         workgroup_dims: *workgroup_dims,
                     },
@@ -546,7 +551,7 @@ pub fn record_command_streams<B: hal::Backend>(
                         ..
                     } => hal::BufferCommand::DispatchKernelIndirect {
                         kernel: get_kernel(),
-                        bind_group: &bindgroups[*bg as usize],
+                        bind_group: &bindgroups[*bg as usize].0,
                         push_constants,
                         indirect_buffer: get_buffer(),
                         buffer_offset: *buffer_offset,
@@ -575,7 +580,7 @@ pub fn record_command_streams<B: hal::Backend>(
             }
         }
         unsafe {
-            cr.record_commands(&mut instance.inner, &mut hal_commands)
+            cr.record_commands(instance.inner.as_mut().unwrap(), &mut hal_commands)
                 .map_supasim()?
         };
     }
