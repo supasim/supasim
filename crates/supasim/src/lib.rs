@@ -46,7 +46,8 @@ pub use types::{
     ShaderModel, ShaderReflectionInfo, ShaderResourceType, ShaderTarget, SpirvVersion,
 };
 
-pub type UserBufferAccessClosure<B> = Box<dyn FnOnce(&mut [MappedBuffer<B>]) -> anyhow::Result<()>>;
+pub type UserBufferAccessClosure<'a, B> =
+    Box<dyn FnOnce(&mut [MappedBuffer<'a, B>]) -> anyhow::Result<()>>;
 
 struct InnerRef<'a, T>(RwLockReadGuard<'a, Option<T>>);
 impl<T> Deref for InnerRef<'_, T> {
@@ -408,6 +409,7 @@ impl<B: hal::Backend> Instance<B> {
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
             commands: Vec::new(),
+            is_alive: true,
         });
         r.inner_mut()?.id = s.command_recorders.insert(Some(r.downgrade()));
         Ok(r)
@@ -524,6 +526,7 @@ impl<B: hal::Backend> Instance<B> {
             instance: self.clone(),
             index,
             id: Index::DANGLING,
+            is_alive: true,
         }))
     }
     pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
@@ -581,6 +584,7 @@ impl<B: hal::Backend> Instance<B> {
                 buffer: b.buffer.inner()?.id,
                 has_mut: b.needs_mut,
                 was_used_mut: false,
+                _p: Default::default(),
             };
             mapped_buffers.push(mapped);
         }
@@ -613,35 +617,50 @@ impl<B: hal::Backend> Drop for InstanceInner<B> {
     fn drop(&mut self) {
         self.wait_for_submission(true, self.submitted_semaphore_count - 1)
             .unwrap();
-        for (_, cr) in &self.command_recorders {
+        for (_, cr) in std::mem::take(&mut self.command_recorders) {
             if let Some(cr) = cr {
                 if let Ok(cr) = cr.upgrade() {
+                    if let Ok(mut cr2) = cr.inner_mut() {
+                        cr2.destroy(self);
+                    }
                     let _ = cr.destroy();
                 }
             }
         }
-        for (_, wh) in &self.wait_handles {
+        for (_, wh) in std::mem::take(&mut self.wait_handles) {
             if let Ok(wh) = wh.upgrade() {
+                if let Ok(mut wh2) = wh.inner_mut() {
+                    wh2.destroy(self);
+                }
                 let _ = wh.destroy();
             }
         }
-        for (_, kc) in &self.kernel_caches {
+        for (_, kc) in std::mem::take(&mut self.kernel_caches) {
             if let Some(kc) = kc {
                 if let Ok(kc) = kc.upgrade() {
+                    if let Ok(mut kc2) = kc.inner_mut() {
+                        kc2.destroy(self);
+                    }
                     let _ = kc.destroy();
                 }
             }
         }
-        for (_, b) in &self.buffers {
+        for (_, b) in std::mem::take(&mut self.buffers) {
             if let Some(b) = b {
                 if let Ok(b) = b.upgrade() {
+                    if let Ok(mut b2) = b.inner_mut() {
+                        b2.destroy(self);
+                    }
                     let _ = b.destroy();
                 }
             }
         }
-        for (_, k) in &self.kernels {
+        for (_, k) in std::mem::take(&mut self.kernels) {
             if let Some(k) = k {
                 if let Ok(k) = k.upgrade() {
+                    if let Ok(mut k2) = k.inner_mut() {
+                        k2.destroy(self);
+                    }
                     let _ = k.destroy();
                 }
             }
@@ -712,13 +731,19 @@ api_type!(Kernel, {
     inner: Option<B::Kernel>,
     id: Index,
 },);
-impl<B: hal::Backend> Kernel<B> {}
+impl<B: hal::Backend> KernelInner<B> {
+    pub fn destroy(&mut self, instance: &mut InstanceInner<B>) {
+        instance.kernels.remove(self.id);
+        let kernel = std::mem::take(&mut self.inner).unwrap();
+        let _ = unsafe { instance.inner.as_mut().unwrap().destroy_kernel(kernel) };
+    }
+}
 impl<B: hal::Backend> Drop for KernelInner<B> {
     fn drop(&mut self) {
-        if let Ok(mut instance) = self.instance.clone().inner_mut() {
-            instance.kernels.remove(self.id);
-            let kernel = std::mem::take(&mut self.inner).unwrap();
-            let _ = unsafe { instance.inner.as_mut().unwrap().destroy_kernel(kernel) };
+        if self.inner.is_some() {
+            if let Ok(mut instance) = self.instance.clone().inner_mut() {
+                self.destroy(&mut instance);
+            }
         }
     }
 }
@@ -743,17 +768,24 @@ impl<B: hal::Backend> KernelCache<B> {
         Ok(data)
     }
 }
+impl<B: hal::Backend> KernelCacheInner<B> {
+    fn destroy(&mut self, instance: &mut InstanceInner<B>) {
+        instance.kernel_caches.remove(self.id);
+        let _ = unsafe {
+            instance
+                .inner
+                .as_mut()
+                .unwrap()
+                .destroy_kernel_cache(std::mem::take(&mut self.inner).unwrap())
+        };
+    }
+}
 impl<B: hal::Backend> Drop for KernelCacheInner<B> {
     fn drop(&mut self) {
-        if let Ok(mut instance) = self.instance.clone().inner_mut() {
-            instance.kernel_caches.remove(self.id);
-            let _ = unsafe {
-                instance
-                    .inner
-                    .as_mut()
-                    .unwrap()
-                    .destroy_kernel_cache(std::mem::take(&mut self.inner).unwrap())
-            };
+        if self.inner.is_some() {
+            if let Ok(mut instance) = self.instance.clone().inner_mut() {
+                self.destroy(&mut instance);
+            }
         }
     }
 }
@@ -791,6 +823,7 @@ struct SubmittedCommandRecorder<B: hal::Backend> {
 }
 api_type!(CommandRecorder, {
     instance: Instance<B>,
+    is_alive: bool,
     id: Index,
     commands: Vec<BufferCommand<B>>,
 },);
@@ -882,10 +915,18 @@ impl<B: hal::Backend> CommandRecorder<B> {
         Ok(())
     }
 }
+impl<B: hal::Backend> CommandRecorderInner<B> {
+    fn destroy(&mut self, instance: &mut InstanceInner<B>) {
+        instance.command_recorders.remove(self.id);
+        self.is_alive = true;
+    }
+}
 impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
     fn drop(&mut self) {
-        if let Ok(mut instance) = self.instance.clone().inner_mut() {
-            instance.command_recorders.remove(self.id);
+        if self.is_alive {
+            if let Ok(mut instance) = self.instance.clone().inner_mut() {
+                self.destroy(&mut instance);
+            }
         }
     }
 }
@@ -925,38 +966,46 @@ api_type!(Buffer, {
     create_info: BufferDescriptor,
     last_used: u64,
 },);
+impl<B: hal::Backend> BufferInner<B> {
+    fn destroy(&mut self, instance: &mut InstanceInner<B>) {
+        instance.buffers.remove(self.id);
+
+        if instance.submitted_command_recorders_start <= self.last_used {
+            let start = instance.submitted_command_recorders_start;
+            instance.submitted_command_recorders[(self.last_used - start) as usize]
+                .buffers_to_destroy
+                .push(std::mem::take(&mut self.inner).unwrap());
+        } else {
+            let _ = unsafe {
+                instance
+                    .inner
+                    .as_mut()
+                    .unwrap()
+                    .destroy_buffer(std::mem::take(&mut self.inner).unwrap())
+            };
+        }
+    }
+}
 impl<B: hal::Backend> Drop for BufferInner<B> {
     fn drop(&mut self) {
-        if let Ok(mut instance) = self.instance.clone().inner_mut() {
-            instance.buffers.remove(self.id);
-
-            if instance.submitted_command_recorders_start <= self.last_used {
-                let start = instance.submitted_command_recorders_start;
-                instance.submitted_command_recorders[(self.last_used - start) as usize]
-                    .buffers_to_destroy
-                    .push(std::mem::take(&mut self.inner).unwrap());
-            } else {
-                let _ = unsafe {
-                    instance
-                        .inner
-                        .as_mut()
-                        .unwrap()
-                        .destroy_buffer(std::mem::take(&mut self.inner).unwrap())
-                };
+        if self.inner.is_some() {
+            if let Ok(mut instance) = self.instance.clone().inner_mut() {
+                self.destroy(&mut instance);
             }
         }
     }
 }
 
-pub struct MappedBuffer<B: hal::Backend> {
+pub struct MappedBuffer<'a, B: hal::Backend> {
     instance: Instance<B>,
     inner: *mut u8,
     len: u64,
     buffer: Index,
     has_mut: bool,
     was_used_mut: bool,
+    _p: PhantomData<&'a ()>,
 }
-impl<B: hal::Backend> MappedBuffer<B> {
+impl<B: hal::Backend> MappedBuffer<'_, B> {
     fn buffer_align(&self) -> SupaSimResult<B, u64> {
         // This code lol... maybe I need to do some major refactor this is gross
         let _instance = self.instance.inner()?;
@@ -1001,11 +1050,20 @@ api_type!(WaitHandle, {
     /// Index of the submission
     index: u64,
     id: Index,
+    is_alive: bool,
 },);
+impl<B: hal::Backend> WaitHandleInner<B> {
+    fn destroy(&mut self, instance: &mut InstanceInner<B>) {
+        instance.wait_handles.remove(self.id);
+        self.is_alive = false;
+    }
+}
 impl<B: hal::Backend> Drop for WaitHandleInner<B> {
     fn drop(&mut self) {
-        if let Ok(mut instance) = self.instance.clone().inner_mut() {
-            instance.wait_handles.remove(self.id);
+        if self.is_alive {
+            if let Ok(mut instance) = self.instance.clone().inner_mut() {
+                self.destroy(&mut instance);
+            }
         }
     }
 }
