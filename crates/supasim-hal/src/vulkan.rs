@@ -664,14 +664,18 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     linear: true,
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
                 })?;
-            let alloc_ptr = &mut allocation as *mut Allocation;
-            defer! {
-                if err.get() {
-                    self.alloc.lock().unwrap().free(std::mem::take(&mut *alloc_ptr)).unwrap();
-                }
+            defer! {}
+            if let Err(e) =
+                self.device
+                    .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+            {
+                self.alloc
+                    .lock()
+                    .unwrap()
+                    .free(std::mem::take(&mut allocation))
+                    .unwrap();
+                return Err(e.into());
             }
-            self.device
-                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
             err.set(false);
             if alloc_info.memory_type == BufferType::Upload
                 || alloc_info.memory_type == BufferType::Download
