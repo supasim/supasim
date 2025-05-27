@@ -23,8 +23,8 @@ use thunderdome::Index;
 use types::{Dag, NodeIndex, SyncOperations, Walker};
 
 use crate::{
-    BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner, Instance,
-    Kernel, MapSupasimError, SupaSimError, SupaSimResult,
+    BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner, Kernel,
+    MapSupasimError, SupaSimError, SupaSimInstance, SupaSimResult,
 };
 
 pub type CommandDag<B> = Dag<BufferCommand<B>>;
@@ -350,7 +350,7 @@ pub fn dag_to_command_streams<B: hal::Backend>(
 #[allow(clippy::type_complexity)]
 pub fn record_command_streams<B: hal::Backend>(
     streams: &StreamingCommands,
-    instance: Instance<B>,
+    instance: SupaSimInstance<B>,
     _recorder: &mut B::CommandRecorder,
 ) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
     let mut instance = instance.inner_mut()?;

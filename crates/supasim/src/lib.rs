@@ -37,14 +37,11 @@ use std::{
 };
 use thiserror::Error;
 use thunderdome::{Arena, Index};
-use types::SyncMode;
 
 pub use bytemuck;
 pub use hal;
 pub use shaders;
-pub use types::{
-    ShaderModel, ShaderReflectionInfo, ShaderResourceType, ShaderTarget, SpirvVersion,
-};
+pub use types::*;
 
 pub type UserBufferAccessClosure<'a, B> =
     Box<dyn FnOnce(&mut [MappedBuffer<'a, B>]) -> anyhow::Result<()>>;
@@ -298,7 +295,7 @@ pub struct InstanceProperties {
     pub shader_type: ShaderTarget,
     pub is_unified_memory: bool,
 }
-api_type!(Instance, {
+api_type!(SupaSimInstance, {
     /// The inner hal instance
     inner: Option<B::Instance>,
     /// The hal instance properties
@@ -324,10 +321,10 @@ api_type!(Instance, {
     /// Hal command recorders not currently in use
     hal_command_recorders: Vec<B::CommandRecorder>,
 },);
-impl<B: hal::Backend> Instance<B> {
+impl<B: hal::Backend> SupaSimInstance<B> {
     pub fn from_hal(mut hal: B::Instance) -> Self {
         let inner_properties = hal.get_properties();
-        Self::from_inner(InstanceInner {
+        Self::from_inner(SupaSimInstanceInner {
             _phantom: Default::default(),
             inner: Some(hal),
             inner_properties,
@@ -613,7 +610,7 @@ impl<B: hal::Backend> Instance<B> {
         Ok(())
     }
 }
-impl<B: hal::Backend> Drop for InstanceInner<B> {
+impl<B: hal::Backend> Drop for SupaSimInstanceInner<B> {
     fn drop(&mut self) {
         self.wait_for_submission(true, self.submitted_semaphore_count - 1)
             .unwrap();
@@ -670,7 +667,7 @@ impl<B: hal::Backend> Drop for InstanceInner<B> {
         }
     }
 }
-impl<B: hal::Backend> InstanceInner<B> {
+impl<B: hal::Backend> SupaSimInstanceInner<B> {
     /// Returns whether the operation has completed
     pub fn wait_for_submission(&mut self, force_wait: bool, id: u64) -> SupaSimResult<B, bool> {
         if id < self.submitted_command_recorders_start {
@@ -727,12 +724,12 @@ impl<B: hal::Backend> InstanceInner<B> {
     }
 }
 api_type!(Kernel, {
-    instance: Instance<B>,
+    instance: SupaSimInstance<B>,
     inner: Option<B::Kernel>,
     id: Index,
 },);
 impl<B: hal::Backend> KernelInner<B> {
-    pub fn destroy(&mut self, instance: &mut InstanceInner<B>) {
+    pub fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
         instance.kernels.remove(self.id);
         let kernel = std::mem::take(&mut self.inner).unwrap();
         let _ = unsafe { instance.inner.as_mut().unwrap().destroy_kernel(kernel) };
@@ -748,7 +745,7 @@ impl<B: hal::Backend> Drop for KernelInner<B> {
     }
 }
 api_type!(KernelCache, {
-    instance: Instance<B>,
+    instance: SupaSimInstance<B>,
     inner: Option<B::KernelCache>,
     id: Index,
 },);
@@ -769,7 +766,7 @@ impl<B: hal::Backend> KernelCache<B> {
     }
 }
 impl<B: hal::Backend> KernelCacheInner<B> {
-    fn destroy(&mut self, instance: &mut InstanceInner<B>) {
+    fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
         instance.kernel_caches.remove(self.id);
         let _ = unsafe {
             instance
@@ -822,7 +819,7 @@ struct SubmittedCommandRecorder<B: hal::Backend> {
     bind_groups: Vec<(B::BindGroup, Kernel<B>)>,
 }
 api_type!(CommandRecorder, {
-    instance: Instance<B>,
+    instance: SupaSimInstance<B>,
     is_alive: bool,
     id: Index,
     commands: Vec<BufferCommand<B>>,
@@ -916,7 +913,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
     }
 }
 impl<B: hal::Backend> CommandRecorderInner<B> {
-    fn destroy(&mut self, instance: &mut InstanceInner<B>) {
+    fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
         instance.command_recorders.remove(self.id);
         self.is_alive = true;
     }
@@ -958,7 +955,7 @@ impl BufferRange {
 }
 
 api_type!(Buffer, {
-    instance: Instance<B>,
+    instance: SupaSimInstance<B>,
     inner: Option<B::Buffer>,
     id: Index,
     _semaphores: Vec<(Index, BufferRange)>,
@@ -967,7 +964,7 @@ api_type!(Buffer, {
     last_used: u64,
 },);
 impl<B: hal::Backend> BufferInner<B> {
-    fn destroy(&mut self, instance: &mut InstanceInner<B>) {
+    fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
         instance.buffers.remove(self.id);
 
         if instance.submitted_command_recorders_start <= self.last_used {
@@ -997,7 +994,7 @@ impl<B: hal::Backend> Drop for BufferInner<B> {
 }
 
 pub struct MappedBuffer<'a, B: hal::Backend> {
-    instance: Instance<B>,
+    instance: SupaSimInstance<B>,
     inner: *mut u8,
     len: u64,
     buffer: Index,
@@ -1046,14 +1043,14 @@ impl<B: hal::Backend> MappedBuffer<'_, B> {
 }
 
 api_type!(WaitHandle, {
-    instance: Instance<B>,
+    instance: SupaSimInstance<B>,
     /// Index of the submission
     index: u64,
     id: Index,
     is_alive: bool,
 },);
 impl<B: hal::Backend> WaitHandleInner<B> {
-    fn destroy(&mut self, instance: &mut InstanceInner<B>) {
+    fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
         instance.wait_handles.remove(self.id);
         self.is_alive = false;
     }

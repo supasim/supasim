@@ -17,7 +17,7 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
 use std::fmt::Write;
-use supasim::{BufferDescriptor, BufferSlice, Instance, shaders};
+use supasim::{BufferDescriptor, BufferSlice, SupaSimInstance, shaders};
 use tracing_subscriber::{
     layer::{Context, SubscriberExt},
     util::SubscriberInitExt,
@@ -56,7 +56,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
         .with(EnterSpanPrinter)
         .with(tracing_subscriber::fmt::layer())
         .init();
-    let instance: Instance<Backend> = Instance::from_hal(hal);
+    let instance: SupaSimInstance<Backend> = SupaSimInstance::from_hal(hal);
     let upload_buffer = instance
         .create_buffer(&BufferDescriptor {
             size: 64,

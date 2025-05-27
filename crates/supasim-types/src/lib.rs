@@ -202,3 +202,16 @@ pub struct ShaderReflectionInfo {
 }
 
 pub type Dag<T> = daggy::Dag<T, ()>;
+
+#[derive(Clone, Debug)]
+pub enum BackendOptions {
+    Wgpu { backends: wgpu::Backends },
+    Vulkan,
+}
+pub struct InstanceDescriptor {
+    pub backend_options: BackendOptions,
+    pub max_host_memory: Option<u64>,
+    pub max_device_memory: Option<u64>,
+    pub force_embedded: Option<bool>,
+    pub full_debug: bool,
+}

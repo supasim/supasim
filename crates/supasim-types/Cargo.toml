@@ -29,3 +29,4 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 daggy.workspace = true
+wgpu.workspace = true
