@@ -224,7 +224,7 @@ macro_rules! api_type {
                         Err(SupaSimError::AlreadyDestroyed)
                     }
                 }
-                pub(crate) fn as_inner(&self) -> SupaSimResult<B, [<$name Inner>]<B>> {
+                pub(crate) fn take_inner(&self) -> SupaSimResult<B, [<$name Inner>]<B>> {
                     let mut a = self.0.write().map_err(|e| SupaSimError::Poison(e.to_string()))?;
                     if a.is_some() {
                         Ok(std::mem::take(&mut *a).unwrap())
@@ -342,7 +342,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         })
     }
     pub fn properties(&self) -> SupaSimResult<B, InstanceProperties> {
-        let v = self.as_inner()?.inner_properties;
+        let v = self.inner()?.inner_properties;
         Ok(InstanceProperties {
             supports_pipeline_cache: v.pipeline_cache,
             supports_indirect_dispatch: v.indirect,
