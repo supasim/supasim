@@ -59,7 +59,11 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
             ..Default::default()
         })
         .unwrap();
-    let cache = instance.create_kernel_cache(&[]).unwrap();
+    let cache = if instance.properties().unwrap().supports_pipeline_cache {
+        Some(instance.create_kernel_cache(&[]).unwrap())
+    } else {
+        None
+    };
     let global_state = shaders::GlobalState::new_from_env().unwrap();
     let mut spirv = Vec::new();
     let reflection_info = global_state
@@ -78,7 +82,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
         })
         .unwrap();
     let kernel = instance
-        .compile_kernel(&spirv, reflection_info, Some(&cache))
+        .compile_kernel(&spirv, reflection_info, cache.as_ref())
         .unwrap();
     let recorder = instance.create_recorder().unwrap();
     let buffers = [&BufferSlice {
