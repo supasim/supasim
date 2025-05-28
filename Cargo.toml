@@ -59,7 +59,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json"] }
 tracing-log = "0.2"
 
-wgpu = { version = "25.0", features = ["spirv"] }
+wgpu = { version = "25.0", default-features = false, features = [
+  "spirv",
+  "dx12",
+  "metal",
+  "vulkan",
+  "webgpu",
+  "vulkan-portability",
+] }
 
 hal = { package = "supasim-hal", path = "crates/supasim-hal" }
 macros = { package = "supasim-macros", path = "crates/supasim-macros" }
