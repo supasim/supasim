@@ -273,6 +273,7 @@ macro_rules! gpu_test {
             let _ = env_logger::builder()
                 .filter_level(log::LevelFilter::Info)
                 .try_init();
+            dev_utils::setup_trace_printer_if_env();
             info!("{} test", $backend_name);
             let instance = $instance_create;
             let instance = instance.expect(&format!("Failed to create {} instance", $backend_name));

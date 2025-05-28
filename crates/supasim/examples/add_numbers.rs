@@ -16,46 +16,11 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
-use std::fmt::Write;
 use supasim::{BufferDescriptor, BufferSlice, SupaSimInstance, shaders};
-use tracing_subscriber::{
-    layer::{Context, SubscriberExt},
-    util::SubscriberInitExt,
-};
-
-struct EnterSpanPrinter;
-
-impl<S> tracing_subscriber::Layer<S> for EnterSpanPrinter
-where
-    S: tracing::Subscriber,
-    S: for<'a> tracing_subscriber::registry::LookupSpan<'a>,
-{
-    fn on_enter(&self, id: &tracing::Id, ctx: Context<'_, S>) {
-        if let Some(span_ref) = ctx.span(id) {
-            let name = span_ref.name();
-
-            // Get all field values as a string
-            let mut fields = String::new();
-            if let Some(ext) = span_ref
-                .extensions()
-                .get::<tracing_subscriber::fmt::FormattedFields<
-                    tracing_subscriber::fmt::format::DefaultFields,
-                >>()
-            {
-                write!(fields, "{}", ext).ok();
-            }
-
-            println!("\t{} [{}]", name, fields);
-        }
-    }
-}
 
 pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
     println!("Hello, world!");
-    tracing_subscriber::registry()
-        .with(EnterSpanPrinter)
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    dev_utils::setup_trace_printer_if_env();
     let instance: SupaSimInstance<Backend> = SupaSimInstance::from_hal(hal);
     let upload_buffer = instance
         .create_buffer(&BufferDescriptor {

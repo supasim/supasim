@@ -1396,14 +1396,20 @@ dependencies = [
  "env_logger",
  "log",
  "paste",
+ "supasim-dev-utils",
  "supasim-hal",
  "supasim-macros",
  "supasim-shaders",
  "supasim-types",
  "thiserror 2.0.12",
  "thunderdome",
+]
+
+[[package]]
+name = "supasim-dev-utils"
+version = "0.0.1"
+dependencies = [
  "tracing",
- "tracing-log",
  "tracing-subscriber",
 ]
 
@@ -1418,6 +1424,7 @@ dependencies = [
  "log",
  "pollster",
  "scopeguard",
+ "supasim-dev-utils",
  "supasim-types",
  "thiserror 2.0.12",
  "tracing",

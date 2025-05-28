@@ -54,3 +54,6 @@ pollster = { version = "0.4", optional = true }
 
 # Cuda dependencies
 # cust = { version = "0.3", optional = true }
+
+[dev-dependencies]
+dev-utils.workspace = true
