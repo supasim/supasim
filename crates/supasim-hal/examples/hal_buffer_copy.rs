@@ -16,12 +16,11 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
-use supasim_hal::{BackendInstance, BufferCommand, CommandRecorder, RecorderSubmitInfo};
+use supasim_hal::{Backend, BackendInstance, BufferCommand, CommandRecorder, RecorderSubmitInfo};
 use types::BufferDescriptor;
 
-pub fn main() {
+pub fn example<B: Backend>(mut instance: B::Instance) {
     unsafe {
-        let mut instance = supasim_hal::Vulkan::create_instance(true).unwrap();
         let buffer1 = instance
             .create_buffer(&BufferDescriptor {
                 size: 16,
@@ -102,4 +101,8 @@ pub fn main() {
             .unwrap();
         assert!(data == [1, 2, 3, 4,]);
     }
+}
+pub fn main() {
+    let instance = supasim_hal::Wgpu::create_instance(true, wgpu::Backends::PRIMARY, None).unwrap();
+    example::<supasim_hal::Wgpu>(instance);
 }

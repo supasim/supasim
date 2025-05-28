@@ -150,7 +150,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
         .unwrap();
 }
 pub fn main() {
-    if false {
+    if true {
         let instance =
             hal::Wgpu::create_instance(true, hal::wgpu::wgpu::Backends::PRIMARY, None).unwrap();
         main_test::<hal::Wgpu>(instance);
