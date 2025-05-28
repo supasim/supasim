@@ -592,16 +592,18 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         let mut instance = _instance.inner_mut()?;
         for (i, b) in buffer_datas.iter().enumerate() {
             unsafe {
-                instance
-                    .inner
-                    .as_mut()
-                    .unwrap()
-                    .write_buffer(
-                        buffers[i].buffer.inner()?.inner.as_ref().unwrap(),
-                        buffers[i].start,
-                        b,
-                    )
-                    .map_supasim()?;
+                if buffers[i].needs_mut {
+                    instance
+                        .inner
+                        .as_mut()
+                        .unwrap()
+                        .write_buffer(
+                            buffers[i].buffer.inner()?.inner.as_ref().unwrap(),
+                            buffers[i].start,
+                            b,
+                        )
+                        .map_supasim()?;
+                }
             }
         }
         for b in buffers {

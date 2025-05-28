@@ -145,7 +145,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     ) -> Result<(), B::Error>;
 
     /// # Safety
-    /// * All command recorders using this event must've been cleared
+    /// * This function is marked unsafe for semver reasons
     unsafe fn create_semaphore(&mut self) -> Result<B::Semaphore, B::Error>;
     /// # Safety
     /// * All command recorders using this semaphore must've been cleared
@@ -261,7 +261,7 @@ pub enum BufferCommand<'a, B: Backend> {
         before: SyncOperations,
         after: SyncOperations,
     },
-    /// Only for vulkan like synchronization. Will hitch a ride with the previous PipelineBarrier or WaitEvent
+    /// Only for vulkan like synchronization. Will hitch a ride with the previous PipelineBarrier
     MemoryBarrier { resource: GpuResource<'a, B> },
     UpdateBindGroup {
         bg: &'a B::BindGroup,

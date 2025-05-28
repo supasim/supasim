@@ -1217,7 +1217,7 @@ impl VulkanCommandRecorder {
             SyncOperations::Both => vk::PipelineStageFlags2KHR::ALL_COMMANDS,
         }
     }
-    /// First command must be a pipeline barrier or wait event command. Following commands must be memory barriers
+    /// First command must be a pipeline barrier. Following commands must be memory barriers
     fn sync_command<'a>(
         &mut self,
         instance: &<Vulkan as Backend>::Instance,

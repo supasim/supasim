@@ -218,6 +218,7 @@ pub fn dag_to_command_streams<B: hal::Backend>(
         layers.pop();
         let nodes = dag.raw_nodes();
         for (i, layer) in layers.into_iter().enumerate() {
+            // No synchronization needed for the first layer
             if vulkan_style && i != 0 {
                 stream.commands.push(HalCommandBuilder::PipelineBarrier {
                     before: SyncOperations::Both,
