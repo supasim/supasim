@@ -65,7 +65,6 @@ wgpu = { version = "25.0", default-features = false, features = [
   "metal",
   "vulkan",
   "webgpu",
-  "vulkan-portability",
 ] }
 
 hal = { package = "supasim-hal", path = "crates/supasim-hal" }

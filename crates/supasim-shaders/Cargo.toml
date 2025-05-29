@@ -35,8 +35,8 @@ spirv-cross = ["spirv-cross-sys"]
 
 [dependencies]
 naga = { version = "25.0", default-features = false, features = [
-    "spv-in",
-    "wgsl-out",
+  "spv-in",
+  "wgsl-out",
 ], optional = true }
 anyhow.workspace = true
 slang = { git = "https://github.com/supasim/slang-rs.git" }
