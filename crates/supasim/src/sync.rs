@@ -219,6 +219,8 @@ pub fn dag_to_command_streams<B: hal::Backend>(
         let nodes = dag.raw_nodes();
         for (i, layer) in layers.into_iter().enumerate() {
             // No synchronization needed for the first layer
+            // This following code is bad. More barriers than needed are used, and the first layer isn't actually skipped.
+            // I suspect this is because the first layer has a kind of "root" dummy node
             if vulkan_style && i != 0 {
                 stream.commands.push(HalCommandBuilder::PipelineBarrier {
                     before: SyncOperations::Both,
@@ -352,7 +354,7 @@ pub fn dag_to_command_streams<B: hal::Backend>(
 pub fn record_command_streams<B: hal::Backend>(
     streams: &StreamingCommands,
     instance: SupaSimInstance<B>,
-    _recorder: &mut B::CommandRecorder,
+    recorder: &mut B::CommandRecorder,
 ) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
     let mut instance = instance.inner_mut()?;
     let mut bindgroups = Vec::new();
@@ -401,17 +403,6 @@ pub fn record_command_streams<B: hal::Backend>(
         bindgroups.push((bg, _k.clone()));
     }
     for stream in &streams.streams {
-        let mut cr = match instance.hal_command_recorders.pop() {
-            Some(a) => a,
-            None => unsafe {
-                instance
-                    .inner
-                    .as_mut()
-                    .unwrap()
-                    .create_recorder()
-                    .map_supasim()?
-            },
-        };
         let mut buffer_refs = Vec::new();
         let mut kernel_refs = Vec::new();
         for cmd in &stream.commands {
@@ -581,7 +572,8 @@ pub fn record_command_streams<B: hal::Backend>(
             }
         }
         unsafe {
-            cr.record_commands(instance.inner.as_mut().unwrap(), &mut hal_commands)
+            recorder
+                .record_commands(instance.inner.as_mut().unwrap(), &mut hal_commands)
                 .map_supasim()?
         };
     }

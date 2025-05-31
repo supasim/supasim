@@ -1372,6 +1372,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
             }
         }
         self.end(instance, cb)?;
+        println!("Commands recorded: {:#?}", commands);
         Ok(())
     }
     unsafe fn clear(
