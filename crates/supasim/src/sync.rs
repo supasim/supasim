@@ -201,6 +201,10 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                 already_in[i] = true;
             }
         }
+        // This next code is awful. But the idea is that we separate things into "layers" based on
+        // the highest parent layer plus 1. This way it always comes after each parent. So we loop
+        // over all newly exposed children of the previous layer, and if they have no incomplete
+        // parents, it can be added to the current layer.
         while !layers.last().unwrap().is_empty() {
             let mut next_layer = Vec::new();
             let last_layer = layers.last().unwrap();
@@ -208,8 +212,17 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                 let mut walker = dag.children(NodeIndex::new(node));
                 while let Some((_, child)) = walker.walk_next(dag) {
                     if !already_in[child.index()] {
-                        next_layer.push(child.index());
-                        already_in[child.index()] = true;
+                        let mut walker2 = dag.parents(child);
+                        let mut can_complete = true;
+                        while let Some((_, parent)) = walker2.walk_next(dag) {
+                            if !already_in[parent.index()] {
+                                can_complete = false;
+                            }
+                        }
+                        if can_complete {
+                            next_layer.push(child.index());
+                            already_in[child.index()] = true;
+                        }
                     }
                 }
             }

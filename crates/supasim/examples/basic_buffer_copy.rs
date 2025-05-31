@@ -53,8 +53,6 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
     instance
         .access_buffers(
             Box::new(|buffers| {
-                println!("{:?}", buffers[0].readable::<u32>().unwrap());
-                println!("{:?}", buffers[1].readable::<u32>().unwrap());
                 buffers[0]
                     .writeable::<u32>()
                     .unwrap()
@@ -68,16 +66,6 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
         &BufferSlice::entire_buffer(&buffer1, false).unwrap(),
         &BufferSlice::entire_buffer(&buffer3, false).unwrap(),
     ];
-    instance
-        .access_buffers(
-            Box::new(|buffers| {
-                println!("{:?}", buffers[0].readable::<u32>().unwrap());
-                println!("{:?}", buffers[1].readable::<u32>().unwrap());
-                Ok(())
-            }),
-            &slices[..],
-        )
-        .unwrap();
     let recorder = instance.create_recorder().unwrap();
     recorder
         .copy_buffer(buffer1.clone(), buffer2.clone(), 0, 0, 16)
@@ -92,6 +80,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
             Box::new(|buffers| {
                 println!("{:?}", buffers[0].readable::<u32>().unwrap());
                 println!("{:?}", buffers[1].readable::<u32>().unwrap());
+                assert_eq!(buffers[1].readable::<u32>().unwrap(), [1, 2, 3, 4]);
                 Ok(())
             }),
             &slices[..],
@@ -100,7 +89,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
 }
 
 pub fn main() {
-    if false {
+    if true {
         let instance =
             hal::Wgpu::create_instance(true, hal::wgpu::wgpu::Backends::PRIMARY, None).unwrap();
         main_test::<hal::Wgpu>(instance);

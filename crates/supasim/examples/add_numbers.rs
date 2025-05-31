@@ -104,15 +104,6 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
             &buffers,
         )
         .unwrap();
-    instance
-        .access_buffers(
-            Box::new(|buffers| {
-                println!("Buffer 0: {:?}", buffers[0].readable::<u32>());
-                Ok(())
-            }),
-            &buffers,
-        )
-        .unwrap();
     recorder
         .copy_buffer(upload_buffer.clone(), buffer1.clone(), 0, 0, 16)
         .unwrap();
@@ -141,12 +132,18 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
         &BufferSlice::entire_buffer(&download_buffer, false).unwrap(),
         &BufferSlice::entire_buffer(&upload_buffer, false).unwrap(),
     ];
+    // Command summary:
+    // * Copy data from upload buffer into 3 used buffers
+    // * Buffer3 gets the result of adding from 1 and 2
+    // * Buffer3 gets copied into download buffer
+    // * It should have value [8,10,12,14]
     instance
         .access_buffers(
             Box::new(|buffers| {
-                for buffer in buffers {
+                for buffer in buffers.iter() {
                     println!("{:?}", buffer.readable::<u32>()?);
                 }
+                assert_eq!(buffers[0].readable::<u32>()?, [8, 10, 12, 14]);
                 Ok(())
             }),
             &buffers,
@@ -154,7 +151,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
         .unwrap();
 }
 pub fn main() {
-    if true {
+    if false {
         let instance =
             hal::Wgpu::create_instance(true, hal::wgpu::wgpu::Backends::PRIMARY, None).unwrap();
         main_test::<hal::Wgpu>(instance);
