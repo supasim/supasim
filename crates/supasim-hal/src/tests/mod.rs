@@ -24,8 +24,8 @@ use crate::{
     Backend, BackendInstance, BufferCommand, CommandRecorder, GpuResource, RecorderSubmitInfo,
     Semaphore,
 };
+use kernels::KernelCompileOptions;
 use log::info;
-use shaders::ShaderCompileOptions;
 use types::{HalBufferDescriptor, SyncOperations};
 
 unsafe fn create_storage_buf<B: Backend>(
@@ -66,41 +66,41 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             None
         };
         let mut fun_semaphore = instance.create_semaphore()?;
-        let shader_compiler = shaders::GlobalState::new_from_env().unwrap();
+        let kernel_compiler = kernels::GlobalState::new_from_env().unwrap();
         let mut add_code = Vec::new();
         let mut double_code = Vec::new();
         info!("Compiling kernels");
-        let add_reflection = shader_compiler
-            .compile_shader(ShaderCompileOptions {
-                target: instance.get_properties().shader_type,
-                source: shaders::ShaderSource::Memory(include_bytes!(
+        let add_reflection = kernel_compiler
+            .compile_kernel(KernelCompileOptions {
+                target: instance.get_properties().kernel_lang,
+                source: kernels::KernelSource::Memory(include_bytes!(
                     "../../../../kernels/test_add.slang"
                 )),
-                dest: shaders::ShaderDest::Memory(&mut add_code),
+                dest: kernels::KernelDest::Memory(&mut add_code),
                 entry: "add",
                 include: None,
-                fp_mode: shaders::ShaderFpMode::Precise,
-                opt_level: shaders::OptimizationLevel::Maximal,
-                stability: shaders::StabilityGuarantee::ExtraValidation,
+                fp_mode: kernels::KernelFpMode::Precise,
+                opt_level: kernels::OptimizationLevel::Maximal,
+                stability: kernels::StabilityGuarantee::ExtraValidation,
                 minify: false,
             })
             .unwrap();
-        let double_reflection = shader_compiler
-            .compile_shader(ShaderCompileOptions {
-                target: instance.get_properties().shader_type,
-                source: shaders::ShaderSource::Memory(include_bytes!(
+        let double_reflection = kernel_compiler
+            .compile_kernel(KernelCompileOptions {
+                target: instance.get_properties().kernel_lang,
+                source: kernels::KernelSource::Memory(include_bytes!(
                     "../../../../kernels/test_double.slang"
                 )),
-                dest: shaders::ShaderDest::Memory(&mut double_code),
+                dest: kernels::KernelDest::Memory(&mut double_code),
                 entry: "double",
                 include: None,
-                fp_mode: shaders::ShaderFpMode::Precise,
-                opt_level: shaders::OptimizationLevel::Maximal,
-                stability: shaders::StabilityGuarantee::ExtraValidation,
+                fp_mode: kernels::KernelFpMode::Precise,
+                opt_level: kernels::OptimizationLevel::Maximal,
+                stability: kernels::StabilityGuarantee::ExtraValidation,
                 minify: false,
             })
             .unwrap();
-        drop(shader_compiler);
+        drop(kernel_compiler);
         let mut kernel = instance.compile_kernel(&add_code, &add_reflection, cache.as_mut())?;
         let mut kernel2 =
             instance.compile_kernel(&double_code, &double_reflection, cache.as_mut())?;

@@ -48,13 +48,13 @@ pub trait Backend: Sized + std::fmt::Debug + Clone + 'static {
 pub trait BackendInstance<B: Backend<Instance = Self>> {
     fn get_properties(&mut self) -> HalInstanceProperties;
     /// # Safety
-    /// * The shader code must be valid
+    /// * The kernel code must be valid
     /// * The reflection info must match exactly with the shader
     /// * The cache must be valid
     unsafe fn compile_kernel(
         &mut self,
         binary: &[u8],
-        reflection: &types::ShaderReflectionInfo,
+        reflection: &types::KernelReflectionInfo,
         cache: Option<&mut B::KernelCache>,
     ) -> Result<B::Kernel, B::Error>;
     /// # Safety

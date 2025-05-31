@@ -17,7 +17,7 @@
 #   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # END LICENSE
 [package]
-name = "supasim-shaders"
+name = "supasim-kernels"
 version.workspace = true
 authors.workspace = true
 repository.workspace = true
@@ -56,10 +56,9 @@ hassle-rs = { version = "0.11", git = "https://github.com/Traverse-Research/hass
 types.workspace = true
 
 [[example]]
-name = "simple-shaders"
-path = "examples/simple-shaders.rs"
+name = "simple-kernels"
+path = "examples/simple-kernels.rs"
 required-features = ["msl-stable-out", "wgsl-out", "dxil-out", "opt-valid"]
-# Run command: cargo run --example simple-shaders --features="msl-stable-out wgsl-out dxil-out opt-valid"
 
 [dev-dependencies]
 serde_json.workspace = true

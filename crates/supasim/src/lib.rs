@@ -43,10 +43,10 @@ use thunderdome::{Arena, Index};
 
 pub use bytemuck;
 pub use hal;
-pub use shaders;
+pub use kernels;
 pub use types::{
-    HalBufferType, MetalVersion, ShaderModel, ShaderReflectionInfo, ShaderResourceType,
-    ShaderTarget, SpirvVersion,
+    HalBufferType, KernelReflectionInfo, KernelResourceType, KernelTarget, MetalVersion,
+    ShaderModel, SpirvVersion,
 };
 
 pub type UserBufferAccessClosure<'a, B> =
@@ -297,7 +297,7 @@ pub type SupaSimResult<B, T> = Result<T, SupaSimError<B>>;
 #[derive(Clone, Copy, Debug)]
 pub struct InstanceProperties {
     pub supports_pipeline_cache: bool,
-    pub shader_type: ShaderTarget,
+    pub kernel_lang: KernelTarget,
     pub is_unified_memory: bool,
 }
 api_type!(SupaSimInstance, {
@@ -325,6 +325,8 @@ api_type!(SupaSimInstance, {
     submitted_command_recorders_start: u64,
     /// Hal command recorders not currently in use
     hal_command_recorders: Vec<B::CommandRecorder>,
+    /// User accessible kernel compiler state
+    kernel_compiler: kernels::GlobalState,
 },);
 impl<B: hal::Backend> SupaSimInstance<B> {
     pub fn from_hal(mut hal: B::Instance) -> Self {
@@ -344,20 +346,21 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             submitted_semaphore_count: 1,
             submitted_command_recorders_start: 1,
             hal_command_recorders: Vec::new(),
+            kernel_compiler: kernels::GlobalState::new_from_env().unwrap(),
         })
     }
     pub fn properties(&self) -> SupaSimResult<B, InstanceProperties> {
         let v = self.inner()?.inner_properties;
         Ok(InstanceProperties {
             supports_pipeline_cache: v.pipeline_cache,
-            shader_type: v.shader_type,
+            kernel_lang: v.kernel_lang,
             is_unified_memory: v.is_unified_memory,
         })
     }
     pub fn compile_kernel(
         &self,
         binary: &[u8],
-        reflection: ShaderReflectionInfo,
+        reflection: KernelReflectionInfo,
         cache: Option<&KernelCache<B>>,
     ) -> SupaSimResult<B, Kernel<B>> {
         let mut cache_lock = if let Some(cache) = cache {

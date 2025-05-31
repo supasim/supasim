@@ -51,7 +51,7 @@ Cuda doesn't use anything like bind groups or descriptor sets. You specify the r
 Metal dispatches are similar to cuda.
 ### Vulkan
 * `VK_KHR_push_descriptor` - only in vk1.4, push all descriptors at dispatch time
-* `VK_KHR_buffer_device_address` - in vk1.2, push buffers specifically, requires modifications to shader code
+* `VK_KHR_buffer_device_address` - in vk1.2, push buffers specifically, requires modifications to kernel code
 * Bindless - may be equivalent to one of the above, this is almost a buzzword.
 
 

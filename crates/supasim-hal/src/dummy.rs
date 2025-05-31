@@ -44,7 +44,7 @@ impl BackendInstance<Dummy> for DummyResource {
         HalInstanceProperties {
             sync_mode: SyncMode::Automatic,
             pipeline_cache: true,
-            shader_type: ShaderTarget::Spirv {
+            kernel_lang: KernelTarget::Spirv {
                 version: SpirvVersion::V1_0,
             },
             easily_update_bind_groups: true,
@@ -56,7 +56,7 @@ impl BackendInstance<Dummy> for DummyResource {
     unsafe fn compile_kernel(
         &mut self,
         binary: &[u8],
-        reflection: &types::ShaderReflectionInfo,
+        reflection: &types::KernelReflectionInfo,
         cache: Option<&mut <Dummy as Backend>::KernelCache>,
     ) -> Result<<Dummy as Backend>::Kernel, <Dummy as Backend>::Error> {
         Ok(DummyResource)

@@ -41,7 +41,7 @@ thunderdome.workspace = true
 paste.workspace = true
 
 macros.workspace = true
-shaders.workspace = true
+kernels.workspace = true
 types.workspace = true
 hal = { workspace = true, default-features = false }
 

@@ -175,10 +175,10 @@ jobs:
           #export SUPASIM_SKIP_BACKEND_WGPU_DX12=1
         #fi
 
-        # Skip shader targets
-        export SUPASIM_SKIP_SHADERS_PTX=1
+        # Skip kernel targets
+        export SUPASIM_SKIP_KERNELS_PTX=1
         if [ ${{ matrix.os == 'macos-latest' }} ]; then
-          export SUPASIM_SKIP_SHADERS_DXIL=1
+          export SUPASIM_SKIP_KERNELS_DXIL=1
         fi
 
         echo -e "Running all tests\n"

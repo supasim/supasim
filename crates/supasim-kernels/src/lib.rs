@@ -30,8 +30,8 @@ use slang::Downcast;
 use std::ptr::null_mut;
 use std::{ffi::CString, io::Write, path::Path, str::FromStr};
 use tempfile::tempdir;
-use types::ShaderReflectionInfo;
-pub use types::{ShaderModel, ShaderTarget, SpirvVersion};
+use types::KernelReflectionInfo;
+pub use types::{KernelTarget, ShaderModel, SpirvVersion};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StabilityGuarantee {
@@ -40,16 +40,16 @@ pub enum StabilityGuarantee {
     Stable,
     Experimental,
 }
-pub enum ShaderSource<'a> {
+pub enum KernelSource<'a> {
     File(&'a Path),
     Memory(&'a [u8]),
 }
-pub enum ShaderDest<'a> {
+pub enum KernelDest<'a> {
     File(&'a Path),
     Memory(&'a mut Vec<u8>),
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ShaderFpMode {
+pub enum KernelFpMode {
     Fast,
     #[default]
     Precise,
@@ -61,18 +61,18 @@ pub enum OptimizationLevel {
     Standard,
     Maximal,
 }
-pub struct ShaderCompileOptions<'a> {
-    pub target: ShaderTarget,
-    pub source: ShaderSource<'a>,
-    pub dest: ShaderDest<'a>,
+pub struct KernelCompileOptions<'a> {
+    pub target: KernelTarget,
+    pub source: KernelSource<'a>,
+    pub dest: KernelDest<'a>,
     pub entry: &'a str,
     pub include: Option<&'a str>,
-    pub fp_mode: ShaderFpMode,
+    pub fp_mode: KernelFpMode,
     pub opt_level: OptimizationLevel,
     pub stability: StabilityGuarantee,
     pub minify: bool,
 }
-pub type ShaderCompileError = anyhow::Error;
+pub type KernelCompileError = anyhow::Error;
 pub struct GlobalState {
     slang_session: slang::GlobalSession,
 }
@@ -160,7 +160,7 @@ impl GlobalState {
         }
     }
     #[cfg(feature = "spirv-cross")]
-    fn transpile_spirv(module: &[u32], target: ShaderTarget) -> Result<Vec<u8>> {
+    fn transpile_spirv(module: &[u32], target: KernelTarget) -> Result<Vec<u8>> {
         use std::ptr::null;
 
         use spirv_cross_sys as spvc;
@@ -173,11 +173,11 @@ impl GlobalState {
             spvc::spvc_context_create_compiler(
                 context,
                 match target {
-                    ShaderTarget::Glsl => spvc::spvc_backend_SPVC_BACKEND_GLSL,
-                    ShaderTarget::Msl { .. } | ShaderTarget::MetalLib { .. } => {
+                    KernelTarget::Glsl => spvc::spvc_backend_SPVC_BACKEND_GLSL,
+                    KernelTarget::Msl { .. } | KernelTarget::MetalLib { .. } => {
                         spvc::spvc_backend_SPVC_BACKEND_MSL
                     }
-                    ShaderTarget::Hlsl => spvc::spvc_backend_SPVC_BACKEND_HLSL,
+                    KernelTarget::Hlsl => spvc::spvc_backend_SPVC_BACKEND_HLSL,
                     _ => panic!("Transpile spirv called on invalid target"),
                 },
                 ir,
@@ -241,18 +241,18 @@ impl GlobalState {
             slang_session: global_session,
         })
     }
-    pub fn compile_shader(&self, options: ShaderCompileOptions) -> Result<ShaderReflectionInfo> {
+    pub fn compile_kernel(&self, options: KernelCompileOptions) -> Result<KernelReflectionInfo> {
         let extra_optim = options.opt_level == OptimizationLevel::Maximal || options.minify;
         let extra_valid = options.stability == StabilityGuarantee::ExtraValidation;
         let (target, needs_spirv_transpile) = match options.target {
-            ShaderTarget::Ptx => (slang::CompileTarget::Ptx, false),
-            ShaderTarget::CudaCpp => (slang::CompileTarget::CudaSource, false),
-            ShaderTarget::Msl { .. } | ShaderTarget::MetalLib { .. } => {
+            KernelTarget::Ptx => (slang::CompileTarget::Ptx, false),
+            KernelTarget::CudaCpp => (slang::CompileTarget::CudaSource, false),
+            KernelTarget::Msl { .. } | KernelTarget::MetalLib { .. } => {
                 if extra_optim || options.stability != StabilityGuarantee::Experimental {
                     (slang::CompileTarget::Spirv, true)
                 } else {
                     (
-                        if let ShaderTarget::MetalLib { .. } = options.target {
+                        if let KernelTarget::MetalLib { .. } = options.target {
                             slang::CompileTarget::MetalLib
                         } else {
                             slang::CompileTarget::Metal
@@ -261,45 +261,41 @@ impl GlobalState {
                     )
                 }
             }
-            ShaderTarget::Spirv { .. } => (slang::CompileTarget::Spirv, false),
-            ShaderTarget::Wgsl => (slang::CompileTarget::Spirv, true),
-            ShaderTarget::Glsl => {
+            KernelTarget::Spirv { .. } => (slang::CompileTarget::Spirv, false),
+            KernelTarget::Wgsl => (slang::CompileTarget::Spirv, true),
+            KernelTarget::Glsl => {
                 if extra_optim || extra_valid {
                     (slang::CompileTarget::Spirv, true)
                 } else {
                     (slang::CompileTarget::Glsl, false)
                 }
             }
-            ShaderTarget::Hlsl => (slang::CompileTarget::Hlsl, false),
-            ShaderTarget::Dxil { .. } => (slang::CompileTarget::Hlsl, false),
+            KernelTarget::Hlsl => (slang::CompileTarget::Hlsl, false),
+            KernelTarget::Dxil { .. } => (slang::CompileTarget::Hlsl, false),
         };
         if options.target.metal_version().is_some() && needs_spirv_transpile {
             #[cfg(not(feature = "msl-stable-out"))]
             {
                 return Err(anyhow!(
-                    "Shader compiler was not compiled with MSL or MetalLib support"
+                    "Kernel compiler was not built with MSL or MetalLib support"
                 ));
             }
-        } else if options.target == ShaderTarget::Wgsl {
+        } else if options.target == KernelTarget::Wgsl {
             #[cfg(not(feature = "wgsl-out"))]
             {
-                return Err(anyhow!(
-                    "Shader compiler was not compiled with WGSL support"
-                ));
+                return Err(anyhow!("Kernel compiler was not built with WGSL support"));
             }
-        } else if matches!(options.target, ShaderTarget::Dxil { .. }) {
+        } else if matches!(options.target, KernelTarget::Dxil { .. }) {
             #[cfg(not(feature = "dxil-out"))]
             {
-                return Err(anyhow!(
-                    "Shader compiler was not compiled with DXIL support"
-                ));
+                return Err(anyhow!("Kernel compiler was not built with DXIL support"));
             }
         }
         if needs_spirv_transpile && (extra_optim || extra_valid) {
             #[cfg(not(feature = "opt-valid"))]
             {
                 return Err(anyhow!(
-                    "Shader compiler was not compiled with support for extra validation or optimization"
+                    "Kernel compiler was not built with support for extra validation or optimization"
                 ));
             }
         }
@@ -307,22 +303,22 @@ impl GlobalState {
             #[cfg(not(feature = "spirv-cross"))]
             {
                 return Err(anyhow!(
-                    "Shader compiler was not compiled with advanced cross compilation support"
+                    "Kernel compiler was not built with advanced cross compilation support"
                 ));
             }
         }
-        if matches!(options.target, ShaderTarget::MetalLib { .. }) {
+        if matches!(options.target, KernelTarget::MetalLib { .. }) {
             #[cfg(not(target_os = "macos"))]
             return Err(anyhow!("MetalLib compilation is only supported on macOS"));
         }
         let mut _tempdir = None;
         let (source_file, _source, search_dir) = match options.source {
-            ShaderSource::File(f) => (
+            KernelSource::File(f) => (
                 f.to_owned(),
                 std::fs::File::open(f)?,
                 CString::from_str(f.parent().unwrap().to_str().unwrap())?,
             ),
-            ShaderSource::Memory(m) => {
+            KernelSource::Memory(m) => {
                 let tempdir = tempdir()?;
                 let mut path = tempdir.path().to_owned();
                 _tempdir = Some(tempdir);
@@ -358,7 +354,7 @@ impl GlobalState {
         if let Some(include) = options.include {
             opt = opt.include(include);
         }
-        if let ShaderTarget::Spirv { version } = options.target {
+        if let KernelTarget::Spirv { version } = options.target {
             profile = self.slang_session.find_profile(match version {
                 SpirvVersion::V1_0 => "spirv_1_0",
                 SpirvVersion::V1_1 => "spirv_1_1",
@@ -375,7 +371,7 @@ impl GlobalState {
         } else if target == slang::CompileTarget::Spirv {
             profile = self.slang_session.find_profile("spirv_1_0");
         } else if target == slang::CompileTarget::Dxil {
-            if let ShaderTarget::Dxil { shader_model } = options.target {
+            if let KernelTarget::Dxil { shader_model } = options.target {
                 profile = self.slang_session.find_profile(shader_model.to_str());
             } else {
                 unreachable!();
@@ -461,7 +457,7 @@ impl GlobalState {
 
         #[allow(unused_variables)]
         let spirv_version = match options.target {
-            ShaderTarget::Spirv { version } => version,
+            KernelTarget::Spirv { version } => version,
             _ => SpirvVersion::V1_0,
         };
 
@@ -483,13 +479,13 @@ impl GlobalState {
                 let vec = bytecode.as_slice().to_owned();
                 let res = Self::transpile_spirv(
                     bytemuck::cast_slice(&vec),
-                    ShaderTarget::Msl { version },
+                    KernelTarget::Msl { version },
                 )?;
                 _other_blob = res;
                 data = &_other_blob;
             }
             #[cfg(target_os = "macos")]
-            if let ShaderTarget::MetalLib { .. } = options.target {
+            if let KernelTarget::MetalLib { .. } = options.target {
                 if _tempdir.is_none() {
                     _tempdir = Some(tempdir()?);
                 }
@@ -499,7 +495,7 @@ impl GlobalState {
             }
         }
         #[cfg(feature = "wgsl-out")]
-        if options.target == ShaderTarget::Wgsl && needs_spirv_transpile {
+        if options.target == KernelTarget::Wgsl && needs_spirv_transpile {
             let module = naga::front::spv::parse_u8_slice(
                 bytecode.as_slice(),
                 &naga::front::spv::Options {
@@ -524,14 +520,14 @@ impl GlobalState {
         }
 
         #[cfg(feature = "spirv-cross")]
-        if options.target == ShaderTarget::Glsl && needs_spirv_transpile {
+        if options.target == KernelTarget::Glsl && needs_spirv_transpile {
             let vec = bytecode.as_slice().to_owned();
-            let res = Self::transpile_spirv(bytemuck::cast_slice(&vec), ShaderTarget::Glsl)?;
+            let res = Self::transpile_spirv(bytemuck::cast_slice(&vec), KernelTarget::Glsl)?;
             _other_blob = res;
             data = &_other_blob;
         }
         #[cfg(feature = "dxil-out")]
-        if let ShaderTarget::Dxil { shader_model } = options.target {
+        if let KernelTarget::Dxil { shader_model } = options.target {
             let dxil = hassle_rs::compile_hlsl(
                 "intermediate.hlsl",
                 unsafe { std::str::from_utf8_unchecked(data) },
@@ -546,14 +542,14 @@ impl GlobalState {
         }
 
         match options.dest {
-            ShaderDest::File(out) => {
+            KernelDest::File(out) => {
                 std::fs::write(out, data)?;
             }
-            ShaderDest::Memory(out) => {
+            KernelDest::Memory(out) => {
                 out.write_all(data)?;
             }
         }
-        Ok(ShaderReflectionInfo {
+        Ok(KernelReflectionInfo {
             workgroup_size,
             resources: Vec::new(),
             push_constant_len: 0,

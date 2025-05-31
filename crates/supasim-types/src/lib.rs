@@ -104,7 +104,7 @@ impl MetalVersion {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ShaderTarget {
+pub enum KernelTarget {
     CudaCpp,
     Ptx,
     Wgsl,
@@ -115,9 +115,9 @@ pub enum ShaderTarget {
     Msl { version: MetalVersion },
     MetalLib { version: MetalVersion },
 }
-impl ShaderTarget {
+impl KernelTarget {
     pub fn file_extension(&self) -> &str {
-        use ShaderTarget::*;
+        use KernelTarget::*;
         match self {
             CudaCpp => "cu",
             Ptx => "ptx",
@@ -155,8 +155,8 @@ pub struct HalInstanceProperties {
     pub sync_mode: SyncMode,
     /// Whether the backend supports pipeline caches
     pub pipeline_cache: bool,
-    /// What shader langauge the backend takes
-    pub shader_type: ShaderTarget,
+    /// What kernel langauge the backend takes
+    pub kernel_lang: KernelTarget,
     /// Whether the backend supports bind groups that are updated while commands are already recorded. This makes bind groups far cheaper to use
     pub easily_update_bind_groups: bool,
     /// Whether the backend supports CPU->GPU communication using semaphore signalling.
@@ -185,16 +185,16 @@ pub unsafe fn to_static_lifetime_mut<T>(r: &mut T) -> &'static mut T {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub enum ShaderResourceType {
+pub enum KernelResourceType {
     #[default]
     Unknown,
     Buffer,
     UniformBuffer,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct ShaderReflectionInfo {
+pub struct KernelReflectionInfo {
     pub workgroup_size: [u32; 3],
-    pub resources: Vec<ShaderResourceType>,
+    pub resources: Vec<KernelResourceType>,
     pub push_constant_len: u32,
 }
 

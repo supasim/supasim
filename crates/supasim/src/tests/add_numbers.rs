@@ -70,22 +70,22 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
     } else {
         None
     };
-    let global_state = shaders::GlobalState::new_from_env().unwrap();
+    let global_state = kernels::GlobalState::new_from_env().unwrap();
     let mut spirv = Vec::new();
     let reflection_info = global_state
-        .compile_shader(shaders::ShaderCompileOptions {
-            target: types::ShaderTarget::Spirv {
-                version: shaders::SpirvVersion::V1_2,
+        .compile_kernel(kernels::KernelCompileOptions {
+            target: types::KernelTarget::Spirv {
+                version: kernels::SpirvVersion::V1_2,
             },
-            source: shaders::ShaderSource::Memory(include_bytes!(
+            source: kernels::KernelSource::Memory(include_bytes!(
                 "../../../../kernels/test_add.slang"
             )),
-            dest: shaders::ShaderDest::Memory(&mut spirv),
+            dest: kernels::KernelDest::Memory(&mut spirv),
             entry: "add",
             include: None,
-            fp_mode: shaders::ShaderFpMode::Precise,
-            opt_level: shaders::OptimizationLevel::Maximal,
-            stability: shaders::StabilityGuarantee::ExtraValidation,
+            fp_mode: kernels::KernelFpMode::Precise,
+            opt_level: kernels::OptimizationLevel::Maximal,
+            stability: kernels::StabilityGuarantee::ExtraValidation,
             minify: false,
         })
         .unwrap();

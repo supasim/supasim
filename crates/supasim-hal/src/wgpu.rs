@@ -116,7 +116,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                 .adapter
                 .features()
                 .contains(wgpu::Features::PIPELINE_CACHE),
-            shader_type: ShaderTarget::Spirv {
+            kernel_lang: KernelTarget::Spirv {
                 version: SpirvVersion::V1_0,
             },
             easily_update_bind_groups: false,
@@ -130,10 +130,10 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     unsafe fn compile_kernel(
         &mut self,
         binary: &[u8],
-        reflection: &types::ShaderReflectionInfo,
+        reflection: &types::KernelReflectionInfo,
         cache: Option<&mut <Wgpu as Backend>::KernelCache>,
     ) -> Result<<Wgpu as Backend>::Kernel, <Wgpu as Backend>::Error> {
-        let shader = self
+        let kernel = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: None,
@@ -159,14 +159,14 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: None,
                 layout: None,
-                module: &shader,
+                module: &kernel,
                 entry_point: Some("main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: cache.map(|a| &a.inner),
             });
         let bgl = pipeline.get_bind_group_layout(0);
         Ok(WgpuKernel {
-            shader,
+            kernel,
             pipeline,
             bgl,
         })
@@ -480,7 +480,7 @@ impl WgpuInstance {
 }
 #[derive(Debug)]
 pub struct WgpuKernel {
-    shader: wgpu::ShaderModule,
+    kernel: wgpu::ShaderModule,
     pipeline: wgpu::ComputePipeline,
     bgl: wgpu::BindGroupLayout,
 }
@@ -526,7 +526,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                     );
                 }
                 BufferCommand::DispatchKernel {
-                    kernel: shader,
+                    kernel,
                     bind_group,
                     push_constants,
                     workgroup_dims,
@@ -535,7 +535,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                         label: None,
                         timestamp_writes: None,
                     });
-                    pass.set_pipeline(&shader.pipeline);
+                    pass.set_pipeline(&kernel.pipeline);
                     pass.set_bind_group(0, &bind_group.inner, &[]);
                     pass.dispatch_workgroups(
                         workgroup_dims[0],

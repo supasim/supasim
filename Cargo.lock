@@ -1319,8 +1319,8 @@ dependencies = [
  "paste",
  "supasim-dev-utils",
  "supasim-hal",
+ "supasim-kernels",
  "supasim-macros",
- "supasim-shaders",
  "supasim-types",
  "thiserror 2.0.12",
  "thunderdome",
@@ -1347,11 +1347,29 @@ dependencies = [
  "pollster",
  "scopeguard",
  "supasim-dev-utils",
- "supasim-shaders",
+ "supasim-kernels",
  "supasim-types",
  "thiserror 2.0.12",
  "tracing",
  "wgpu",
+]
+
+[[package]]
+name = "supasim-kernels"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "hassle-rs",
+ "libc",
+ "naga",
+ "rand",
+ "serde_json",
+ "slang",
+ "spirv-cross-sys",
+ "spirv-tools-sys",
+ "supasim-types",
+ "tempfile",
 ]
 
 [[package]]
@@ -1370,24 +1388,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.12",
-]
-
-[[package]]
-name = "supasim-shaders"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "bytemuck",
- "hassle-rs",
- "libc",
- "naga",
- "rand",
- "serde_json",
- "slang",
- "spirv-cross-sys",
- "spirv-tools-sys",
- "supasim-types",
- "tempfile",
 ]
 
 [[package]]

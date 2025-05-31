@@ -19,24 +19,24 @@ END LICENSE */
 use std::{path::PathBuf, str::FromStr};
 
 use anyhow::Result;
-use supasim_shaders::*;
+use supasim_kernels::*;
 
 pub fn main() -> Result<()> {
-    let ctx = supasim_shaders::GlobalState::new_from_env()?;
+    let ctx = GlobalState::new_from_env()?;
 
     let target = {
-        //ShaderTarget::Glsl
-        /*ShaderTarget::Dxil {
+        //KernelTarget::Glsl
+        /*KernelTarget::Dxil {
             shader_model: ShaderModel::Sm6_1,
         }*/
-        ShaderTarget::Dxil {
+        KernelTarget::Dxil {
             shader_model: ShaderModel::Sm6_7,
         }
     };
-    ctx.compile_shader(ShaderCompileOptions {
+    ctx.compile_kernel(KernelCompileOptions {
         target,
-        source: ShaderSource::Memory(include_bytes!("../../../kernels/test_add.slang")),
-        dest: ShaderDest::File(&PathBuf::from_str("test.dxil").unwrap()),
+        source: KernelSource::Memory(include_bytes!("../../../kernels/test_add.slang")),
+        dest: KernelDest::File(&PathBuf::from_str("test.dxil").unwrap()),
         entry: "add",
         include: None,
         fp_mode: Default::default(),

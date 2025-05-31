@@ -18,12 +18,12 @@
 END LICENSE */
 use std::path::PathBuf;
 
-pub fn should_skip(shader_target: &str) -> bool {
-    std::env::var(format!("SUPASIM_SKIP_SHADERS_{shader_target}"))
+pub fn should_skip(kernel_target: &str) -> bool {
+    std::env::var(format!("SUPASIM_SKIP_KERNELS_{kernel_target}"))
         .is_ok_and(|a| &a != "0" && &a != "false" && !a.is_empty())
 }
 
-macro_rules! shader_test {
+macro_rules! kernel_test {
     ($func_name:ident, $target_name:literal, $filename:literal, $target:expr) => {
         #[test]
         pub fn $func_name() {
@@ -32,18 +32,18 @@ macro_rules! shader_test {
             }
             let code = include_bytes!("../../../kernels/test_add.slang");
             let ctx = crate::GlobalState::new_from_env().unwrap();
-            std::fs::create_dir_all("shader-tests").unwrap();
+            std::fs::create_dir_all("kernel-tests").unwrap();
             let mut dest_file = PathBuf::new();
-            dest_file.push("shader-tests");
+            dest_file.push("kernel-tests");
             dest_file.push($filename);
             let reflect = ctx
-                .compile_shader(crate::ShaderCompileOptions {
+                .compile_kernel(crate::KernelCompileOptions {
                     target: $target,
-                    source: crate::ShaderSource::Memory(code),
-                    dest: crate::ShaderDest::File(&dest_file),
+                    source: crate::KernelSource::Memory(code),
+                    dest: crate::KernelDest::File(&dest_file),
                     entry: "add",
                     include: None,
-                    fp_mode: crate::ShaderFpMode::Precise,
+                    fp_mode: crate::KernelFpMode::Precise,
                     opt_level: crate::OptimizationLevel::Maximal,
                     stability: crate::StabilityGuarantee::ExtraValidation,
                     minify: true,
@@ -55,56 +55,56 @@ macro_rules! shader_test {
     };
 }
 #[cfg(feature = "opt-valid")]
-shader_test!(add_glsl, "GLSL", "test.glsl", types::ShaderTarget::Glsl);
+kernel_test!(add_glsl, "GLSL", "test.glsl", types::KernelTarget::Glsl);
 #[cfg(feature = "opt-valid")]
-shader_test!(
+kernel_test!(
     add_spirv_1_0,
     "SPIRV_1_0",
     "test.spv.1_0",
-    types::ShaderTarget::Spirv {
+    types::KernelTarget::Spirv {
         version: types::SpirvVersion::V1_0
     }
 );
 #[cfg(feature = "opt-valid")]
-shader_test!(
+kernel_test!(
     add_spirv_1_4,
     "SPIRV_1_4",
     "test.spv.1_4",
-    types::ShaderTarget::Spirv {
+    types::KernelTarget::Spirv {
         version: types::SpirvVersion::V1_4
     }
 );
 #[cfg(feature = "opt-valid")]
-shader_test!(
+kernel_test!(
     add_msl,
     "MSL",
     "test.metal",
-    types::ShaderTarget::Msl {
+    types::KernelTarget::Msl {
         version: types::MetalVersion::V2_3
     }
 );
 #[cfg(all(target_os = "macos", feature = "opt-valid"))]
-shader_test!(
+kernel_test!(
     add_metallib,
     "METALLIB",
     "test.metallib",
-    types::ShaderTarget::MetalLib {
+    types::KernelTarget::MetalLib {
         version: types::MetalVersion::V2_3
     }
 );
 #[cfg(all(feature = "wgsl-out", feature = "opt-valid"))]
-shader_test!(add_wgsl, "WGSL", "test.wgsl", types::ShaderTarget::Wgsl);
-shader_test!(add_cuda, "CUDA", "test.cu", types::ShaderTarget::CudaCpp);
+kernel_test!(add_wgsl, "WGSL", "test.wgsl", types::KernelTarget::Wgsl);
+kernel_test!(add_cuda, "CUDA", "test.cu", types::KernelTarget::CudaCpp);
 // This test must be skipped manually if it fails
-shader_test!(add_ptx_test, "PTX", "test.ptx", types::ShaderTarget::Ptx);
+kernel_test!(add_ptx_test, "PTX", "test.ptx", types::KernelTarget::Ptx);
 #[cfg(feature = "opt-valid")]
-shader_test!(add_hlsl, "HLSL", "test.hlsl", types::ShaderTarget::Hlsl);
+kernel_test!(add_hlsl, "HLSL", "test.hlsl", types::KernelTarget::Hlsl);
 #[cfg(all(feature = "dxil-out", feature = "opt-valid"))]
-shader_test!(
+kernel_test!(
     add_dxil,
     "DXIL",
     "test.dxil",
-    types::ShaderTarget::Dxil {
+    types::KernelTarget::Dxil {
         shader_model: types::ShaderModel::Sm6_7
     }
 );

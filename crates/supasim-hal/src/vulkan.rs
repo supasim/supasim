@@ -34,8 +34,8 @@ use std::fmt::{Debug, Display};
 use std::{borrow::Cow, cell::Cell, ffi::CStr, sync::Mutex};
 use thiserror::Error;
 use types::{
-    Dag, HalBufferDescriptor, HalBufferType, HalInstanceProperties, ShaderReflectionInfo,
-    ShaderResourceType, SyncOperations, to_static_lifetime,
+    Dag, HalBufferDescriptor, HalBufferType, HalInstanceProperties, KernelReflectionInfo,
+    KernelResourceType, SyncOperations, to_static_lifetime,
 };
 
 use scopeguard::defer;
@@ -466,7 +466,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             sync_mode: types::SyncMode::VulkanStyle,
             pipeline_cache: true,
             // TODO: detect spirv version
-            shader_type: types::ShaderTarget::Spirv {
+            kernel_lang: types::KernelTarget::Spirv {
                 version: types::SpirvVersion::V1_0,
             },
             easily_update_bind_groups: false,
@@ -479,17 +479,17 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     unsafe fn compile_kernel(
         &mut self,
         binary: &[u8],
-        reflection: &ShaderReflectionInfo,
+        reflection: &KernelReflectionInfo,
         cache: Option<&mut VulkanPipelineCache>,
     ) -> Result<<Vulkan as Backend>::Kernel, <Vulkan as Backend>::Error> {
         unsafe {
             let err = Cell::new(true);
-            let shader_create_info = &vk::ShaderModuleCreateInfo::default();
+            let kernel_create_info = &vk::ShaderModuleCreateInfo::default();
             let ptr = binary.as_ptr() as *const u32;
             assert!(binary.len() % 4 == 0);
-            let shader = if ptr.is_aligned() {
+            let kernel = if ptr.is_aligned() {
                 self.device.create_shader_module(
-                    &shader_create_info.code(std::slice::from_raw_parts(ptr, binary.len() / 4)),
+                    &kernel_create_info.code(std::slice::from_raw_parts(ptr, binary.len() / 4)),
                     None,
                 )?
             } else {
@@ -500,11 +500,11 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     .as_ptr()
                     .copy_to(v.as_mut_ptr() as *mut u8, binary.len());
                 self.device
-                    .create_shader_module(&shader_create_info.code(&v), None)?
+                    .create_shader_module(&kernel_create_info.code(&v), None)?
             };
             defer! {
                 if err.get() {
-                    self.device.destroy_shader_module(shader, None);
+                    self.device.destroy_shader_module(kernel, None);
                 }
             }
             let bindings: Vec<_> = reflection
@@ -516,9 +516,9 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                         .binding(i as u32)
                         .descriptor_count(1)
                         .descriptor_type(match res {
-                            ShaderResourceType::Buffer => vk::DescriptorType::STORAGE_BUFFER,
-                            ShaderResourceType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
-                            ShaderResourceType::Unknown => unreachable!("Unknown shader binding"),
+                            KernelResourceType::Buffer => vk::DescriptorType::STORAGE_BUFFER,
+                            KernelResourceType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
+                            KernelResourceType::Unknown => unreachable!("Unknown kernel binding"),
                         })
                         .stage_flags(vk::ShaderStageFlags::COMPUTE)
                 })
@@ -555,7 +555,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .stage(
                     vk::PipelineShaderStageCreateInfo::default()
                         .stage(vk::ShaderStageFlags::COMPUTE)
-                        .module(shader)
+                        .module(kernel)
                         .name(entry),
                 )
                 .layout(pipeline_layout);
@@ -566,7 +566,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             drop(_cache_lock);
             err.set(false);
             Ok(VulkanKernel {
-                shader,
+                kernel,
                 pipeline,
                 pipeline_layout,
                 descriptor_set_layout,
@@ -586,7 +586,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             self.device.destroy_pipeline(kernel.pipeline, None);
             self.device
                 .destroy_pipeline_layout(kernel.pipeline_layout, None);
-            self.device.destroy_shader_module(kernel.shader, None);
+            self.device.destroy_shader_module(kernel.kernel, None);
             self.device
                 .destroy_descriptor_set_layout(kernel.descriptor_set_layout, None);
             Ok(())
@@ -1047,7 +1047,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
 }
 #[derive(Debug)]
 pub struct VulkanKernel {
-    pub shader: vk::ShaderModule,
+    pub kernel: vk::ShaderModule,
     pub pipeline: vk::Pipeline,
     pub descriptor_set_layout: vk::DescriptorSetLayout,
     pub pipeline_layout: vk::PipelineLayout,
@@ -1122,7 +1122,7 @@ impl VulkanCommandRecorder {
     fn dispatch_kernel(
         &mut self,
         instance: &mut <Vulkan as Backend>::Instance,
-        shader: &<Vulkan as Backend>::Kernel,
+        kernel: &<Vulkan as Backend>::Kernel,
         descriptor_set: &<Vulkan as Backend>::BindGroup,
         push_constants: &[u8],
         workgroup_dims: [u32; 3],
@@ -1131,11 +1131,11 @@ impl VulkanCommandRecorder {
         unsafe {
             instance
                 .device
-                .cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, shader.pipeline);
+                .cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, kernel.pipeline);
             instance.device.cmd_bind_descriptor_sets(
                 cb,
                 vk::PipelineBindPoint::COMPUTE,
-                shader.pipeline_layout,
+                kernel.pipeline_layout,
                 0,
                 &[descriptor_set.inner],
                 &[],
@@ -1143,7 +1143,7 @@ impl VulkanCommandRecorder {
             if !push_constants.is_empty() {
                 instance.device.cmd_push_constants(
                     cb,
-                    shader.pipeline_layout,
+                    kernel.pipeline_layout,
                     vk::ShaderStageFlags::COMPUTE,
                     0,
                     push_constants,
@@ -1245,13 +1245,13 @@ impl VulkanCommandRecorder {
                 cb,
             )?,
             BufferCommand::DispatchKernel {
-                kernel: shader,
+                kernel,
                 bind_group,
                 push_constants,
                 workgroup_dims,
             } => self.dispatch_kernel(
                 instance,
-                shader,
+                kernel,
                 bind_group,
                 push_constants,
                 *workgroup_dims,
