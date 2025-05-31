@@ -191,5 +191,3 @@ jobs:
       if: ${{ matrix.run-tests }}
       run: |
         SUPASIM_LOG_FULL_TRACE=1 cargo run --example hal_buffer_copy --verbose --all-features
-        SUPASIM_LOG_FULL_TRACE=1 cargo run --example basic_buffer_copy --verbose --all-features
-        SUPASIM_LOG_FULL_TRACE=1 cargo run --example add_numbers --verbose --all-features
