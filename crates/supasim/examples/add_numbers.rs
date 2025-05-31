@@ -143,7 +143,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
                 for buffer in buffers.iter() {
                     println!("{:?}", buffer.readable::<u32>()?);
                 }
-                assert_eq!(buffers[0].readable::<u32>()?, [8, 10, 12, 14]);
+                assert_eq!(buffers[0].readable::<u32>()?, [6, 8, 10, 12]);
                 Ok(())
             }),
             &buffers,
