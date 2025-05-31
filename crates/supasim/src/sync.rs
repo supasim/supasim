@@ -241,14 +241,6 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                 });
                 for &idx in &layer {
                     let cmd = &nodes[idx].weight;
-                    for buffer in &cmd.buffers {
-                        let id = buffer.buffer.inner()?.id;
-                        stream.commands.push(HalCommandBuilder::MemoryBarrier {
-                            resource: id,
-                            offset: buffer.start,
-                            len: buffer.len,
-                        });
-                    }
                     if let BufferCommandInner::CopyBufferToBuffer {
                         src_buffer,
                         dst_buffer,
@@ -269,6 +261,15 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                             offset: *dst_offset,
                             len: *len,
                         });
+                    } else {
+                        for buffer in &cmd.buffers {
+                            let id = buffer.buffer.inner()?.id;
+                            stream.commands.push(HalCommandBuilder::MemoryBarrier {
+                                resource: id,
+                                offset: buffer.start,
+                                len: buffer.len,
+                            });
+                        }
                     }
                 }
             }
