@@ -58,3 +58,8 @@ pollster = { version = "0.4", optional = true }
 [dev-dependencies]
 dev-utils.workspace = true
 shaders.workspace = true
+
+[[example]]
+name = "hal_buffer_copy"
+path = "examples/hal_buffer_copy.rs"
+required-features = ["wgpu"]
