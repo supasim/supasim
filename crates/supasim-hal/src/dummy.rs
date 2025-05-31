@@ -40,10 +40,9 @@ impl Dummy {
 #[derive(Clone, Debug)]
 pub struct DummyResource;
 impl BackendInstance<Dummy> for DummyResource {
-    fn get_properties(&mut self) -> types::InstanceProperties {
-        InstanceProperties {
+    fn get_properties(&mut self) -> types::HalInstanceProperties {
+        HalInstanceProperties {
             sync_mode: SyncMode::Automatic,
-            indirect: true,
             pipeline_cache: true,
             shader_type: ShaderTarget::Spirv {
                 version: SpirvVersion::V1_0,
@@ -117,7 +116,7 @@ impl BackendInstance<Dummy> for DummyResource {
 
     unsafe fn create_buffer(
         &mut self,
-        alloc_info: &types::BufferDescriptor,
+        alloc_info: &types::HalBufferDescriptor,
     ) -> Result<<Dummy as Backend>::Buffer, <Dummy as Backend>::Error> {
         Ok(DummyResource)
     }

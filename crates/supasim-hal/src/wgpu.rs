@@ -19,6 +19,7 @@
 END LICENSE */
 
 use crate::*;
+pub use ::wgpu::Backends;
 use std::fmt::Debug;
 use std::{borrow::Cow, cell::Cell, num::NonZero};
 use wgpu::RequestAdapterError;
@@ -77,12 +78,6 @@ impl Wgpu {
         if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
             features |= wgpu::Features::PIPELINE_CACHE;
         }
-        if adapter
-            .features()
-            .contains(wgpu::Features::MULTI_DRAW_INDIRECT)
-        {
-            features |= wgpu::Features::MULTI_DRAW_INDIRECT;
-        }
         if unified_memory {
             features |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
         }
@@ -114,13 +109,9 @@ pub struct WgpuInstance {
 }
 impl BackendInstance<Wgpu> for WgpuInstance {
     #[tracing::instrument]
-    fn get_properties(&mut self) -> InstanceProperties {
-        InstanceProperties {
+    fn get_properties(&mut self) -> HalInstanceProperties {
+        HalInstanceProperties {
             sync_mode: SyncMode::Automatic,
-            indirect: self
-                .adapter
-                .features()
-                .contains(wgpu::Features::MULTI_DRAW_INDIRECT),
             pipeline_cache: self
                 .adapter
                 .features()
@@ -169,7 +160,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                 label: None,
                 layout: None,
                 module: &shader,
-                entry_point: Some(&reflection.entry_name),
+                entry_point: Some("main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: cache.map(|a| &a.inner),
             });
@@ -280,26 +271,26 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     #[tracing::instrument]
     unsafe fn create_buffer(
         &mut self,
-        alloc_info: &BufferDescriptor,
+        alloc_info: &HalBufferDescriptor,
     ) -> Result<<Wgpu as Backend>::Buffer, <Wgpu as Backend>::Error> {
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: alloc_info.size,
             usage: {
                 let mut usage = match alloc_info.memory_type {
-                    BufferType::Storage => {
+                    HalBufferType::Storage => {
                         wgpu::BufferUsages::STORAGE
                             | wgpu::BufferUsages::COPY_SRC
                             | wgpu::BufferUsages::COPY_DST
                     }
-                    BufferType::Download => {
+                    HalBufferType::Download => {
                         wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ
                     }
-                    BufferType::Upload => {
+                    HalBufferType::Upload => {
                         wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::MAP_WRITE
                     }
-                    BufferType::Other => wgpu::BufferUsages::COPY_DST,
-                    BufferType::Any => {
+                    HalBufferType::Other => wgpu::BufferUsages::COPY_DST,
+                    HalBufferType::Any => {
                         unreachable!()
                     }
                 };
@@ -318,8 +309,8 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             inner: buffer.clone(),
             mapped_ptr: Cell::new(None),
             map_mut: match alloc_info.memory_type {
-                BufferType::Download => Some(false),
-                BufferType::Upload => Some(true),
+                HalBufferType::Download => Some(false),
+                HalBufferType::Upload => Some(true),
                 _ => None,
             },
         })
@@ -551,25 +542,6 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                         workgroup_dims[1],
                         workgroup_dims[2],
                     );
-                }
-                BufferCommand::DispatchKernelIndirect {
-                    kernel: shader,
-                    bind_group,
-                    push_constants,
-                    indirect_buffer,
-                    buffer_offset,
-                    validate,
-                } => {
-                    if *validate {
-                        unimplemented!("Indirect validation isn't implemented for wgpu");
-                    }
-                    let mut pass = r.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: None,
-                        timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&shader.pipeline);
-                    pass.set_bind_group(0, &bind_group.inner, &[]);
-                    pass.dispatch_workgroups_indirect(&indirect_buffer.inner, *buffer_offset);
                 }
                 BufferCommand::UpdateBindGroup {
                     bg,

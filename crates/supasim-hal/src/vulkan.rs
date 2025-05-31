@@ -30,19 +30,11 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
 };
 use log::{Level, warn};
-use std::{
-    borrow::Cow,
-    cell::Cell,
-    ffi::{CStr, CString},
-    sync::Mutex,
-};
-use std::{
-    fmt::{Debug, Display},
-    str::FromStr,
-};
+use std::fmt::{Debug, Display};
+use std::{borrow::Cow, cell::Cell, ffi::CStr, sync::Mutex};
 use thiserror::Error;
 use types::{
-    BufferDescriptor, BufferType, Dag, InstanceProperties, ShaderReflectionInfo,
+    Dag, HalBufferDescriptor, HalBufferType, HalInstanceProperties, ShaderReflectionInfo,
     ShaderResourceType, SyncOperations, to_static_lifetime,
 };
 
@@ -456,7 +448,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         Ok(())
     }
     #[tracing::instrument]
-    fn get_properties(&mut self) -> InstanceProperties {
+    fn get_properties(&mut self) -> HalInstanceProperties {
         let is_unified_memory = unsafe {
             let memory_props = self
                 .instance
@@ -470,9 +462,8 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     .flags
                     .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
         };
-        InstanceProperties {
+        HalInstanceProperties {
             sync_mode: types::SyncMode::VulkanStyle,
-            indirect: false,
             pipeline_cache: true,
             // TODO: detect spirv version
             shader_type: types::ShaderTarget::Spirv {
@@ -559,13 +550,13 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 _cache_lock = None;
                 vk::PipelineCache::null()
             };
-            let entry = CString::from_str(&reflection.entry_name).unwrap();
+            let entry = c"main";
             let pipeline_create_info = vk::ComputePipelineCreateInfo::default()
                 .stage(
                     vk::PipelineShaderStageCreateInfo::default()
                         .stage(vk::ShaderStageFlags::COMPUTE)
                         .module(shader)
-                        .name(&entry),
+                        .name(entry),
                 )
                 .layout(pipeline_layout);
             let pipeline = self
@@ -604,7 +595,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     #[tracing::instrument]
     unsafe fn create_buffer(
         &mut self,
-        alloc_info: &types::BufferDescriptor,
+        alloc_info: &types::HalBufferDescriptor,
     ) -> Result<<Vulkan as Backend>::Buffer, <Vulkan as Backend>::Error> {
         unsafe {
             let err = Cell::new(true);
@@ -623,13 +614,13 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .usage({
                     use vk::BufferUsageFlags as F;
                     let mut flags = match alloc_info.memory_type {
-                        BufferType::Storage => {
+                        HalBufferType::Storage => {
                             F::TRANSFER_SRC | F::TRANSFER_DST | F::STORAGE_BUFFER
                         }
-                        BufferType::Upload => F::TRANSFER_SRC,
-                        BufferType::Download => F::TRANSFER_DST,
-                        BufferType::Other => F::TRANSFER_DST,
-                        BufferType::Any => unreachable!(),
+                        HalBufferType::Upload => F::TRANSFER_SRC,
+                        HalBufferType::Download => F::TRANSFER_DST,
+                        HalBufferType::Other => F::TRANSFER_DST,
+                        HalBufferType::Any => unreachable!(),
                     };
                     if alloc_info.indirect_capable {
                         flags |= F::INDIRECT_BUFFER | F::STORAGE_BUFFER
@@ -646,7 +637,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 }
             }
             let requirements = self.device.get_buffer_memory_requirements(buffer);
-            use types::BufferType::*;
+            use types::HalBufferType::*;
             let mut allocation = self
                 .alloc
                 .lock()
@@ -677,8 +668,8 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 return Err(e.into());
             }
             err.set(false);
-            if alloc_info.memory_type == BufferType::Upload
-                || alloc_info.memory_type == BufferType::Download
+            if alloc_info.memory_type == HalBufferType::Upload
+                || alloc_info.memory_type == HalBufferType::Download
             {
                 assert!(allocation.mapped_ptr().is_some());
             }
@@ -774,7 +765,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     GpuResource::Buffer {
                         buffer:
                             VulkanBuffer {
-                                create_info: BufferDescriptor { uniform, .. },
+                                create_info: HalBufferDescriptor { uniform, .. },
                                 ..
                             },
                         ..
@@ -855,7 +846,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     GpuResource::Buffer {
                         buffer:
                             VulkanBuffer {
-                                create_info: BufferDescriptor { uniform, .. },
+                                create_info: HalBufferDescriptor { uniform, .. },
                                 ..
                             },
                         ..
@@ -1068,7 +1059,7 @@ impl Kernel<Vulkan> for VulkanKernel {}
 pub struct VulkanBuffer {
     pub buffer: vk::Buffer,
     pub allocation: Allocation,
-    pub create_info: types::BufferDescriptor,
+    pub create_info: types::HalBufferDescriptor,
 }
 impl Buffer<Vulkan> for VulkanBuffer {}
 #[derive(Debug)]
@@ -1164,49 +1155,6 @@ impl VulkanCommandRecorder {
                 workgroup_dims[1],
                 workgroup_dims[2],
             );
-        }
-        Ok(())
-    }
-    #[tracing::instrument(skip(push_constants), fields(push_constants_len=push_constants.len()))]
-    #[allow(clippy::too_many_arguments)]
-    fn dispatch_kernel_indirect(
-        &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
-        shader: &<Vulkan as Backend>::Kernel,
-        descriptor_set: &<Vulkan as Backend>::BindGroup,
-        push_constants: &[u8],
-        indirect_buffer: &<Vulkan as Backend>::Buffer,
-        buffer_offset: u64,
-        validate_dispatches: bool,
-        cb: vk::CommandBuffer,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            if validate_dispatches {
-                return Err(VulkanError::DispatchModeUnsupported);
-            }
-            instance
-                .device
-                .cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, shader.pipeline);
-            instance.device.cmd_bind_descriptor_sets(
-                cb,
-                vk::PipelineBindPoint::COMPUTE,
-                shader.pipeline_layout,
-                0,
-                &[descriptor_set.inner],
-                &[],
-            );
-            if !push_constants.is_empty() {
-                instance.device.cmd_push_constants(
-                    cb,
-                    shader.pipeline_layout,
-                    vk::ShaderStageFlags::COMPUTE,
-                    0,
-                    push_constants,
-                );
-            }
-            instance
-                .device
-                .cmd_dispatch_indirect(cb, indirect_buffer.buffer, buffer_offset);
         }
         Ok(())
     }
@@ -1309,23 +1257,6 @@ impl VulkanCommandRecorder {
                 *workgroup_dims,
                 cb,
             )?,
-            BufferCommand::DispatchKernelIndirect {
-                kernel: shader,
-                bind_group,
-                push_constants,
-                indirect_buffer,
-                buffer_offset,
-                validate,
-            } => self.dispatch_kernel_indirect(
-                instance,
-                shader,
-                bind_group,
-                push_constants,
-                indirect_buffer,
-                *buffer_offset,
-                *validate,
-                cb,
-            )?,
             BufferCommand::PipelineBarrier { .. } => {
                 unreachable!()
             }
@@ -1372,7 +1303,6 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
             }
         }
         self.end(instance, cb)?;
-        println!("Commands recorded: {:#?}", commands);
         Ok(())
     }
     unsafe fn clear(

@@ -1,3 +1,5 @@
+use std::any::TypeId;
+
 /* BEGIN LICENSE
   SupaSim, a GPGPU and simulation toolkit.
   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
@@ -16,30 +18,34 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
-use supasim::{BufferDescriptor, BufferSlice, SupaSimInstance, shaders};
+use crate::*;
 
-pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
+pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), ()> {
+    // Dummy test won't be necessary here
+    if TypeId::of::<Backend>() == TypeId::of::<hal::Dummy>() {
+        return Ok(());
+    }
     println!("Hello, world!");
     dev_utils::setup_trace_printer_if_env();
     let instance: SupaSimInstance<Backend> = SupaSimInstance::from_hal(hal);
     let upload_buffer = instance
-        .create_buffer(&BufferDescriptor {
+        .create_buffer(&crate::BufferDescriptor {
             size: 64,
-            buffer_type: supasim::BufferType::Upload,
+            buffer_type: BufferType::Upload,
             contents_align: 4,
             ..Default::default()
         })
         .unwrap();
     let download_buffer = instance
-        .create_buffer(&BufferDescriptor {
+        .create_buffer(&crate::BufferDescriptor {
             size: 16,
-            buffer_type: supasim::BufferType::Download,
+            buffer_type: BufferType::Download,
             contents_align: 4,
             ..Default::default()
         })
         .unwrap();
     let buffer1 = instance
-        .create_buffer(&BufferDescriptor {
+        .create_buffer(&crate::BufferDescriptor {
             size: 16,
             contents_align: 4,
             ..Default::default()
@@ -71,9 +77,11 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
             target: types::ShaderTarget::Spirv {
                 version: shaders::SpirvVersion::V1_2,
             },
-            source: shaders::ShaderSource::Memory(include_bytes!("add_numbers.slang")),
+            source: shaders::ShaderSource::Memory(include_bytes!(
+                "../../../../kernels/test_add.slang"
+            )),
             dest: shaders::ShaderDest::Memory(&mut spirv),
-            entry: "main",
+            entry: "add",
             include: None,
             fp_mode: shaders::ShaderFpMode::Precise,
             opt_level: shaders::OptimizationLevel::Maximal,
@@ -81,6 +89,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
             minify: false,
         })
         .unwrap();
+    println!("Reflection info: {:?}", reflection_info);
     let kernel = instance
         .compile_kernel(&spirv, reflection_info, cache.as_ref())
         .unwrap();
@@ -149,14 +158,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
             &buffers,
         )
         .unwrap();
+    Ok(())
 }
-pub fn main() {
-    if true {
-        let instance =
-            hal::Wgpu::create_instance(true, hal::wgpu::wgpu::Backends::PRIMARY, None).unwrap();
-        main_test::<hal::Wgpu>(instance);
-    } else {
-        let instance = hal::Vulkan::create_instance(true).unwrap();
-        main_test::<hal::Vulkan>(instance);
-    }
-}
+
+dev_utils::all_backend_tests!(add_numbers);

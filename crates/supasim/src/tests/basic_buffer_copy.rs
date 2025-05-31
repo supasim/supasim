@@ -1,3 +1,5 @@
+use std::any::TypeId;
+
 /* BEGIN LICENSE
   SupaSim, a GPGPU and simulation toolkit.
   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
@@ -16,16 +18,20 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
-use supasim::{BufferDescriptor, BufferSlice, SupaSimInstance};
+use crate::*;
 
-pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
+pub fn basic_buffer_copy<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), ()> {
+    // Dummy test won't be necessary here
+    if TypeId::of::<Backend>() == TypeId::of::<hal::Dummy>() {
+        return Ok(());
+    }
     println!("Hello, world!");
     dev_utils::setup_trace_printer_if_env();
     let instance = SupaSimInstance::<Backend>::from_hal(hal);
     let buffer1 = instance
         .create_buffer(&BufferDescriptor {
             size: 16,
-            buffer_type: supasim::BufferType::Upload,
+            buffer_type: BufferType::Upload,
             contents_align: 4,
             priority: 0.0,
         })
@@ -33,7 +39,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
     let buffer2 = instance
         .create_buffer(&BufferDescriptor {
             size: 16,
-            buffer_type: supasim::BufferType::Storage,
+            buffer_type: BufferType::Storage,
             contents_align: 4,
             priority: 0.0,
         })
@@ -41,7 +47,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
     let buffer3 = instance
         .create_buffer(&BufferDescriptor {
             size: 16,
-            buffer_type: supasim::BufferType::Download,
+            buffer_type: BufferType::Download,
             contents_align: 4,
             priority: 0.0,
         })
@@ -86,15 +92,7 @@ pub fn main_test<Backend: supasim::hal::Backend>(hal: Backend::Instance) {
             &slices[..],
         )
         .unwrap();
+    Ok(())
 }
 
-pub fn main() {
-    if true {
-        let instance =
-            hal::Wgpu::create_instance(true, hal::wgpu::wgpu::Backends::PRIMARY, None).unwrap();
-        main_test::<hal::Wgpu>(instance);
-    } else {
-        let instance = hal::Vulkan::create_instance(true).unwrap();
-        main_test::<hal::Vulkan>(instance);
-    }
-}
+dev_utils::all_backend_tests!(basic_buffer_copy);

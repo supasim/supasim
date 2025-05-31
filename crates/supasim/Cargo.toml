@@ -27,18 +27,23 @@ keywords.workspace = true
 license.workspace = true
 readme = "../readme.md"
 
-[dependencies]
-paste = "1.0"
+[features]
+default = ["vulkan", "wgpu"]
+cuda = ["hal/cuda"]
+wgpu = ["hal/wgpu"]
+vulkan = ["hal/vulkan"]
 
+[dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true
 thunderdome.workspace = true
+paste.workspace = true
 
 macros.workspace = true
 shaders.workspace = true
 types.workspace = true
-hal.workspace = true
+hal = { workspace = true, default-features = false }
 
 [dev-dependencies]
 env_logger.workspace = true

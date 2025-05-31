@@ -30,7 +30,7 @@ macro_rules! shader_test {
             if should_skip($target_name) {
                 return;
             }
-            let code = include_bytes!("../test.slang");
+            let code = include_bytes!("../../../kernels/test_add.slang");
             let ctx = crate::GlobalState::new_from_env().unwrap();
             std::fs::create_dir_all("shader-tests").unwrap();
             let mut dest_file = PathBuf::new();
@@ -41,7 +41,7 @@ macro_rules! shader_test {
                     target: $target,
                     source: crate::ShaderSource::Memory(code),
                     dest: crate::ShaderDest::File(&dest_file),
-                    entry: "computeMain",
+                    entry: "add",
                     include: None,
                     fp_mode: crate::ShaderFpMode::Precise,
                     opt_level: crate::OptimizationLevel::Maximal,
@@ -55,10 +55,10 @@ macro_rules! shader_test {
     };
 }
 #[cfg(feature = "opt-valid")]
-shader_test!(glsl_test, "GLSL", "test.glsl", types::ShaderTarget::Glsl);
+shader_test!(add_glsl, "GLSL", "test.glsl", types::ShaderTarget::Glsl);
 #[cfg(feature = "opt-valid")]
 shader_test!(
-    spirv_1_0_test,
+    add_spirv_1_0,
     "SPIRV_1_0",
     "test.spv.1_0",
     types::ShaderTarget::Spirv {
@@ -67,7 +67,7 @@ shader_test!(
 );
 #[cfg(feature = "opt-valid")]
 shader_test!(
-    spirv_1_4_test,
+    add_spirv_1_4,
     "SPIRV_1_4",
     "test.spv.1_4",
     types::ShaderTarget::Spirv {
@@ -76,7 +76,7 @@ shader_test!(
 );
 #[cfg(feature = "opt-valid")]
 shader_test!(
-    msl_test,
+    add_msl,
     "MSL",
     "test.metal",
     types::ShaderTarget::Msl {
@@ -85,7 +85,7 @@ shader_test!(
 );
 #[cfg(all(target_os = "macos", feature = "opt-valid"))]
 shader_test!(
-    metallib_test,
+    add_metallib,
     "METALLIB",
     "test.metallib",
     types::ShaderTarget::MetalLib {
@@ -93,15 +93,15 @@ shader_test!(
     }
 );
 #[cfg(all(feature = "wgsl-out", feature = "opt-valid"))]
-shader_test!(wgsl_test, "WGSL", "test.wgsl", types::ShaderTarget::Wgsl);
-shader_test!(cuda_test, "CUDA", "test.cu", types::ShaderTarget::CudaCpp);
+shader_test!(add_wgsl, "WGSL", "test.wgsl", types::ShaderTarget::Wgsl);
+shader_test!(add_cuda, "CUDA", "test.cu", types::ShaderTarget::CudaCpp);
 // This test must be skipped manually if it fails
-shader_test!(ptx_test, "PTX", "test.ptx", types::ShaderTarget::Ptx);
+shader_test!(add_ptx_test, "PTX", "test.ptx", types::ShaderTarget::Ptx);
 #[cfg(feature = "opt-valid")]
-shader_test!(hlsl_test, "HLSL", "test.hlsl", types::ShaderTarget::Hlsl);
+shader_test!(add_hlsl, "HLSL", "test.hlsl", types::ShaderTarget::Hlsl);
 #[cfg(all(feature = "dxil-out", feature = "opt-valid"))]
 shader_test!(
-    dxil_test,
+    add_dxil,
     "DXIL",
     "test.dxil",
     types::ShaderTarget::Dxil {

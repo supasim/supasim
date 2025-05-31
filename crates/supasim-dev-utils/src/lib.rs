@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+pub use paste;
 use std::fmt::Write;
 use tracing_subscriber::{
     layer::{Context, SubscriberExt},
@@ -60,4 +61,52 @@ pub fn setup_trace_printer_if_env() {
             setup_trace_printer();
         }
     }
+}
+#[macro_export]
+macro_rules! all_backend_tests_inner {
+    ($func_name:ident, $backend_name:literal, $instance_create:block, $test_name:ident, $hal_backend: ident) => {
+        #[test]
+        pub fn $func_name() {
+            if std::env::var(concat!("SUPASIM_SKIP_BACKEND_", $backend_name))
+                .is_ok_and(|a| &a != "0" && &a != "false" && !a.is_empty())
+            {
+                return;
+            }
+            log::info!("{} test", $backend_name);
+            let instance = $instance_create;
+            let instance = instance.expect(&format!("Failed to create {} instance", $backend_name));
+            log::info!("Created {} instance", $backend_name);
+            $test_name::<hal::$hal_backend>(instance).unwrap();
+        }
+    };
+}
+#[macro_export]
+macro_rules! all_backend_tests {
+    ($test_name:ident) => {
+        $crate::paste::paste! {
+            $crate::all_backend_tests_inner!([<$test_name _dummy>], "DUMMY", {
+                hal::Dummy::create_instance()
+            }, $test_name, Dummy);
+
+            #[cfg(feature = "vulkan")]
+            $crate::all_backend_tests_inner!([<$test_name _vulkan>], "VULKAN", {
+                hal::Vulkan::create_instance(true)
+            }, $test_name, Vulkan);
+
+            #[cfg(feature = "wgpu")]
+            $crate::all_backend_tests_inner!([<$test_name _wgpu_vulkan>], "WGPU_VULKAN", {
+                hal::wgpu::Wgpu::create_instance(true, hal::wgpu::Backends::VULKAN, None)
+            }, $test_name, Wgpu);
+
+            #[cfg(all(feature = "wgpu", target_vendor = "apple"))]
+            $crate::all_backend_tests_inner!([<$test_name _wgpu_metal>], "WGPU_METAL", {
+                hal::wgpu::Wgpu::create_instance(true, hal::wgpu::Backends::METAL, None)
+            }, $test_name, Wgpu);
+
+            #[cfg(all(feature = "wgpu", target_os = "windows"))]
+            $crate::all_backend_tests_inner!([<$test_name _wgpu_dx12>], "WGPU_DX12", {
+                hal::wgpu::Wgpu::create_instance(true, hal::wgpu::Backends::DX12, None)
+            }, $test_name, Wgpu);
+        }
+    };
 }

@@ -35,9 +35,9 @@ pub fn main() -> Result<()> {
     };
     ctx.compile_shader(ShaderCompileOptions {
         target,
-        source: ShaderSource::Memory(include_bytes!("../test.slang")),
+        source: ShaderSource::Memory(include_bytes!("../../../kernels/test_add.slang")),
         dest: ShaderDest::File(&PathBuf::from_str("test.dxil").unwrap()),
-        entry: "computeMain",
+        entry: "add",
         include: None,
         fp_mode: Default::default(),
         opt_level: OptimizationLevel::Standard,

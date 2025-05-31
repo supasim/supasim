@@ -17,14 +17,14 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
 use supasim_hal::{Backend, BackendInstance, BufferCommand, CommandRecorder, RecorderSubmitInfo};
-use types::BufferDescriptor;
+use types::HalBufferDescriptor;
 
 pub fn example<B: Backend>(mut instance: B::Instance) {
     unsafe {
         let buffer1 = instance
-            .create_buffer(&BufferDescriptor {
+            .create_buffer(&HalBufferDescriptor {
                 size: 16,
-                memory_type: types::BufferType::Upload,
+                memory_type: types::HalBufferType::Upload,
                 visible_to_renderer: false,
                 indirect_capable: false,
                 uniform: false,
@@ -32,9 +32,9 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
             })
             .unwrap();
         let buffer2 = instance
-            .create_buffer(&BufferDescriptor {
+            .create_buffer(&HalBufferDescriptor {
                 size: 16,
-                memory_type: types::BufferType::Storage,
+                memory_type: types::HalBufferType::Storage,
                 visible_to_renderer: false,
                 indirect_capable: false,
                 uniform: false,
@@ -42,9 +42,9 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
             })
             .unwrap();
         let buffer3 = instance
-            .create_buffer(&BufferDescriptor {
+            .create_buffer(&HalBufferDescriptor {
                 size: 16,
-                memory_type: types::BufferType::Download,
+                memory_type: types::HalBufferType::Download,
                 visible_to_renderer: false,
                 indirect_capable: false,
                 uniform: false,

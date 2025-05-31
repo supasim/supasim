@@ -43,14 +43,6 @@ pub enum HalCommandBuilder {
         push_constants: Vec<u8>,
         workgroup_dims: [u32; 3],
     },
-    DispatchKernelIndirect {
-        kernel: Index,
-        bg: u32,
-        push_constants: Vec<u8>,
-        indirect_buffer: Index,
-        buffer_offset: u64,
-        validate: bool,
-    },
     /// Only for vulkan like synchronization
     SetEvent { event: Index, wait: SyncOperations },
     /// Only for vulkan like synchronization
@@ -231,6 +223,10 @@ pub fn dag_to_command_streams<B: hal::Backend>(
         layers.pop();
         let nodes = dag.raw_nodes();
         for (i, layer) in layers.into_iter().enumerate() {
+            println!("Layer {}", i);
+            for &j in &layer {
+                println!("\t{:?}", dag[NodeIndex::new(j)]);
+            }
             // No synchronization needed for the first layer
             // This following code is bad. More barriers than needed are used, and the first layer isn't actually skipped.
             // I suspect this is because the first layer has a kind of "root" dummy node
@@ -263,6 +259,7 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                         });
                     } else {
                         for buffer in &cmd.buffers {
+                            println!("Also inserting barrier for buffer");
                             let id = buffer.buffer.inner()?.id;
                             stream.commands.push(HalCommandBuilder::MemoryBarrier {
                                 resource: id,
@@ -318,39 +315,6 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                             bg: bg_index,
                             push_constants: Vec::new(),
                             workgroup_dims: *workgroup_dims,
-                        }
-                    }
-                    BufferCommandInner::KernelDispatchIndirect {
-                        kernel,
-                        indirect_buffer,
-                        needs_validation,
-                    } => {
-                        let bg_index = bind_groups.len() as u32;
-                        let bg = BindGroupDesc {
-                            kernel_idx: kernel.inner()?.id,
-                            items: cmd
-                                .buffers
-                                .iter()
-                                .map(|a| {
-                                    (
-                                        a.buffer.inner().unwrap().id,
-                                        BufferRange {
-                                            start: a.start,
-                                            len: a.len,
-                                            needs_mut: a.needs_mut,
-                                        },
-                                    )
-                                })
-                                .collect(),
-                        };
-                        bind_groups.push(bg);
-                        HalCommandBuilder::DispatchKernelIndirect {
-                            kernel: kernel.inner()?.id,
-                            bg: bg_index,
-                            push_constants: Vec::new(),
-                            indirect_buffer: indirect_buffer.buffer.inner()?.id,
-                            buffer_offset: indirect_buffer.start,
-                            validate: *needs_validation,
                         }
                     }
                 };
@@ -456,30 +420,6 @@ pub fn record_command_streams<B: hal::Backend>(
                             .upgrade()?,
                     );
                 }
-                HalCommandBuilder::DispatchKernelIndirect {
-                    kernel,
-                    indirect_buffer,
-                    ..
-                } => {
-                    kernel_refs.push(
-                        instance
-                            .kernels
-                            .get(*kernel)
-                            .ok_or(SupaSimError::AlreadyDestroyed)?
-                            .as_ref()
-                            .unwrap()
-                            .upgrade()?,
-                    );
-                    buffer_refs.push(
-                        instance
-                            .buffers
-                            .get(*indirect_buffer)
-                            .ok_or(SupaSimError::AlreadyDestroyed)?
-                            .as_ref()
-                            .unwrap()
-                            .upgrade()?,
-                    );
-                }
                 HalCommandBuilder::MemoryBarrier { resource, .. } => {
                     buffer_refs.push(
                         instance
@@ -548,20 +488,6 @@ pub fn record_command_streams<B: hal::Backend>(
                         bind_group: &bindgroups[*bg as usize].0,
                         push_constants,
                         workgroup_dims: *workgroup_dims,
-                    },
-                    HalCommandBuilder::DispatchKernelIndirect {
-                        bg,
-                        push_constants,
-                        buffer_offset,
-                        validate,
-                        ..
-                    } => hal::BufferCommand::DispatchKernelIndirect {
-                        kernel: get_kernel(),
-                        bind_group: &bindgroups[*bg as usize].0,
-                        push_constants,
-                        indirect_buffer: get_buffer(),
-                        buffer_offset: *buffer_offset,
-                        validate: *validate,
                     },
                     HalCommandBuilder::MemoryBarrier { offset, len, .. } => {
                         hal::BufferCommand::MemoryBarrier {

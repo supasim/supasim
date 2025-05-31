@@ -46,7 +46,7 @@ pub trait Backend: Sized + std::fmt::Debug + Clone + 'static {
     type Error: Error<Self>;
 }
 pub trait BackendInstance<B: Backend<Instance = Self>> {
-    fn get_properties(&mut self) -> InstanceProperties;
+    fn get_properties(&mut self) -> HalInstanceProperties;
     /// # Safety
     /// * The shader code must be valid
     /// * The reflection info must match exactly with the shader
@@ -98,7 +98,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>> {
     /// * Indirect must only be set if the instance supports it
     unsafe fn create_buffer(
         &mut self,
-        alloc_info: &BufferDescriptor,
+        alloc_info: &HalBufferDescriptor,
     ) -> Result<B::Buffer, B::Error>;
     /// # Safety
     /// * All bind groups using this buffer must have been updated or destroyed
@@ -248,21 +248,14 @@ pub enum BufferCommand<'a, B: Backend> {
         push_constants: &'a [u8],
         workgroup_dims: [u32; 3],
     },
-    DispatchKernelIndirect {
-        kernel: &'a B::Kernel,
-        bind_group: &'a B::BindGroup,
-        push_constants: &'a [u8],
-        indirect_buffer: &'a B::Buffer,
-        buffer_offset: u64,
-        validate: bool,
-    },
     /// Only for vulkan like synchronization
     PipelineBarrier {
         before: SyncOperations,
         after: SyncOperations,
     },
-    /// Only for vulkan like synchronization. Will hitch a ride with the previous PipelineBarrier
+    /// Only for vulkan like synchronization. Consecutive pipeline and memory barriers will combine. Memory barriers without such a pipeline barrier are undefined behavior.
     MemoryBarrier { resource: GpuResource<'a, B> },
+    /// Writes a bind group. This is for instances with the `easily_update_bind_groups` property.
     UpdateBindGroup {
         bg: &'a B::BindGroup,
         kernel: &'a B::Kernel,

@@ -23,7 +23,7 @@ pub use daggy::petgraph::algo::toposort;
 pub use daggy::petgraph::graph::NodeIndex;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BufferType {
+pub enum HalBufferType {
     /// Driver decides
     #[default]
     Any,
@@ -37,9 +37,9 @@ pub enum BufferType {
     Other,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BufferDescriptor {
+pub struct HalBufferDescriptor {
     pub size: u64,
-    pub memory_type: BufferType,
+    pub memory_type: HalBufferType,
     pub visible_to_renderer: bool,
     pub indirect_capable: bool,
     pub uniform: bool,
@@ -150,11 +150,9 @@ pub enum SyncOperations {
     Both,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub struct InstanceProperties {
+pub struct HalInstanceProperties {
     /// What synchronization requirements the backend has
     pub sync_mode: SyncMode,
-    /// Whether the backend supports indirect dispatch
-    pub indirect: bool,
     /// Whether the backend supports pipeline caches
     pub pipeline_cache: bool,
     /// What shader langauge the backend takes
@@ -196,7 +194,6 @@ pub enum ShaderResourceType {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ShaderReflectionInfo {
     pub workgroup_size: [u32; 3],
-    pub entry_name: String,
     pub resources: Vec<ShaderResourceType>,
     pub push_constant_len: u32,
 }

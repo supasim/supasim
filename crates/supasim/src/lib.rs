@@ -26,6 +26,9 @@ END LICENSE */
 
 #![allow(dead_code)]
 
+#[cfg(test)]
+mod tests;
+
 mod sync;
 
 use hal::{BackendInstance as _, RecorderSubmitInfo, Semaphore};
@@ -41,7 +44,10 @@ use thunderdome::{Arena, Index};
 pub use bytemuck;
 pub use hal;
 pub use shaders;
-pub use types::*;
+pub use types::{
+    HalBufferType, MetalVersion, ShaderModel, ShaderReflectionInfo, ShaderResourceType,
+    ShaderTarget, SpirvVersion,
+};
 
 pub type UserBufferAccessClosure<'a, B> =
     Box<dyn FnOnce(&mut [MappedBuffer<'a, B>]) -> anyhow::Result<()>>;
@@ -99,15 +105,15 @@ impl Default for BufferDescriptor {
         }
     }
 }
-impl From<BufferDescriptor> for types::BufferDescriptor {
-    fn from(s: BufferDescriptor) -> types::BufferDescriptor {
-        types::BufferDescriptor {
+impl From<BufferDescriptor> for types::HalBufferDescriptor {
+    fn from(s: BufferDescriptor) -> types::HalBufferDescriptor {
+        types::HalBufferDescriptor {
             size: s.size,
             memory_type: match s.buffer_type {
-                BufferType::Storage => types::BufferType::Storage,
-                BufferType::Indirect | BufferType::Uniform => types::BufferType::Other,
-                BufferType::Upload => types::BufferType::Upload,
-                BufferType::Download => types::BufferType::Download,
+                BufferType::Storage => types::HalBufferType::Storage,
+                BufferType::Indirect | BufferType::Uniform => types::HalBufferType::Other,
+                BufferType::Upload => types::HalBufferType::Upload,
+                BufferType::Download => types::HalBufferType::Download,
             },
             visible_to_renderer: false,
             indirect_capable: s.buffer_type == BufferType::Indirect,
@@ -117,7 +123,7 @@ impl From<BufferDescriptor> for types::BufferDescriptor {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BufferSlice<B: hal::Backend> {
     pub buffer: Buffer<B>,
     pub start: u64,
@@ -291,7 +297,6 @@ pub type SupaSimResult<B, T> = Result<T, SupaSimError<B>>;
 #[derive(Clone, Copy, Debug)]
 pub struct InstanceProperties {
     pub supports_pipeline_cache: bool,
-    pub supports_indirect_dispatch: bool,
     pub shader_type: ShaderTarget,
     pub is_unified_memory: bool,
 }
@@ -299,7 +304,7 @@ api_type!(SupaSimInstance, {
     /// The inner hal instance
     inner: Option<B::Instance>,
     /// The hal instance properties
-    inner_properties: types::InstanceProperties,
+    inner_properties: types::HalInstanceProperties,
     /// All created kernels
     kernels: Arena<Option<KernelWeak<B>>>,
     /// All created kernel caches
@@ -345,7 +350,6 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         let v = self.inner()?.inner_properties;
         Ok(InstanceProperties {
             supports_pipeline_cache: v.pipeline_cache,
-            supports_indirect_dispatch: v.indirect,
             shader_type: v.shader_type,
             is_unified_memory: v.is_unified_memory,
         })
@@ -475,12 +479,12 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             let sync_mode = s.inner_properties.sync_mode;
             drop(s);
             let bind_groups = match sync_mode {
-                SyncMode::Dag => sync::record_dag(&dag, &mut recorder)?,
-                SyncMode::VulkanStyle => {
+                types::SyncMode::Dag => sync::record_dag(&dag, &mut recorder)?,
+                types::SyncMode::VulkanStyle => {
                     let streams = sync::dag_to_command_streams(&dag, true)?;
                     sync::record_command_streams(&streams, self.clone(), &mut recorder)?
                 }
-                SyncMode::Automatic => {
+                types::SyncMode::Automatic => {
                     let streams = sync::dag_to_command_streams(&dag, false)?;
                     sync::record_command_streams(&streams, self.clone(), &mut recorder)?
                 }
@@ -730,6 +734,11 @@ api_type!(Kernel, {
     inner: Option<B::Kernel>,
     id: Index,
 },);
+impl<B: hal::Backend> std::fmt::Debug for Kernel<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Kernel(undecorated)")
+    }
+}
 impl<B: hal::Backend> KernelInner<B> {
     pub fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
         instance.kernels.remove(self.id);
@@ -788,10 +797,12 @@ impl<B: hal::Backend> Drop for KernelCacheInner<B> {
         }
     }
 }
+#[derive(Debug)]
 struct BufferCommand<B: hal::Backend> {
     inner: BufferCommandInner<B>,
     buffers: Vec<BufferSlice<B>>,
 }
+#[derive(Debug)]
 enum BufferCommandInner<B: hal::Backend> {
     CopyBufferToBuffer {
         src_buffer: Buffer<B>,
@@ -804,11 +815,6 @@ enum BufferCommandInner<B: hal::Backend> {
     KernelDispatch {
         kernel: Kernel<B>,
         workgroup_dims: [u32; 3],
-    },
-    KernelDispatchIndirect {
-        kernel: Kernel<B>,
-        indirect_buffer: BufferSlice<B>,
-        needs_validation: bool,
     },
     Dummy,
 }
@@ -883,36 +889,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
         });
         Ok(())
     }
-    /// ### WARNING
-    /// This is experimental. It isn't supported on most backends, and may contain bugs. Its usage is advised against.
-    /// ### Description
-    ///
-    #[allow(clippy::too_many_arguments)]
-    pub fn dispatch_kernel_indirect(
-        &self,
-        kernel: Kernel<B>,
-        buffers: &[&BufferSlice<B>],
-        indirect_buffer: &BufferSlice<B>,
-        validate_dispatch: bool,
-    ) -> SupaSimResult<B, ()> {
-        indirect_buffer.validate()?;
-        if (indirect_buffer.start % 4) != 0 || indirect_buffer.len != 12 {
-            return Err(SupaSimError::BufferRegionNotValid);
-        }
-        if validate_dispatch {
-            return Err(SupaSimError::ValidateIndirectUnsupported);
-        }
-        let mut s = self.inner_mut()?;
-        s.commands.push(BufferCommand {
-            inner: BufferCommandInner::KernelDispatchIndirect {
-                kernel,
-                indirect_buffer: indirect_buffer.clone(),
-                needs_validation: validate_dispatch,
-            },
-            buffers: buffers.iter().map(|&b| b.clone()).collect(),
-        });
-        Ok(())
-    }
 }
 impl<B: hal::Backend> CommandRecorderInner<B> {
     fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
@@ -965,6 +941,11 @@ api_type!(Buffer, {
     create_info: BufferDescriptor,
     last_used: u64,
 },);
+impl<B: hal::Backend> std::fmt::Debug for Buffer<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Buffer(undecorated)")
+    }
+}
 impl<B: hal::Backend> BufferInner<B> {
     fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
         instance.buffers.remove(self.id);

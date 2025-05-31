@@ -57,3 +57,4 @@ pollster = { version = "0.4", optional = true }
 
 [dev-dependencies]
 dev-utils.workspace = true
+shaders.workspace = true

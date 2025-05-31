@@ -1330,6 +1330,7 @@ dependencies = [
 name = "supasim-dev-utils"
 version = "0.0.1"
 dependencies = [
+ "paste",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1346,6 +1347,7 @@ dependencies = [
  "pollster",
  "scopeguard",
  "supasim-dev-utils",
+ "supasim-shaders",
  "supasim-types",
  "thiserror 2.0.12",
  "tracing",

@@ -1,3 +1,4 @@
+use std::any::TypeId;
 /* BEGIN LICENSE
   SupaSim, a GPGPU and simulation toolkit.
   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
@@ -18,21 +19,23 @@
 END LICENSE */
 use std::sync::LazyLock;
 
+use crate as hal;
 use crate::{
     Backend, BackendInstance, BufferCommand, CommandRecorder, GpuResource, RecorderSubmitInfo,
     Semaphore,
 };
 use log::info;
-use types::{BufferDescriptor, ShaderReflectionInfo, ShaderResourceType, SyncOperations};
+use shaders::ShaderCompileOptions;
+use types::{HalBufferDescriptor, SyncOperations};
 
 unsafe fn create_storage_buf<B: Backend>(
     instance: &mut B::Instance,
     size: u64,
 ) -> Result<B::Buffer, B::Error> {
     unsafe {
-        let buf = instance.create_buffer(&BufferDescriptor {
+        let buf = instance.create_buffer(&HalBufferDescriptor {
             size,
-            memory_type: types::BufferType::Storage,
+            memory_type: types::HalBufferType::Storage,
             visible_to_renderer: false,
             indirect_capable: false,
             uniform: false,
@@ -41,11 +44,21 @@ unsafe fn create_storage_buf<B: Backend>(
         Ok(buf)
     }
 }
-fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
-    mut instance: I,
-    check_result: bool,
-) -> Result<(), B::Error> {
+
+static INSTANCE_CREATE_LOCK: LazyLock<std::sync::Mutex<()>> =
+    LazyLock::new(|| std::sync::Mutex::new(()));
+
+fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Error> {
     unsafe {
+        let _lock = if let Ok(lock) = INSTANCE_CREATE_LOCK.lock() {
+            lock
+        } else {
+            return Ok(());
+        };
+        let _ = env_logger::builder()
+            .filter_level(log::LevelFilter::Info)
+            .try_init();
+        dev_utils::setup_trace_printer_if_env();
         info!("Starting test");
         let mut cache = if instance.get_properties().pipeline_cache {
             Some(instance.create_kernel_cache(&[])?)
@@ -53,49 +66,64 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
             None
         };
         let mut fun_semaphore = instance.create_semaphore()?;
-        let mut kernel = instance.compile_kernel(
-            include_bytes!("test_add.spirv"),
-            &ShaderReflectionInfo {
-                workgroup_size: [1, 1, 1],
-                entry_name: "main".to_owned(),
-                resources: vec![
-                    ShaderResourceType::Buffer,
-                    ShaderResourceType::Buffer,
-                    ShaderResourceType::Buffer,
-                ],
-                push_constant_len: 0,
-            },
-            cache.as_mut(),
-        )?;
-        let mut kernel2 = instance.compile_kernel(
-            include_bytes!("test_double.spirv"),
-            &ShaderReflectionInfo {
-                workgroup_size: [1, 1, 1],
-                entry_name: "main".to_owned(),
-                resources: vec![ShaderResourceType::Buffer],
-                push_constant_len: 0,
-            },
-            cache.as_mut(),
-        )?;
-        let upload_buffer = instance.create_buffer(&BufferDescriptor {
+        let shader_compiler = shaders::GlobalState::new_from_env().unwrap();
+        let mut add_code = Vec::new();
+        let mut double_code = Vec::new();
+        info!("Compiling kernels");
+        let add_reflection = shader_compiler
+            .compile_shader(ShaderCompileOptions {
+                target: instance.get_properties().shader_type,
+                source: shaders::ShaderSource::Memory(include_bytes!(
+                    "../../../../kernels/test_add.slang"
+                )),
+                dest: shaders::ShaderDest::Memory(&mut add_code),
+                entry: "add",
+                include: None,
+                fp_mode: shaders::ShaderFpMode::Precise,
+                opt_level: shaders::OptimizationLevel::Maximal,
+                stability: shaders::StabilityGuarantee::ExtraValidation,
+                minify: false,
+            })
+            .unwrap();
+        let double_reflection = shader_compiler
+            .compile_shader(ShaderCompileOptions {
+                target: instance.get_properties().shader_type,
+                source: shaders::ShaderSource::Memory(include_bytes!(
+                    "../../../../kernels/test_double.slang"
+                )),
+                dest: shaders::ShaderDest::Memory(&mut double_code),
+                entry: "double",
+                include: None,
+                fp_mode: shaders::ShaderFpMode::Precise,
+                opt_level: shaders::OptimizationLevel::Maximal,
+                stability: shaders::StabilityGuarantee::ExtraValidation,
+                minify: false,
+            })
+            .unwrap();
+        drop(shader_compiler);
+        let mut kernel = instance.compile_kernel(&add_code, &add_reflection, cache.as_mut())?;
+        let mut kernel2 =
+            instance.compile_kernel(&double_code, &double_reflection, cache.as_mut())?;
+        info!("Kernels compiled");
+        let upload_buffer = instance.create_buffer(&HalBufferDescriptor {
             size: 16,
-            memory_type: types::BufferType::Upload,
+            memory_type: types::HalBufferType::Upload,
             visible_to_renderer: false,
             indirect_capable: false,
             uniform: false,
             needs_flush: true,
         })?;
-        let download_buffer = instance.create_buffer(&BufferDescriptor {
+        let download_buffer = instance.create_buffer(&HalBufferDescriptor {
             size: 16,
-            memory_type: types::BufferType::Download,
+            memory_type: types::HalBufferType::Download,
             visible_to_renderer: false,
             indirect_capable: false,
             uniform: false,
             needs_flush: true,
         })?;
-        let uniform_buf = instance.create_buffer(&BufferDescriptor {
+        let uniform_buf = instance.create_buffer(&HalBufferDescriptor {
             size: 16,
-            memory_type: types::BufferType::Other,
+            memory_type: types::HalBufferType::Other,
             visible_to_renderer: false,
             indirect_capable: false,
             uniform: true,
@@ -227,8 +255,8 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
 
         let mut res = [3u32, 0, 0, 0];
         instance.read_buffer(&download_buffer, 0, bytemuck::cast_slice_mut(&mut res))?;
-        if check_result && res[0] != 26 {
-            panic!("Expected 26, got {}", res[0]);
+        if TypeId::of::<B>() != TypeId::of::<crate::Dummy>() {
+            assert_eq!(res[0], 26);
         }
 
         info!("Read buffers");
@@ -255,52 +283,4 @@ fn main_test<B: Backend<Instance = I>, I: crate::BackendInstance<B>>(
     }
 }
 
-static INSTANCE_CREATE_LOCK: LazyLock<std::sync::Mutex<()>> =
-    LazyLock::new(|| std::sync::Mutex::new(()));
-
-pub fn should_skip(test_backend: &str) -> bool {
-    std::env::var(format!("SUPASIM_SKIP_BACKEND_{test_backend}"))
-        .is_ok_and(|a| &a != "0" && &a != "false" && !a.is_empty())
-}
-macro_rules! gpu_test {
-    ($func_name:ident, $backend_name:literal, $verify_result:literal, $instance_create:block) => {
-        #[test]
-        pub fn $func_name() {
-            if should_skip($backend_name) {
-                return;
-            }
-            let _lock = INSTANCE_CREATE_LOCK.lock().unwrap();
-            let _ = env_logger::builder()
-                .filter_level(log::LevelFilter::Info)
-                .try_init();
-            dev_utils::setup_trace_printer_if_env();
-            info!("{} test", $backend_name);
-            let instance = $instance_create;
-            let instance = instance.expect(&format!("Failed to create {} instance", $backend_name));
-            info!("Created {} instance", $backend_name);
-            main_test(instance, $verify_result).unwrap();
-            drop(_lock);
-        }
-    };
-}
-gpu_test!(dummy_test, "DUMMY", false, {
-    crate::Dummy::create_instance()
-});
-#[cfg(feature = "vulkan")]
-gpu_test!(vulkan_test, "VULKAN", true, {
-    crate::Vulkan::create_instance(true)
-});
-#[cfg(feature = "wgpu")]
-gpu_test!(wgpu_vulkan_test, "WGPU_VULKAN", true, {
-    crate::wgpu::Wgpu::create_instance(true, wgpu::Backends::VULKAN, None)
-});
-#[cfg(feature = "wgpu")]
-#[cfg(target_vendor = "apple")]
-gpu_test!(wgpu_metal_test, "WGPU_METAL", true, {
-    crate::wgpu::Wgpu::create_instance(true, wgpu::Backends::METAL, None)
-});
-#[cfg(feature = "wgpu")]
-#[cfg(target_os = "windows")]
-gpu_test!(wgpu_dx12_test, "WGPU_DX12", true, {
-    crate::wgpu::Wgpu::create_instance(true, wgpu::Backends::DX12, None)
-});
+dev_utils::all_backend_tests!(hal_comprehensive);

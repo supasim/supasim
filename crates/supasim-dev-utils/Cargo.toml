@@ -29,3 +29,4 @@ license.workspace = true
 [dependencies]
 tracing-subscriber.workspace = true
 tracing.workspace = true
+paste.workspace = true

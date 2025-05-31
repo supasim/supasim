@@ -16,6 +16,10 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
+//! # Warning
+//! This code is awful. The usual advice of "the code is the documentation" might not be as useful here.
+
 #[cfg(test)]
 mod tests;
 
@@ -407,6 +411,9 @@ impl GlobalState {
             .ok_or(anyhow!("Entry point not found"))?;
         let program = session
             .create_composite_component_type(&[module.downcast().clone(), ep.downcast().clone()])?;
+
+        // TODO: get reflection info about params
+
         let mut workgroup_size = [0; 3];
         let linked_program = program.link()?;
         {
@@ -547,7 +554,6 @@ impl GlobalState {
             }
         }
         Ok(ShaderReflectionInfo {
-            entry_name: options.entry.to_owned(),
             workgroup_size,
             resources: Vec::new(),
             push_constant_len: 0,
