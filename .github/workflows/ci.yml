@@ -147,7 +147,6 @@ jobs:
         echo "VK_ICD_FILENAMES=$HOME/VulkanSdk/macOS/share/vulkan/icd.d/MoltenVK_icd.json" >> "$GITHUB_ENV"
         echo "VK_LAYER_PATH=$HOME/VulkanSdk/macOS/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
         echo "DYLD_FALLBACK_LIBRARY_PATH=$HOME/VulkanSdk/macOS/lib" >>"$GITHUB_ENV"
-        # Todo: set env variables, install other necessary things, etc
     
     - name: Build
       shell: bash

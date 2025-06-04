@@ -1,4 +1,3 @@
-#![allow(unused_variables, dead_code)]
 /* BEGIN LICENSE
   SupaSim, a GPGPU and simulation toolkit.
   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
@@ -17,6 +16,8 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
+#![allow(unused_variables, dead_code)]
 
 use crate::*;
 pub use ::wgpu::Backends;
@@ -321,7 +322,8 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         });
         Ok(WgpuBuffer {
             inner: buffer.clone(),
-            mapped_ptr: UnsafeCell::new(None),
+            slice: None,
+            mapped_slice: None,
             map_mut: match alloc_info.memory_type {
                 HalBufferType::Download => Some(false),
                 HalBufferType::Upload => Some(true),
@@ -335,7 +337,10 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         &mut self,
         mut buffer: <Wgpu as Backend>::Buffer,
     ) -> Result<(), <Wgpu as Backend>::Error> {
-        if buffer.mapped_ptr.get_mut().is_some() {
+        if buffer.mapped_slice.is_some() {
+            // Drop the mapped slice first
+            buffer.mapped_slice = None;
+            buffer.slice = None;
             buffer.inner.unmap();
         }
         // Destroyed on drop
@@ -345,11 +350,11 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     #[tracing::instrument]
     unsafe fn write_buffer(
         &mut self,
-        buffer: &<Wgpu as Backend>::Buffer,
+        buffer: &mut <Wgpu as Backend>::Buffer,
         offset: u64,
         data: &[u8],
     ) -> Result<(), <Wgpu as Backend>::Error> {
-        let was_mapped = unsafe { *buffer.mapped_ptr.get() }.is_some();
+        let was_mapped = buffer.mapped_slice.is_some();
         let ptr = unsafe { self.map_buffer(buffer)?.add(offset as usize) };
         unsafe { std::slice::from_raw_parts_mut(ptr, data.len()) }.clone_from_slice(data);
         if !was_mapped {
@@ -361,11 +366,11 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     #[tracing::instrument]
     unsafe fn read_buffer(
         &mut self,
-        buffer: &<Wgpu as Backend>::Buffer,
+        buffer: &mut <Wgpu as Backend>::Buffer,
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), <Wgpu as Backend>::Error> {
-        let was_mapped = unsafe { *buffer.mapped_ptr.get() }.is_some();
+        let was_mapped = buffer.mapped_slice.is_some();
         let ptr = unsafe { self.map_buffer(buffer)?.add(offset as usize) };
         unsafe { data.clone_from_slice(std::slice::from_raw_parts(ptr, data.len())) };
         if !was_mapped {
@@ -414,6 +419,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         resources: &[GpuResource<Wgpu>],
     ) -> Result<(), <Wgpu as Backend>::Error> {
         *bg = unsafe { self.create_bind_group(kernel, resources)? };
+        // TODO: work on bindless
         todo!()
     }
 
@@ -461,14 +467,24 @@ impl WgpuInstance {
     #[tracing::instrument]
     unsafe fn map_buffer(
         &mut self,
-        buffer: &<Wgpu as Backend>::Buffer,
+        buffer: &mut WgpuBuffer,
     ) -> Result<*mut u8, <Wgpu as Backend>::Error> {
-        // Todo: this is awful code
-        let ptr = match unsafe { *buffer.mapped_ptr.get() } {
-            Some(ptr) => ptr,
+        let ptr = match &mut buffer.mapped_slice {
+            Some(slice) => slice.as_mut_ptr(),
             None => {
-                let slice = buffer.inner.slice(..);
-                slice.map_async(
+                // Fuck it. Transmute is to not worry about lifetimes.
+                // Current wgpu implementation only need the lifetime for
+                // the reference to the inner buffer, not needing mut.
+                // Since the inner buffer lives as long as the WgpuBuffer,
+                // and will never be used mutably until it is destroyed
+                // with the WgpuBuffer itself, this should be safe.
+                unsafe {
+                    buffer.slice = Some(std::mem::transmute::<
+                        wgpu::BufferSlice<'_>,
+                        wgpu::BufferSlice<'static>,
+                    >(buffer.inner.slice(..)));
+                }
+                buffer.slice.as_ref().unwrap().map_async(
                     if buffer.map_mut.unwrap() {
                         wgpu::MapMode::Write
                     } else {
@@ -476,25 +492,27 @@ impl WgpuInstance {
                     },
                     |_| (),
                 );
+                // In theory map_async will go through after doing this kind of blocking wait.
+                // This might change in the future, making wgpu a volatile backend.
+                // Also, this is dumb as shit.
                 self.device.poll(wgpu::PollType::Wait)?;
-                slice.get_mapped_range_mut().as_mut_ptr()
+                // Now that we know that the slice will "live forever", we can get its mapped range which
+                // will likewise "live forever". I told you I knew what I was doing, borrow checker!
+                buffer.mapped_slice = Some(buffer.slice.as_mut().unwrap().get_mapped_range_mut());
+                buffer.mapped_slice.as_mut().unwrap().as_mut_ptr()
             }
         };
-        unsafe {
-            *buffer.mapped_ptr.get() = Some(ptr);
-        }
+
         Ok(ptr)
     }
     #[tracing::instrument]
     unsafe fn unmap_buffer(
         &mut self,
-        buffer: &<Wgpu as Backend>::Buffer,
+        buffer: &mut <Wgpu as Backend>::Buffer,
     ) -> Result<(), <Wgpu as Backend>::Error> {
+        buffer.mapped_slice = None;
+        buffer.slice = None;
         buffer.inner.unmap();
-
-        unsafe {
-            *buffer.mapped_ptr.get() = None;
-        }
         Ok(())
     }
 }
@@ -507,8 +525,10 @@ pub struct WgpuKernel {
 impl Kernel<Wgpu> for WgpuKernel {}
 #[derive(Debug)]
 pub struct WgpuBuffer {
+    /// This can't be moved for fear of UB
     inner: wgpu::Buffer,
-    mapped_ptr: UnsafeCell<Option<*mut u8>>,
+    slice: Option<wgpu::BufferSlice<'static>>,
+    mapped_slice: Option<wgpu::BufferViewMut<'static>>,
     map_mut: Option<bool>,
 }
 unsafe impl Send for WgpuBuffer {}

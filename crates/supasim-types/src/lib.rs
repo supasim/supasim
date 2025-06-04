@@ -185,18 +185,10 @@ pub unsafe fn to_static_lifetime_mut<T>(r: &mut T) -> &'static mut T {
         &mut *r
     }
 }
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub enum KernelResourceType {
-    #[default]
-    Unknown,
-    Buffer,
-    UniformBuffer,
-}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct KernelReflectionInfo {
     pub workgroup_size: [u32; 3],
-    pub resources: Vec<KernelResourceType>,
+    pub num_buffers: u32,
     pub push_constant_len: u32,
 }
 

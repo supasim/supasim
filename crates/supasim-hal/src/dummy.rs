@@ -1,4 +1,3 @@
-#![allow(unused_variables)]
 /* BEGIN LICENSE
   SupaSim, a GPGPU and simulation toolkit.
   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
@@ -17,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+#![allow(unused_variables)]
 
 use crate::*;
 
@@ -133,7 +133,7 @@ impl BackendInstance<Dummy> for DummyResource {
 
     unsafe fn write_buffer(
         &mut self,
-        buffer: &<Dummy as Backend>::Buffer,
+        buffer: &mut <Dummy as Backend>::Buffer,
         offset: u64,
         data: &[u8],
     ) -> Result<(), <Dummy as Backend>::Error> {
@@ -142,7 +142,7 @@ impl BackendInstance<Dummy> for DummyResource {
 
     unsafe fn read_buffer(
         &mut self,
-        buffer: &<Dummy as Backend>::Buffer,
+        buffer: &mut <Dummy as Backend>::Buffer,
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), <Dummy as Backend>::Error> {

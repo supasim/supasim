@@ -1,4 +1,3 @@
-use std::any::TypeId;
 /* BEGIN LICENSE
   SupaSim, a GPGPU and simulation toolkit.
   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
@@ -17,6 +16,7 @@ use std::any::TypeId;
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+use std::any::TypeId;
 use std::sync::LazyLock;
 
 use crate as hal;
@@ -105,7 +105,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
         let mut kernel2 =
             instance.compile_kernel(&double_code, &double_reflection, cache.as_mut())?;
         info!("Kernels compiled");
-        let upload_buffer = instance.create_buffer(&HalBufferDescriptor {
+        let mut upload_buffer = instance.create_buffer(&HalBufferDescriptor {
             size: 16,
             memory_type: types::HalBufferType::Upload,
             visible_to_renderer: false,
@@ -113,7 +113,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             uniform: false,
             needs_flush: true,
         })?;
-        let download_buffer = instance.create_buffer(&HalBufferDescriptor {
+        let mut download_buffer = instance.create_buffer(&HalBufferDescriptor {
             size: 16,
             memory_type: types::HalBufferType::Download,
             visible_to_renderer: false,
@@ -133,7 +133,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
         let sb2 = create_storage_buf::<B>(&mut instance, 16)?;
         let sbout = create_storage_buf::<B>(&mut instance, 16)?;
         instance.write_buffer(
-            &upload_buffer,
+            &mut upload_buffer,
             0,
             bytemuck::cast_slice(&[5u32, 8u32, 2u32, 0]),
         )?;
@@ -254,7 +254,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
         fun_semaphore.wait()?;
 
         let mut res = [3u32, 0, 0, 0];
-        instance.read_buffer(&download_buffer, 0, bytemuck::cast_slice_mut(&mut res))?;
+        instance.read_buffer(&mut download_buffer, 0, bytemuck::cast_slice_mut(&mut res))?;
         if TypeId::of::<B>() != TypeId::of::<crate::Dummy>() {
             assert_eq!(res[0], 26);
         }

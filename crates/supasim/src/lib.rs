@@ -31,6 +31,7 @@ mod tests;
 
 mod sync;
 
+use anyhow::anyhow;
 use hal::{BackendInstance as _, RecorderSubmitInfo, Semaphore};
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -46,8 +47,7 @@ pub use bytemuck;
 pub use hal;
 pub use kernels;
 pub use types::{
-    HalBufferType, KernelReflectionInfo, KernelResourceType, KernelTarget, MetalVersion,
-    ShaderModel, SpirvVersion,
+    HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel, SpirvVersion,
 };
 
 pub type UserBufferAccessClosure<'a, B> =
@@ -366,7 +366,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
     pub fn compile_kernel(
         &self,
         binary: &[u8],
-        reflection: KernelReflectionInfo,
+        reflection_info: KernelReflectionInfo,
         cache: Option<&KernelCache<B>>,
     ) -> SupaSimResult<B, Kernel<B>> {
         let mut cache_lock = if let Some(cache) = cache {
@@ -379,7 +379,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         let kernel = unsafe {
             s.inner.as_mut().unwrap().compile_kernel(
                 binary,
-                &reflection,
+                &reflection_info,
                 if let Some(lock) = cache_lock.as_mut() {
                     Some(lock.inner.as_mut().unwrap())
                 } else {
@@ -394,6 +394,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             inner: Some(kernel),
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
+            reflection_info,
         });
         k.inner_mut()?.id = s.kernels.insert(Some(k.downgrade()));
         Ok(k)
@@ -545,14 +546,17 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         s.wait_for_submission(true, idx)?;
         Ok(())
     }
+    /// Do work which is queued but not yet started for batching reasons. Currently a NOOP
     pub fn do_busywork(&self) -> SupaSimResult<B, ()> {
-        todo!()
+        Ok(())
     }
+    /// Clear cached resources. This would be useful if the usage requirements have just
+    /// dramatically changed, for example after startup or between different simulations.
+    /// Currently a NOOP.
     pub fn clear_cached_resources(&self) -> SupaSimResult<B, ()> {
         let mut s = self.inner_mut()?;
         unsafe { s.inner.as_mut().unwrap().cleanup_cached_resources() }.map_supasim()?;
-        todo!();
-        //Ok(())
+        Ok(())
     }
 
     #[allow(clippy::type_complexity)]
@@ -562,13 +566,12 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         buffers: &[&BufferSlice<B>],
     ) -> SupaSimResult<B, ()> {
         let _lock = self.inner()?.usage_lock.clone();
-        // TODO: I'm too lazy to fix this unwrap right now
-        let _lock2 = _lock.lock().unwrap();
+        let _lock2 = _lock.lock().map_err(|_| SupaSimError::Other(anyhow!("Failed to get usage lock for a buffer - an error has already occured in another thread")))?;
         let mut buffer_datas = Vec::new();
         for b in buffers {
             b.validate()?;
             b.acquire()?;
-            let buffer = b.buffer.inner()?;
+            let mut buffer = b.buffer.inner_mut()?;
             let _instance = buffer.instance.clone();
             let mut data;
             #[allow(clippy::uninit_vec)]
@@ -581,7 +584,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                         .inner
                         .as_mut()
                         .unwrap()
-                        .read_buffer(buffer.inner.as_ref().unwrap(), b.start, &mut data)
+                        .read_buffer(buffer.inner.as_mut().unwrap(), b.start, &mut data)
                         .map_supasim()?;
                 };
             };
@@ -602,7 +605,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             mapped_buffers.push(mapped);
         }
         closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e))?;
-        // TODO: write buffers that need it
+        // TODO: make this use mapping for backends that support it instead of whatever this nonsense is
         drop(mapped_buffers);
         let _instance = buffers[0].buffer.inner()?.instance.clone();
         let mut instance = _instance.inner_mut()?;
@@ -614,7 +617,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                         .as_mut()
                         .unwrap()
                         .write_buffer(
-                            buffers[i].buffer.inner()?.inner.as_ref().unwrap(),
+                            buffers[i].buffer.inner_mut()?.inner.as_mut().unwrap(),
                             buffers[i].start,
                             b,
                         )
@@ -732,6 +735,7 @@ api_type!(Kernel, {
     instance: SupaSimInstance<B>,
     inner: Option<B::Kernel>,
     id: Index,
+    reflection_info: KernelReflectionInfo,
 },);
 impl<B: hal::Backend> std::fmt::Debug for Kernel<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -875,6 +879,11 @@ impl<B: hal::Backend> CommandRecorder<B> {
         buffers: &[&BufferSlice<B>],
         workgroup_dims: [u32; 3],
     ) -> SupaSimResult<B, ()> {
+        if buffers.len() != kernel.inner()?.reflection_info.num_buffers as usize {
+            return Err(SupaSimError::Other(anyhow!(
+                "Incorrect number of buffers passed to dispatch_kernel"
+            )));
+        }
         for b in buffers {
             b.validate()?;
         }

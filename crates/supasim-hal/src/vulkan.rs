@@ -38,7 +38,7 @@ use std::{
 use thiserror::Error;
 use types::{
     Dag, HalBufferDescriptor, HalBufferType, HalInstanceProperties, KernelReflectionInfo,
-    KernelResourceType, SyncOperations, to_static_lifetime,
+    SyncOperations, to_static_lifetime,
 };
 
 use scopeguard::defer;
@@ -229,7 +229,7 @@ impl Vulkan {
                     }
                 }
             }
-            // TODO: add phyd filtering
+            // TODO: add phyd filtering for extensions
             let (phyd, queue_family_idx) = instance
                 .enumerate_physical_devices()?
                 .iter()
@@ -527,22 +527,16 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     self.device.destroy_shader_module(kernel, None);
                 }
             }
-            let bindings: Vec<_> = reflection
-                .resources
-                .iter()
-                .enumerate()
-                .map(|(i, res)| {
+            let mut bindings = Vec::with_capacity(reflection.num_buffers as usize);
+            for i in 0..reflection.num_buffers {
+                bindings.push(
                     vk::DescriptorSetLayoutBinding::default()
-                        .binding(i as u32)
+                        .binding(i)
                         .descriptor_count(1)
-                        .descriptor_type(match res {
-                            KernelResourceType::Buffer => vk::DescriptorType::STORAGE_BUFFER,
-                            KernelResourceType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
-                            KernelResourceType::Unknown => unreachable!("Unknown kernel binding"),
-                        })
-                        .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                })
-                .collect();
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .stage_flags(vk::ShaderStageFlags::COMPUTE),
+                );
+            }
             let desc_set_layout_create =
                 vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
             let descriptor_set_layout = self
@@ -1000,7 +994,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     #[tracing::instrument(skip(data), fields(len=data.len()))]
     unsafe fn write_buffer(
         &mut self,
-        buffer: &<Vulkan as Backend>::Buffer,
+        buffer: &mut <Vulkan as Backend>::Buffer,
         offset: u64,
         data: &[u8],
     ) -> Result<(), <Vulkan as Backend>::Error> {
@@ -1015,7 +1009,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     #[tracing::instrument(skip(data), fields(len=data.len()))]
     unsafe fn read_buffer(
         &mut self,
-        buffer: &<Vulkan as Backend>::Buffer,
+        buffer: &mut <Vulkan as Backend>::Buffer,
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), <Vulkan as Backend>::Error> {
@@ -1331,7 +1325,12 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         &mut self,
         _instance: &mut <Vulkan as Backend>::Instance,
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        todo!()
+        unsafe {
+            _instance
+                .device
+                .reset_command_buffer(self.inner, vk::CommandBufferResetFlags::RELEASE_RESOURCES)?;
+        }
+        Ok(())
     }
 }
 #[derive(Debug)]

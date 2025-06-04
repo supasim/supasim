@@ -1,4 +1,3 @@
-use anyhow::anyhow;
 /* BEGIN LICENSE
   SupaSim, a GPGPU and simulation toolkit.
   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
@@ -29,6 +28,7 @@ use crate::{
     BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner, Kernel,
     MapSupasimError, SupaSimError, SupaSimInstance, SupaSimResult,
 };
+use anyhow::anyhow;
 
 pub type CommandDag<B> = Dag<BufferCommand<B>>;
 
@@ -325,7 +325,6 @@ pub fn dag_to_command_streams<B: hal::Backend>(
             }
         }
     }
-    // TODO: priority
     Ok(StreamingCommands {
         bind_groups,
         streams: vec![stream],
@@ -507,7 +506,7 @@ pub fn record_command_streams<B: hal::Backend>(
                             after: *after,
                         }
                     }
-                    // TODO: implement stuff for events and bind group updates
+                    // TODO: implement stuff bind group updates
                     _ => unreachable!(),
                 };
                 hal_commands.push(cmd);
@@ -520,7 +519,6 @@ pub fn record_command_streams<B: hal::Backend>(
                 .map_supasim()?
         };
     }
-    // TODO: priority
     Ok(bindgroups)
 }
 pub struct GpuSubmissionInfo<B: hal::Backend> {

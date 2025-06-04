@@ -21,7 +21,7 @@ use types::HalBufferDescriptor;
 
 pub fn example<B: Backend>(mut instance: B::Instance) {
     unsafe {
-        let buffer1 = instance
+        let mut buffer1 = instance
             .create_buffer(&HalBufferDescriptor {
                 size: 16,
                 memory_type: types::HalBufferType::Upload,
@@ -41,7 +41,7 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
                 needs_flush: false,
             })
             .unwrap();
-        let buffer3 = instance
+        let mut buffer3 = instance
             .create_buffer(&HalBufferDescriptor {
                 size: 16,
                 memory_type: types::HalBufferType::Download,
@@ -52,7 +52,7 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
             })
             .unwrap();
         instance
-            .write_buffer(&buffer1, 0, bytemuck::cast_slice(&[1u32, 2, 3, 4]))
+            .write_buffer(&mut buffer1, 0, bytemuck::cast_slice(&[1u32, 2, 3, 4]))
             .unwrap();
         let mut recorder = instance.create_recorder().unwrap();
         recorder
@@ -97,7 +97,7 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
         instance.wait_for_idle().unwrap();
         let mut data = [0u32; 4];
         instance
-            .read_buffer(&buffer3, 0, bytemuck::cast_slice_mut(&mut data))
+            .read_buffer(&mut buffer3, 0, bytemuck::cast_slice_mut(&mut data))
             .unwrap();
         assert!(data == [1, 2, 3, 4,]);
     }

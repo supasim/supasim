@@ -124,7 +124,6 @@ impl GlobalState {
             out
         }
     }
-    // TODO: needs to know whether to minify or do other optimizations
     #[cfg(feature = "opt-valid")]
     fn optimize_spv(module: &[u32], s: SpirvVersion) -> Result<Vec<u8>> {
         use std::{ffi::c_void, ptr::null_mut};
@@ -133,7 +132,9 @@ impl GlobalState {
             let env = Self::env_from_version(s);
             let optim = spirv_tools_sys::spvOptimizerCreate(env);
             let options = spirv_tools_sys::spvOptimizerOptionsCreate();
-            // TODO: Set options here
+            spirv_tools_sys::spvOptimizerOptionsSetPreserveBindings(options, true);
+            spirv_tools_sys::spvOptimizerOptionsSetRunValidator(options, false); // Validation is a separate step
+
             let mut optimized = null_mut();
             let res = spirv_tools_sys::spvOptimizerRun(
                 optim,
@@ -462,15 +463,16 @@ impl GlobalState {
         };
 
         #[cfg(feature = "opt-valid")]
-        if extra_valid && needs_spirv_transpile {
-            let vec = bytecode.as_slice().to_owned();
-            Self::validate_spv(bytemuck::cast_slice(&vec), spirv_version)?;
-        }
-        #[cfg(feature = "opt-valid")]
         if extra_optim && needs_spirv_transpile {
             let vec = bytecode.as_slice().to_owned();
             _other_blob = Self::optimize_spv(bytemuck::cast_slice(&vec), spirv_version)?;
             data = &_other_blob;
+        }
+
+        #[cfg(feature = "opt-valid")]
+        if extra_valid && needs_spirv_transpile {
+            let vec = bytecode.as_slice().to_owned();
+            Self::validate_spv(bytemuck::cast_slice(&vec), spirv_version)?;
         }
 
         #[cfg(feature = "msl-stable-out")]
@@ -551,7 +553,7 @@ impl GlobalState {
         }
         Ok(KernelReflectionInfo {
             workgroup_size,
-            resources: Vec::new(),
+            num_buffers: 0,
             push_constant_len: 0,
         })
     }

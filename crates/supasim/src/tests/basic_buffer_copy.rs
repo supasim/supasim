@@ -1,5 +1,3 @@
-use std::any::TypeId;
-
 /* BEGIN LICENSE
   SupaSim, a GPGPU and simulation toolkit.
   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
@@ -19,6 +17,7 @@ use std::any::TypeId;
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
 use crate::*;
+use std::any::TypeId;
 
 pub fn basic_buffer_copy<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), ()> {
     // Dummy test won't be necessary here

@@ -108,18 +108,22 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
     /// # Safety
     /// * All submitted command recorders using this buffer must have completed
     /// * The buffer must be of type `Upload`
+    /// * No concurrent reads/writes are allowed, hence why it requires a mutable reference to buffer
+    ///   * This is a limitation of wgpu and may be dealt with in the future
     unsafe fn write_buffer(
         &mut self,
-        buffer: &B::Buffer,
+        buffer: &mut B::Buffer,
         offset: u64,
         data: &[u8],
     ) -> Result<(), B::Error>;
     /// # Safety
     /// * All submitted command recorders using this buffer mutably must have completed
     /// * The buffer must be of type `Download`
+    /// * No concurrent reads/writes are allowed, hence why it requires a mutable reference to buffer
+    ///   * This is a limitation of wgpu and may be dealt with in the future
     unsafe fn read_buffer(
         &mut self,
-        buffer: &B::Buffer,
+        buffer: &mut B::Buffer,
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), B::Error>;
