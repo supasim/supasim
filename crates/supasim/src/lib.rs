@@ -559,71 +559,121 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         Ok(())
     }
 
+    /// If the closure panics, memory issues may occur.
+    /// Also, calling any supasim related functions in
+    /// the closure may cause deadlocks.
     #[allow(clippy::type_complexity)]
     pub fn access_buffers(
         &self,
         closure: UserBufferAccessClosure<B>,
         buffers: &[&BufferSlice<B>],
     ) -> SupaSimResult<B, ()> {
-        let _lock = self.inner()?.usage_lock.clone();
+        let (_lock, properties) = {
+            let inner = self.inner()?;
+            (inner.usage_lock.clone(), inner.inner_properties)
+        };
         let _lock2 = _lock.lock().map_err(|_| SupaSimError::Other(anyhow!("Failed to get usage lock for a buffer - an error has already occured in another thread")))?;
-        let mut buffer_datas = Vec::new();
+        let mut mapped_buffers = Vec::with_capacity(buffers.len());
         for b in buffers {
             b.validate()?;
             b.acquire()?;
-            let mut buffer = b.buffer.inner_mut()?;
-            let _instance = buffer.instance.clone();
-            let mut data;
-            #[allow(clippy::uninit_vec)]
-            {
-                data = Vec::with_capacity(b.len as usize);
-                unsafe {
-                    data.set_len(b.len as usize);
-                    _instance
-                        .inner_mut()?
-                        .inner
-                        .as_mut()
-                        .unwrap()
-                        .read_buffer(buffer.inner.as_mut().unwrap(), b.start, &mut data)
-                        .map_supasim()?;
-                };
-            };
-            buffer_datas.push(data);
         }
-        let mut mapped_buffers = Vec::new();
-        for (i, a) in buffer_datas.iter_mut().enumerate() {
-            let b = &buffers[i];
-            let mapped = MappedBuffer {
-                instance: self.clone(),
-                inner: a.as_mut_ptr(),
-                len: b.len,
-                buffer: b.buffer.inner()?.id,
-                has_mut: b.needs_mut,
-                was_used_mut: false,
-                _p: Default::default(),
-            };
-            mapped_buffers.push(mapped);
-        }
-        closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e))?;
-        // TODO: make this use mapping for backends that support it instead of whatever this nonsense is
-        drop(mapped_buffers);
-        let _instance = buffers[0].buffer.inner()?.instance.clone();
-        let mut instance = _instance.inner_mut()?;
-        for (i, b) in buffer_datas.iter().enumerate() {
-            unsafe {
-                if buffers[i].needs_mut {
+        if properties.map_buffers {
+            let mut instance = self.inner_mut()?;
+            #[allow(clippy::never_loop)]
+            for &b in buffers {
+                let mut buffer_inner = b.buffer.inner_mut()?;
+                let mapping = unsafe {
                     instance
                         .inner
                         .as_mut()
                         .unwrap()
-                        .write_buffer(
-                            buffers[i].buffer.inner_mut()?.inner.as_mut().unwrap(),
-                            buffers[i].start,
-                            b,
-                        )
+                        .map_buffer(buffer_inner.inner.as_mut().unwrap())
+                        .map_supasim()?
+                };
+                mapped_buffers.push(MappedBuffer {
+                    instance: self.clone(),
+                    inner: unsafe { mapping.add(b.start as usize) },
+                    len: b.len,
+                    buffer_align: buffer_inner.create_info.contents_align,
+                    has_mut: b.needs_mut,
+                    was_used_mut: false,
+                    _p: Default::default(),
+                });
+            }
+            // Memory issues if we don't unmap I guess
+            let error = closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e));
+            drop(mapped_buffers);
+            for b in buffers {
+                let mut buffer_inner = b.buffer.inner_mut()?;
+                unsafe {
+                    instance
+                        .inner
+                        .as_mut()
+                        .unwrap()
+                        .unmap_buffer(buffer_inner.inner.as_mut().unwrap())
                         .map_supasim()?;
                 }
+                // Unmap all the buffers
             }
+            error?;
+        } else {
+            let mut buffer_datas = Vec::new();
+            for b in buffers {
+                let mut buffer = b.buffer.inner_mut()?;
+                let _instance = buffer.instance.clone();
+                let mut data;
+                #[allow(clippy::uninit_vec)]
+                {
+                    data = Vec::with_capacity(b.len as usize);
+                    unsafe {
+                        data.set_len(b.len as usize);
+                        _instance
+                            .inner_mut()?
+                            .inner
+                            .as_mut()
+                            .unwrap()
+                            .read_buffer(buffer.inner.as_mut().unwrap(), b.start, &mut data)
+                            .map_supasim()?;
+                    };
+                };
+                buffer_datas.push(data);
+            }
+            for (i, a) in buffer_datas.iter_mut().enumerate() {
+                let b = &buffers[i];
+                let mapped = MappedBuffer {
+                    instance: self.clone(),
+                    inner: a.as_mut_ptr(),
+                    len: b.len,
+                    buffer_align: b.buffer.inner()?.create_info.contents_align,
+                    has_mut: b.needs_mut,
+                    was_used_mut: false,
+                    _p: Default::default(),
+                };
+                mapped_buffers.push(mapped);
+            }
+            // Memory issues if we don't unmap I guess
+            let error = closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e));
+            drop(mapped_buffers);
+            let _instance = buffers[0].buffer.inner()?.instance.clone();
+            let mut instance = _instance.inner_mut()?;
+            for (i, b) in buffer_datas.iter().enumerate() {
+                unsafe {
+                    if buffers[i].needs_mut {
+                        instance
+                            .inner
+                            .as_mut()
+                            .unwrap()
+                            .write_buffer(
+                                buffers[i].buffer.inner_mut()?.inner.as_mut().unwrap(),
+                                buffers[i].start,
+                                b,
+                            )
+                            .map_supasim()?;
+                    }
+                }
+            }
+            error?;
         }
         for b in buffers {
             b.release()?;
@@ -988,31 +1038,15 @@ pub struct MappedBuffer<'a, B: hal::Backend> {
     instance: SupaSimInstance<B>,
     inner: *mut u8,
     len: u64,
-    buffer: Index,
+    buffer_align: u64,
     has_mut: bool,
     was_used_mut: bool,
     _p: PhantomData<&'a ()>,
 }
 impl<B: hal::Backend> MappedBuffer<'_, B> {
-    fn buffer_align(&self) -> SupaSimResult<B, u64> {
-        // This code lol... maybe I need to do some major refactor this is gross
-        let _instance = self.instance.inner()?;
-        let a = _instance
-            .buffers
-            .get(self.buffer)
-            .as_ref()
-            .ok_or(SupaSimError::AlreadyDestroyed)?
-            .as_ref();
-        Ok(a.ok_or(SupaSimError::AlreadyDestroyed)?
-            .upgrade()?
-            .inner()?
-            .create_info
-            .contents_align)
-    }
     pub fn readable<T: bytemuck::Pod>(&self) -> SupaSimResult<B, &[T]> {
-        let buffer_align = self.buffer_align()?;
         let s = unsafe { std::slice::from_raw_parts(self.inner, self.len as usize) };
-        if (s.len() % size_of::<T>()) == 0 && (s.len() as u64 % buffer_align) == 0 {
+        if (s.len() % size_of::<T>()) == 0 && (s.len() as u64 % self.buffer_align) == 0 {
             Ok(bytemuck::cast_slice(s))
         } else {
             Err(SupaSimError::BufferRegionNotValid)
@@ -1023,9 +1057,8 @@ impl<B: hal::Backend> MappedBuffer<'_, B> {
             return Err(SupaSimError::BufferRegionNotValid);
         }
         self.was_used_mut = true;
-        let buffer_align = self.buffer_align()?;
         let s = unsafe { std::slice::from_raw_parts_mut(self.inner, self.len as usize) };
-        if (s.len() % size_of::<T>()) == 0 && (s.len() as u64 % buffer_align) == 0 {
+        if (s.len() % size_of::<T>()) == 0 && (s.len() as u64 % self.buffer_align) == 0 {
             Ok(bytemuck::cast_slice_mut(s))
         } else {
             Err(SupaSimError::BufferRegionNotValid)

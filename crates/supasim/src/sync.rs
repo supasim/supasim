@@ -226,10 +226,6 @@ pub fn dag_to_command_streams<B: hal::Backend>(
         layers.pop();
         let nodes = dag.raw_nodes();
         for (i, layer) in layers.into_iter().enumerate() {
-            println!("Layer {}", i);
-            for &j in &layer {
-                println!("\t{:?}", dag[NodeIndex::new(j)]);
-            }
             // No synchronization needed for the first layer
             // This following code is bad. More barriers than needed are used, and the first layer isn't actually skipped.
             // I suspect this is because the first layer has a kind of "root" dummy node
@@ -262,7 +258,6 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                         });
                     } else {
                         for buffer in &cmd.buffers {
-                            println!("Also inserting barrier for buffer");
                             let id = buffer.buffer.inner()?.id;
                             stream.commands.push(HalCommandBuilder::MemoryBarrier {
                                 resource: id,

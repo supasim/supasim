@@ -110,6 +110,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
     /// * The buffer must be of type `Upload`
     /// * No concurrent reads/writes are allowed, hence why it requires a mutable reference to buffer
     ///   * This is a limitation of wgpu and may be dealt with in the future
+    /// * No mapped pointers may be used to access the same data ranges concurrently
     unsafe fn write_buffer(
         &mut self,
         buffer: &mut B::Buffer,
@@ -127,6 +128,14 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), B::Error>;
+    /// # Safety
+    /// * Map buffer may be called multiple times to obtain multiple pointers
+    /// * Unmap buffer invalidates all such pointers
+    /// * Writing to a mapped upload buffer is illegal(except on unified memory systems)
+    unsafe fn map_buffer(&mut self, buffer: &mut B::Buffer) -> Result<*mut u8, B::Error>;
+    /// # Safety
+    /// * All mapped pointers are invalidated
+    unsafe fn unmap_buffer(&mut self, buffer: &mut B::Buffer) -> Result<(), B::Error>;
     /// # Safety
     /// * The resources must correspond with the kernel and its layout
     unsafe fn create_bind_group(

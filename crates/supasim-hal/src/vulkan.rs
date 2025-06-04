@@ -973,6 +973,22 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         Ok(())
     }
     #[tracing::instrument]
+    unsafe fn map_buffer(
+        &mut self,
+        buffer: &mut <Vulkan as Backend>::Buffer,
+    ) -> Result<*mut u8, <Vulkan as Backend>::Error> {
+        Ok(buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8)
+    }
+    #[tracing::instrument]
+    unsafe fn unmap_buffer(
+        &mut self,
+        buffer: &mut <Vulkan as Backend>::Buffer,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        // Unmapping isn't necessary on vulkan as long as the mapped pointer isn't used
+        // while it could be modified elsewhere
+        Ok(())
+    }
+    #[tracing::instrument]
     unsafe fn create_semaphore(&mut self) -> std::result::Result<VulkanSemaphore, VulkanError> {
         unsafe {
             let mut next = vk::SemaphoreTypeCreateInfo::default()

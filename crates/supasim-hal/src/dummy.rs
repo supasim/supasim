@@ -149,6 +149,20 @@ impl BackendInstance<Dummy> for DummyResource {
         Ok(())
     }
 
+    unsafe fn map_buffer(
+        &mut self,
+        buffer: &mut <Dummy as Backend>::Buffer,
+    ) -> Result<*mut u8, <Dummy as Backend>::Error> {
+        Ok(std::ptr::null_mut())
+    }
+
+    unsafe fn unmap_buffer(
+        &mut self,
+        buffer: &mut <Dummy as Backend>::Buffer,
+    ) -> Result<(), <Dummy as Backend>::Error> {
+        Ok(())
+    }
+
     unsafe fn create_bind_group(
         &mut self,
         kernel: &mut <Dummy as Backend>::Kernel,

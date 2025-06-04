@@ -35,7 +35,7 @@ pub use ::wgpu;
 /// * Buffer mapping is weird. Expect to see simple reads/writes of dormant buffers blocking a device for the most recent submission.
 /// * CPU->GPU synchronization is impossible, as semaphores are not actually exposed
 /// * Any error should immediately result in a panic
-/// * Expanding on the previous point, OOM issues are an immediate crash
+/// * Expanding on the previous point, OOM issues are at best an immediate crash
 #[derive(Clone, Copy, Debug)]
 pub struct Wgpu;
 impl Backend for Wgpu {
@@ -133,7 +133,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             semaphore_signal: false,
             // TODO: detect unified memory
             is_unified_memory: self.unified_memory,
-            map_buffers: false,
+            map_buffers: true,
         }
     }
 
@@ -378,6 +378,59 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     }
 
     #[tracing::instrument]
+    unsafe fn map_buffer(
+        &mut self,
+        buffer: &mut <Wgpu as Backend>::Buffer,
+    ) -> Result<*mut u8, <Wgpu as Backend>::Error> {
+        let ptr = match &mut buffer.mapped_slice {
+            Some(slice) => slice.as_mut_ptr(),
+            None => {
+                // Fuck it. Transmute is to not worry about lifetimes.
+                // Current wgpu implementation only need the lifetime for
+                // the reference to the inner buffer, not needing mut.
+                // Since the inner buffer lives as long as the WgpuBuffer,
+                // and will never be used mutably until it is destroyed
+                // with the WgpuBuffer itself, this should be safe.
+                unsafe {
+                    buffer.slice = Some(std::mem::transmute::<
+                        wgpu::BufferSlice<'_>,
+                        wgpu::BufferSlice<'static>,
+                    >(buffer.inner.slice(..)));
+                }
+                buffer.slice.as_ref().unwrap().map_async(
+                    if buffer.map_mut.unwrap() {
+                        wgpu::MapMode::Write
+                    } else {
+                        wgpu::MapMode::Read
+                    },
+                    |_| (),
+                );
+                // In theory map_async will go through after doing this kind of blocking wait.
+                // This might change in the future, making wgpu a volatile backend.
+                // Also, this is dumb as shit.
+                self.device.poll(wgpu::PollType::Wait)?;
+                // Now that we know that the slice will "live forever", we can get its mapped range which
+                // will likewise "live forever". I told you I knew what I was doing, borrow checker!
+                buffer.mapped_slice = Some(buffer.slice.as_mut().unwrap().get_mapped_range_mut());
+                buffer.mapped_slice.as_mut().unwrap().as_mut_ptr()
+            }
+        };
+
+        Ok(ptr)
+    }
+
+    #[tracing::instrument]
+    unsafe fn unmap_buffer(
+        &mut self,
+        buffer: &mut <Wgpu as Backend>::Buffer,
+    ) -> Result<(), <Wgpu as Backend>::Error> {
+        buffer.mapped_slice = None;
+        buffer.slice = None;
+        buffer.inner.unmap();
+        Ok(())
+    }
+
+    #[tracing::instrument]
     unsafe fn create_bind_group(
         &mut self,
         kernel: &mut <Wgpu as Backend>::Kernel,
@@ -455,59 +508,6 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     #[tracing::instrument]
     unsafe fn destroy(self) -> Result<(), <Wgpu as Backend>::Error> {
         // Destroyed on drop
-        Ok(())
-    }
-}
-impl WgpuInstance {
-    #[tracing::instrument]
-    unsafe fn map_buffer(
-        &mut self,
-        buffer: &mut WgpuBuffer,
-    ) -> Result<*mut u8, <Wgpu as Backend>::Error> {
-        let ptr = match &mut buffer.mapped_slice {
-            Some(slice) => slice.as_mut_ptr(),
-            None => {
-                // Fuck it. Transmute is to not worry about lifetimes.
-                // Current wgpu implementation only need the lifetime for
-                // the reference to the inner buffer, not needing mut.
-                // Since the inner buffer lives as long as the WgpuBuffer,
-                // and will never be used mutably until it is destroyed
-                // with the WgpuBuffer itself, this should be safe.
-                unsafe {
-                    buffer.slice = Some(std::mem::transmute::<
-                        wgpu::BufferSlice<'_>,
-                        wgpu::BufferSlice<'static>,
-                    >(buffer.inner.slice(..)));
-                }
-                buffer.slice.as_ref().unwrap().map_async(
-                    if buffer.map_mut.unwrap() {
-                        wgpu::MapMode::Write
-                    } else {
-                        wgpu::MapMode::Read
-                    },
-                    |_| (),
-                );
-                // In theory map_async will go through after doing this kind of blocking wait.
-                // This might change in the future, making wgpu a volatile backend.
-                // Also, this is dumb as shit.
-                self.device.poll(wgpu::PollType::Wait)?;
-                // Now that we know that the slice will "live forever", we can get its mapped range which
-                // will likewise "live forever". I told you I knew what I was doing, borrow checker!
-                buffer.mapped_slice = Some(buffer.slice.as_mut().unwrap().get_mapped_range_mut());
-                buffer.mapped_slice.as_mut().unwrap().as_mut_ptr()
-            }
-        };
-
-        Ok(ptr)
-    }
-    #[tracing::instrument]
-    unsafe fn unmap_buffer(
-        &mut self,
-        buffer: &mut <Wgpu as Backend>::Buffer,
-    ) -> Result<(), <Wgpu as Backend>::Error> {
-        buffer.mapped_slice = None;
-        buffer.slice = None;
-        buffer.inner.unmap();
         Ok(())
     }
 }
