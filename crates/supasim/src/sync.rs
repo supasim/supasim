@@ -16,7 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
-use hal::{BackendInstance, CommandRecorder, GpuResource};
+use hal::{BackendInstance, CommandRecorder, HalBufferSlice};
 use std::collections::{HashMap, hash_map::Entry};
 use std::ops::Deref;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -366,7 +366,7 @@ pub fn record_command_streams<B: hal::Backend>(
         let mut resources = Vec::new();
         for (i, res) in resource_locks.iter().enumerate() {
             let range = bg.items[i].1;
-            resources.push(hal::GpuResource::Buffer {
+            resources.push(hal::HalBufferSlice {
                 buffer: res.inner.as_ref().unwrap(),
                 offset: range.start,
                 len: range.len,
@@ -493,7 +493,7 @@ pub fn record_command_streams<B: hal::Backend>(
                     },
                     HalCommandBuilder::MemoryBarrier { offset, len, .. } => {
                         hal::BufferCommand::MemoryBarrier {
-                            resource: GpuResource::Buffer {
+                            buffer: HalBufferSlice {
                                 buffer: get_buffer(),
                                 offset: *offset,
                                 len: *len,

@@ -132,7 +132,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
     unsafe fn create_bind_group(
         &mut self,
         kernel: &mut B::Kernel,
-        resources: &[GpuResource<B>],
+        buffers: &[HalBufferSlice<B>],
     ) -> Result<B::BindGroup, B::Error>;
     /// # Safety
     /// * If the backend doesn't support easily updatable bind groups, all command recorders using this bind group must've been cleared
@@ -140,7 +140,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
         &mut self,
         bg: &mut B::BindGroup,
         kernel: &mut B::Kernel,
-        resources: &[GpuResource<B>],
+        buffers: &[HalBufferSlice<B>],
     ) -> Result<(), B::Error>;
     /// # Safety
     /// * All command recorders using this bind group must've been cleared
@@ -167,24 +167,13 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
     unsafe fn destroy(self) -> Result<(), B::Error>;
 }
 #[derive(Debug)]
-pub enum GpuResource<'a, B: Backend> {
-    Buffer {
-        buffer: &'a B::Buffer,
-        offset: u64,
-        len: u64,
-    },
-}
-impl<'a, B: Backend> GpuResource<'a, B> {
-    pub fn buffer(buffer: &'a B::Buffer, offset: u64, size: u64) -> Self {
-        Self::Buffer {
-            buffer,
-            offset,
-            len: size,
-        }
-    }
+pub struct HalBufferSlice<'a, B: Backend> {
+    pub buffer: &'a B::Buffer,
+    pub offset: u64,
+    pub len: u64,
 }
 pub struct CommandSynchronization<'a, B: Backend> {
-    pub resources_needing_sync: &'a mut [&'a mut GpuResource<'a, B>],
+    pub buffers_needing_sync: &'a mut [&'a mut HalBufferSlice<'a, B>],
     pub out_semaphore: Option<(&'a mut B::Semaphore, u64)>,
 }
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
@@ -194,7 +183,6 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
     unsafe fn record_dag(
         &mut self,
         instance: &mut B::Instance,
-        resources: &[&GpuResource<B>],
         dag: &mut Dag<BufferCommand<B>>,
     ) -> Result<(), B::Error>;
     /// # Safety
@@ -262,11 +250,11 @@ pub enum BufferCommand<'a, B: Backend> {
         after: SyncOperations,
     },
     /// Only for vulkan like synchronization. Consecutive pipeline and memory barriers will combine. Memory barriers without such a pipeline barrier are undefined behavior.
-    MemoryBarrier { resource: GpuResource<'a, B> },
+    MemoryBarrier { buffer: HalBufferSlice<'a, B> },
     /// Writes a bind group. This is for instances with the `easily_update_bind_groups` property.
     UpdateBindGroup {
         bg: &'a B::BindGroup,
         kernel: &'a B::Kernel,
-        resources: &'a [GpuResource<'a, B>],
+        buffers: &'a [HalBufferSlice<'a, B>],
     },
 }

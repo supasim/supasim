@@ -17,7 +17,7 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
 use crate::{
-    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, GpuResource,
+    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, HalBufferSlice,
     Kernel, KernelCache, RecorderSubmitInfo, Semaphore,
 };
 use ash::{
@@ -37,8 +37,8 @@ use std::{
 };
 use thiserror::Error;
 use types::{
-    Dag, HalBufferDescriptor, HalBufferType, HalInstanceProperties, KernelReflectionInfo,
-    SyncOperations, to_static_lifetime,
+    Dag, HalBufferType, HalInstanceProperties, KernelReflectionInfo, SyncOperations,
+    to_static_lifetime,
 };
 
 use scopeguard::defer;
@@ -755,7 +755,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     unsafe fn create_bind_group(
         &mut self,
         kernel: &mut VulkanKernel,
-        resources: &[crate::GpuResource<Vulkan>],
+        resources: &[crate::HalBufferSlice<Vulkan>],
     ) -> Result<VulkanBindGroup, VulkanError> {
         let mut pool_idx = None;
         for (i, pool) in kernel.descriptor_pools.iter_mut().enumerate() {
@@ -772,39 +772,13 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .map(|s| s.max_size * 2)
                 .unwrap_or(8)
                 .next_power_of_two();
-            let mut num_buffers = 0;
-            let mut num_uniform_buffers = 0;
-            for res in resources.iter() {
-                match res {
-                    GpuResource::Buffer {
-                        buffer:
-                            VulkanBuffer {
-                                create_info: HalBufferDescriptor { uniform, .. },
-                                ..
-                            },
-                        ..
-                    } => {
-                        if *uniform {
-                            num_uniform_buffers += 1;
-                        } else {
-                            num_buffers += 1;
-                        }
-                    }
-                }
-            }
+            let num_buffers = resources.len() as u32;
             let mut sizes = vec![];
             if num_buffers > 0 {
                 sizes.push(
                     vk::DescriptorPoolSize::default()
                         .descriptor_count(num_buffers * next_size)
                         .ty(vk::DescriptorType::STORAGE_BUFFER),
-                );
-            }
-            if num_uniform_buffers > 0 {
-                sizes.push(
-                    vk::DescriptorPoolSize::default()
-                        .descriptor_count(num_uniform_buffers * next_size)
-                        .ty(vk::DescriptorType::UNIFORM_BUFFER),
                 );
             }
             unsafe {
@@ -847,7 +821,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         &mut self,
         bg: &mut <Vulkan as Backend>::BindGroup,
         _kernel: &mut <Vulkan as Backend>::Kernel,
-        resources: &[GpuResource<Vulkan>],
+        resources: &[HalBufferSlice<Vulkan>],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         let mut writes = Vec::with_capacity(resources.len());
         let mut buffer_infos = Vec::with_capacity(resources.len());
@@ -856,40 +830,17 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .dst_set(bg.inner)
                 .descriptor_count(1)
                 .dst_binding(i as u32)
-                .descriptor_type(match resource {
-                    GpuResource::Buffer {
-                        buffer:
-                            VulkanBuffer {
-                                create_info: HalBufferDescriptor { uniform, .. },
-                                ..
-                            },
-                        ..
-                    } => {
-                        if *uniform {
-                            vk::DescriptorType::UNIFORM_BUFFER
-                        } else {
-                            vk::DescriptorType::STORAGE_BUFFER
-                        }
-                    }
-                });
-            match resource {
-                GpuResource::Buffer {
-                    buffer,
-                    offset,
-                    len: size,
-                } => {
-                    buffer_infos.push(
-                        vk::DescriptorBufferInfo::default()
-                            .buffer(buffer.buffer)
-                            .offset(*offset)
-                            .range(*size),
-                    );
-                    // TODO: fix (potentially) Undefined behavior
-                    write = write.buffer_info(std::slice::from_ref(unsafe {
-                        to_static_lifetime(&buffer_infos[buffer_infos.len() - 1])
-                    }));
-                }
-            }
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER);
+            buffer_infos.push(
+                vk::DescriptorBufferInfo::default()
+                    .buffer(resource.buffer.buffer)
+                    .offset(resource.offset)
+                    .range(resource.len),
+            );
+            // TODO: fix (potentially) Undefined behavior
+            write = write.buffer_info(std::slice::from_ref(unsafe {
+                to_static_lifetime(&buffer_infos[buffer_infos.len() - 1])
+            }));
             writes.push(write);
         }
         unsafe {
@@ -1193,8 +1144,8 @@ impl VulkanCommandRecorder {
         for command in commands {
             match command {
                 BufferCommand::MemoryBarrier {
-                    resource:
-                        GpuResource::Buffer {
+                    buffer:
+                        HalBufferSlice {
                             buffer,
                             offset,
                             len: size,
@@ -1288,7 +1239,6 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
     unsafe fn record_dag(
         &mut self,
         _instance: &mut <Vulkan as Backend>::Instance,
-        _resources: &[&GpuResource<Vulkan>],
         _dag: &mut Dag<crate::BufferCommand<Vulkan>>,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unreachable!()

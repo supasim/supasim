@@ -71,7 +71,7 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
                         after: types::SyncOperations::Transfer,
                     },
                     BufferCommand::MemoryBarrier {
-                        resource: supasim_hal::GpuResource::Buffer {
+                        buffer: supasim_hal::HalBufferSlice {
                             buffer: &buffer2,
                             offset: 0,
                             len: 16,

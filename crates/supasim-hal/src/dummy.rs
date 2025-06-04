@@ -152,7 +152,7 @@ impl BackendInstance<Dummy> for DummyResource {
     unsafe fn create_bind_group(
         &mut self,
         kernel: &mut <Dummy as Backend>::Kernel,
-        resources: &[crate::GpuResource<Dummy>],
+        buffers: &[crate::HalBufferSlice<Dummy>],
     ) -> Result<<Dummy as Backend>::BindGroup, <Dummy as Backend>::Error> {
         Ok(DummyResource)
     }
@@ -161,7 +161,7 @@ impl BackendInstance<Dummy> for DummyResource {
         &mut self,
         bg: &mut <Dummy as Backend>::BindGroup,
         kernel: &mut <Dummy as Backend>::Kernel,
-        resources: &[crate::GpuResource<Dummy>],
+        buffers: &[crate::HalBufferSlice<Dummy>],
     ) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
     }
@@ -207,7 +207,6 @@ impl CommandRecorder<Dummy> for DummyResource {
     unsafe fn record_dag(
         &mut self,
         instance: &mut <Dummy as Backend>::Instance,
-        resources: &[&crate::GpuResource<Dummy>],
         dag: &mut types::Dag<crate::BufferCommand<Dummy>>,
     ) -> Result<(), <Dummy as Backend>::Error> {
         unreachable!()

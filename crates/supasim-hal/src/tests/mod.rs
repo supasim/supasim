@@ -19,10 +19,9 @@ END LICENSE */
 use std::any::TypeId;
 use std::sync::LazyLock;
 
-use crate as hal;
+use crate::{self as hal, HalBufferSlice};
 use crate::{
-    Backend, BackendInstance, BufferCommand, CommandRecorder, GpuResource, RecorderSubmitInfo,
-    Semaphore,
+    Backend, BackendInstance, BufferCommand, CommandRecorder, RecorderSubmitInfo, Semaphore,
 };
 use kernels::KernelCompileOptions;
 use log::info;
@@ -140,13 +139,31 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
         let bind_group = instance.create_bind_group(
             &mut kernel,
             &[
-                GpuResource::buffer(&sb1, 0, 16),
-                GpuResource::buffer(&sb2, 0, 16),
-                GpuResource::buffer(&sbout, 0, 16),
+                HalBufferSlice {
+                    buffer: &sb1,
+                    offset: 0,
+                    len: 16,
+                },
+                HalBufferSlice {
+                    buffer: &sb2,
+                    offset: 0,
+                    len: 16,
+                },
+                HalBufferSlice {
+                    buffer: &sbout,
+                    offset: 0,
+                    len: 16,
+                },
             ],
         )?;
-        let bind_group2 =
-            instance.create_bind_group(&mut kernel2, &[GpuResource::buffer(&sbout, 0, 16)])?;
+        let bind_group2 = instance.create_bind_group(
+            &mut kernel2,
+            &[HalBufferSlice {
+                buffer: &sbout,
+                offset: 0,
+                len: 16,
+            }],
+        )?;
 
         let mut recorder = instance.create_recorder()?;
 
@@ -177,21 +194,21 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
                     len: 4,
                 },
                 BufferCommand::MemoryBarrier {
-                    resource: GpuResource::Buffer {
+                    buffer: HalBufferSlice {
                         buffer: &sb1,
                         offset: 0,
                         len: 16,
                     },
                 },
                 BufferCommand::MemoryBarrier {
-                    resource: GpuResource::Buffer {
+                    buffer: HalBufferSlice {
                         buffer: &sb2,
                         offset: 0,
                         len: 16,
                     },
                 },
                 BufferCommand::MemoryBarrier {
-                    resource: GpuResource::Buffer {
+                    buffer: HalBufferSlice {
                         buffer: &sbout,
                         offset: 0,
                         len: 16,
@@ -212,7 +229,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
                     after: SyncOperations::ComputeDispatch,
                 },
                 BufferCommand::MemoryBarrier {
-                    resource: GpuResource::Buffer {
+                    buffer: HalBufferSlice {
                         buffer: &sbout,
                         offset: 0,
                         len: 16,
@@ -225,7 +242,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
                     workgroup_dims: [1, 1, 1],
                 },
                 BufferCommand::MemoryBarrier {
-                    resource: GpuResource::Buffer {
+                    buffer: HalBufferSlice {
                         buffer: &sbout,
                         offset: 0,
                         len: 16,

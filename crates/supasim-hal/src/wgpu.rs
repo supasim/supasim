@@ -17,8 +17,6 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
 
-#![allow(unused_variables, dead_code)]
-
 use crate::*;
 pub use ::wgpu::Backends;
 use std::cell::UnsafeCell;
@@ -102,7 +100,7 @@ impl Wgpu {
                 trace: wgpu::Trace::Off,
             }))?;
         Ok(WgpuInstance {
-            instance,
+            _instance: instance,
             adapter,
             device,
             queue,
@@ -113,7 +111,7 @@ impl Wgpu {
 
 #[derive(Debug)]
 pub struct WgpuInstance {
-    instance: wgpu::Instance,
+    _instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -179,7 +177,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             });
         let bgl = pipeline.get_bind_group_layout(0);
         Ok(WgpuKernel {
-            kernel,
+            _kernel: kernel,
             pipeline,
             bgl,
         })
@@ -321,7 +319,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             mapped_at_creation: false,
         });
         Ok(WgpuBuffer {
-            inner: buffer.clone(),
+            inner: Box::new(buffer.clone()),
             slice: None,
             mapped_slice: None,
             map_mut: match alloc_info.memory_type {
@@ -383,24 +381,18 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     unsafe fn create_bind_group(
         &mut self,
         kernel: &mut <Wgpu as Backend>::Kernel,
-        resources: &[GpuResource<Wgpu>],
+        resources: &[HalBufferSlice<Wgpu>],
     ) -> Result<<Wgpu as Backend>::BindGroup, <Wgpu as Backend>::Error> {
         let entries: Vec<wgpu::BindGroupEntry<'_>> = resources
             .iter()
             .enumerate()
-            .map(|(i, a)| wgpu::BindGroupEntry {
+            .map(|(i, slice)| wgpu::BindGroupEntry {
                 binding: i as u32,
-                resource: match a {
-                    GpuResource::Buffer {
-                        buffer,
-                        offset,
-                        len: size,
-                    } => wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &buffer.inner,
-                        offset: *offset,
-                        size: NonZero::<u64>::new(*size),
-                    }),
-                },
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &slice.buffer.inner,
+                    offset: slice.offset,
+                    size: NonZero::<u64>::new(slice.len),
+                }),
             })
             .collect();
         let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -416,9 +408,12 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         &mut self,
         bg: &mut <Wgpu as Backend>::BindGroup,
         kernel: &mut <Wgpu as Backend>::Kernel,
-        resources: &[GpuResource<Wgpu>],
+        resources: &[HalBufferSlice<Wgpu>],
     ) -> Result<(), <Wgpu as Backend>::Error> {
-        *bg = unsafe { self.create_bind_group(kernel, resources)? };
+        unsafe {
+            let new_bg = self.create_bind_group(kernel, resources)?;
+            self.destroy_bind_group(kernel, std::mem::replace(bg, new_bg))?;
+        }
         // TODO: work on bindless
         todo!()
     }
@@ -518,15 +513,16 @@ impl WgpuInstance {
 }
 #[derive(Debug)]
 pub struct WgpuKernel {
-    kernel: wgpu::ShaderModule,
+    _kernel: wgpu::ShaderModule,
     pipeline: wgpu::ComputePipeline,
     bgl: wgpu::BindGroupLayout,
 }
 impl Kernel<Wgpu> for WgpuKernel {}
 #[derive(Debug)]
 pub struct WgpuBuffer {
-    /// This can't be moved for fear of UB
-    inner: wgpu::Buffer,
+    /// This can't be moved for fear of UB lol. This is because buffer
+    /// mapping expands the lifetime of a reference to it to 'static.
+    inner: Box<wgpu::Buffer>,
     slice: Option<wgpu::BufferSlice<'static>>,
     mapped_slice: Option<wgpu::BufferViewMut<'static>>,
     map_mut: Option<bool>,
@@ -570,7 +566,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                 BufferCommand::DispatchKernel {
                     kernel,
                     bind_group,
-                    push_constants,
+                    push_constants: _,
                     workgroup_dims,
                 } => {
                     let mut pass = r.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -585,11 +581,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                         workgroup_dims[2],
                     );
                 }
-                BufferCommand::UpdateBindGroup {
-                    bg,
-                    kernel,
-                    resources,
-                } => {
+                BufferCommand::UpdateBindGroup { .. } => {
                     unreachable!()
                 }
                 BufferCommand::MemoryBarrier { .. } | BufferCommand::PipelineBarrier { .. } => (),
@@ -602,7 +594,6 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
     unsafe fn record_dag(
         &mut self,
         instance: &mut <Wgpu as Backend>::Instance,
-        resources: &[&GpuResource<Wgpu>],
         dag: &mut Dag<BufferCommand<Wgpu>>,
     ) -> Result<(), <Wgpu as Backend>::Error> {
         unreachable!()
