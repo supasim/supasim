@@ -33,6 +33,7 @@ mod sync;
 
 use hal::{BackendInstance as _, RecorderSubmitInfo, Semaphore};
 use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -255,6 +256,8 @@ macro_rules! api_type {
                 }
             }
             impl<B: hal::Backend> Eq for $name <B> {}
+            unsafe impl<B: hal::Backend> Send for $name <B> {}
+            unsafe impl<B: hal::Backend> Sync for $name <B> {}
             impl<B: hal::Backend> AsId<$name <B>> for [<$name Inner>] <B> {}
             impl<B: hal::Backend> AsId<[<$name Inner>] <B>> for $name <B> {}
             impl<B: hal::Backend> AsId<$name <B>> for [<$name Weak>] <B> {}
@@ -327,6 +330,8 @@ api_type!(SupaSimInstance, {
     hal_command_recorders: Vec<B::CommandRecorder>,
     /// User accessible kernel compiler state
     kernel_compiler: kernels::GlobalState,
+    /// Used so that buffers can be prevented from being used multiple threads without blocking the entire instance
+    usage_lock: Arc<Mutex<()>>,
 },);
 impl<B: hal::Backend> SupaSimInstance<B> {
     pub fn from_hal(mut hal: B::Instance) -> Self {
@@ -347,6 +352,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             submitted_command_recorders_start: 1,
             hal_command_recorders: Vec::new(),
             kernel_compiler: kernels::GlobalState::new_from_env().unwrap(),
+            usage_lock: Arc::new(Mutex::new(())),
         })
     }
     pub fn properties(&self) -> SupaSimResult<B, InstanceProperties> {
@@ -555,6 +561,9 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         closure: UserBufferAccessClosure<B>,
         buffers: &[&BufferSlice<B>],
     ) -> SupaSimResult<B, ()> {
+        let _lock = self.inner()?.usage_lock.clone();
+        // TODO: I'm too lazy to fix this unwrap right now
+        let _lock2 = _lock.lock().unwrap();
         let mut buffer_datas = Vec::new();
         for b in buffers {
             b.validate()?;
@@ -616,6 +625,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         for b in buffers {
             b.release()?;
         }
+        drop(_lock2);
         Ok(())
     }
 }
@@ -685,18 +695,8 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
         while self.submitted_command_recorders_start <= id {
             let thing = &mut self.submitted_command_recorders[0];
             if force_wait {
-                unsafe {
-                    thing
-                        .used_semaphore
-                        .wait(self.inner.as_mut().unwrap())
-                        .map_supasim()?
-                };
-            } else if !unsafe {
-                thing
-                    .used_semaphore
-                    .is_signalled(self.inner.as_mut().unwrap())
-                    .map_supasim()?
-            } {
+                unsafe { thing.used_semaphore.wait().map_supasim()? };
+            } else if !unsafe { thing.used_semaphore.is_signalled().map_supasim()? } {
                 return Ok(false);
             }
             //unsafe { self.inner.wait_for_idle().map_supasim()? };
@@ -722,11 +722,7 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
                 }
             }
             self.hal_command_recorders.extend(item.command_recorders);
-            unsafe {
-                item.used_semaphore
-                    .reset(self.inner.as_mut().unwrap())
-                    .map_supasim()?
-            };
+            unsafe { item.used_semaphore.reset().map_supasim()? };
             self.unused_semaphores.push(item.used_semaphore);
         }
         Ok(true)
@@ -1059,3 +1055,8 @@ impl<B: hal::Backend> WaitHandle<B> {
         Ok(())
     }
 }
+#[allow(clippy::type_complexity)]
+pub type CpuCallback<B> = (
+    Box<dyn Fn(Vec<MappedBuffer<B>>) -> Result<(), SupaSimError<B>>>,
+    Vec<Buffer<B>>,
+);

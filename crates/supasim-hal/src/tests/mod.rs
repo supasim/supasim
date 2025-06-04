@@ -251,7 +251,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             signal_semaphore: Some(&fun_semaphore),
         }))?;
         info!("Submitted recorders");
-        fun_semaphore.wait(&mut instance)?;
+        fun_semaphore.wait()?;
 
         let mut res = [3u32, 0, 0, 0];
         instance.read_buffer(&download_buffer, 0, bytemuck::cast_slice_mut(&mut res))?;

@@ -34,7 +34,9 @@ pub use wgpu::Wgpu;
 use types::*;
 
 /// Backend traits should not have their own destructors, as higher level operations may replace them with uninitialized memory by destructor time.
-pub trait Backend: Sized + std::fmt::Debug + Clone + 'static {
+/// # Safety (general)
+/// * All types are assumed to be safely send/sync
+pub trait Backend: Sized + std::fmt::Debug + Clone + Send + Sync + 'static {
     type Instance: BackendInstance<Self>;
     type Kernel: Kernel<Self>;
     type Buffer: Buffer<Self>;
@@ -45,7 +47,7 @@ pub trait Backend: Sized + std::fmt::Debug + Clone + 'static {
 
     type Error: Error<Self>;
 }
-pub trait BackendInstance<B: Backend<Instance = Self>> {
+pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
     fn get_properties(&mut self) -> HalInstanceProperties;
     /// # Safety
     /// * The kernel code must be valid
@@ -181,7 +183,7 @@ pub struct CommandSynchronization<'a, B: Backend> {
     pub resources_needing_sync: &'a mut [&'a mut GpuResource<'a, B>],
     pub out_semaphore: Option<(&'a mut B::Semaphore, u64)>,
 }
-pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
+pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
     /// # Safety
     /// * Must only be called on instances with `SyncMode::Dag`
     /// * The recorder must not have had any record command since being created or cleared
@@ -203,23 +205,25 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>> {
     /// * The recorder must not be queued and incomplete on the GPU
     unsafe fn clear(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
-pub trait Kernel<B: Backend<Kernel = Self>> {}
-pub trait Buffer<B: Backend<Buffer = Self>> {}
-pub trait BindGroup<B: Backend<BindGroup = Self>> {}
-pub trait KernelCache<B: Backend<KernelCache = Self>> {}
-pub trait Semaphore<B: Backend<Semaphore = Self>> {
+pub trait Kernel<B: Backend<Kernel = Self>>: Send + Sync {}
+pub trait Buffer<B: Backend<Buffer = Self>>: Send + Sync {}
+pub trait BindGroup<B: Backend<BindGroup = Self>>: Send + Sync {}
+pub trait KernelCache<B: Backend<KernelCache = Self>>: Send + Sync {}
+pub trait Semaphore<B: Backend<Semaphore = Self>>: Send + Sync {
     /// # Safety
     /// * The semaphore must be signalled by some already submitted command recorder
-    unsafe fn wait(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
+    unsafe fn wait(&mut self) -> Result<(), B::Error>;
     /// # Safety
     /// Currently no safety requirements. This is subject to change
-    unsafe fn is_signalled(&mut self, instance: &mut B::Instance) -> Result<bool, B::Error>;
+    unsafe fn is_signalled(&mut self) -> Result<bool, B::Error>;
     /// # Safety
     /// * The semaphore must not be waited on by any CPU side wait command
-    unsafe fn signal(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
+    unsafe fn signal(&mut self) -> Result<(), B::Error>;
+    /// Note that in most implementations this won't actually result in any underlying API changes.
     /// # Safety
-    /// * The semaphore must not be waited on by any CPU side wait command or signalled by any CPU or GPU side signal command
-    unsafe fn reset(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
+    /// * The semaphore must not be waited on by any CPU or GPU side wait command
+    /// * The semaphore must signalled by any CPU or GPU side signal command
+    unsafe fn reset(&mut self) -> Result<(), B::Error>;
 }
 #[derive(Debug)]
 pub struct RecorderSubmitInfo<'a, B: Backend> {

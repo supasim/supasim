@@ -20,12 +20,23 @@ END LICENSE */
 
 use crate::*;
 pub use ::wgpu::Backends;
+use std::cell::UnsafeCell;
 use std::fmt::Debug;
-use std::{borrow::Cow, cell::Cell, num::NonZero};
+use std::{borrow::Cow, num::NonZero};
 use wgpu::RequestAdapterError;
 
 pub use ::wgpu;
 
+/// # Overview
+/// The wgpu backend. It supports many backends on many systems, including WebGPU and metal. It also includes extra validation and synchronization.
+/// Any issues not reported by wgpu on this backend are considered a bug.
+///
+/// ## Issues/workarounds
+/// * Synchronization is nonexistent. Commands can be assumed to execute in order and not in parallel. For this reason performance is awful.
+/// * Buffer mapping is weird. Expect to see simple reads/writes of dormant buffers blocking a device for the most recent submission.
+/// * CPU->GPU synchronization is impossible, as semaphores are not actually exposed
+/// * Any error should immediately result in a panic
+/// * Expanding on the previous point, OOM issues are an immediate crash
 #[derive(Clone, Copy, Debug)]
 pub struct Wgpu;
 impl Backend for Wgpu {
@@ -123,6 +134,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             semaphore_signal: false,
             // TODO: detect unified memory
             is_unified_memory: self.unified_memory,
+            map_buffers: false,
         }
     }
 
@@ -253,7 +265,9 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         }));
         for info in infos {
             if let Some(signal) = info.signal_semaphore {
-                signal.inner.set(Some(idx.clone()));
+                unsafe {
+                    *signal.inner.get() = Some(idx.clone());
+                }
             }
         }
         Ok(())
@@ -307,7 +321,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         });
         Ok(WgpuBuffer {
             inner: buffer.clone(),
-            mapped_ptr: Cell::new(None),
+            mapped_ptr: UnsafeCell::new(None),
             map_mut: match alloc_info.memory_type {
                 HalBufferType::Download => Some(false),
                 HalBufferType::Upload => Some(true),
@@ -319,9 +333,9 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     #[tracing::instrument]
     unsafe fn destroy_buffer(
         &mut self,
-        buffer: <Wgpu as Backend>::Buffer,
+        mut buffer: <Wgpu as Backend>::Buffer,
     ) -> Result<(), <Wgpu as Backend>::Error> {
-        if buffer.mapped_ptr.get().is_some() {
+        if buffer.mapped_ptr.get_mut().is_some() {
             buffer.inner.unmap();
         }
         // Destroyed on drop
@@ -335,7 +349,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         offset: u64,
         data: &[u8],
     ) -> Result<(), <Wgpu as Backend>::Error> {
-        let was_mapped = buffer.mapped_ptr.get().is_some();
+        let was_mapped = unsafe { *buffer.mapped_ptr.get() }.is_some();
         let ptr = unsafe { self.map_buffer(buffer)?.add(offset as usize) };
         unsafe { std::slice::from_raw_parts_mut(ptr, data.len()) }.clone_from_slice(data);
         if !was_mapped {
@@ -351,7 +365,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), <Wgpu as Backend>::Error> {
-        let was_mapped = buffer.mapped_ptr.get().is_some();
+        let was_mapped = unsafe { *buffer.mapped_ptr.get() }.is_some();
         let ptr = unsafe { self.map_buffer(buffer)?.add(offset as usize) };
         unsafe { data.clone_from_slice(std::slice::from_raw_parts(ptr, data.len())) };
         if !was_mapped {
@@ -418,7 +432,8 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         &mut self,
     ) -> Result<<Wgpu as Backend>::Semaphore, <Wgpu as Backend>::Error> {
         Ok(WgpuSemaphore {
-            inner: Cell::new(None),
+            inner: UnsafeCell::new(None),
+            device: self.device.clone(),
         })
     }
 
@@ -449,7 +464,7 @@ impl WgpuInstance {
         buffer: &<Wgpu as Backend>::Buffer,
     ) -> Result<*mut u8, <Wgpu as Backend>::Error> {
         // Todo: this is awful code
-        let ptr = match buffer.mapped_ptr.get() {
+        let ptr = match unsafe { *buffer.mapped_ptr.get() } {
             Some(ptr) => ptr,
             None => {
                 let slice = buffer.inner.slice(..);
@@ -465,7 +480,9 @@ impl WgpuInstance {
                 slice.get_mapped_range_mut().as_mut_ptr()
             }
         };
-        buffer.mapped_ptr.set(Some(ptr));
+        unsafe {
+            *buffer.mapped_ptr.get() = Some(ptr);
+        }
         Ok(ptr)
     }
     #[tracing::instrument]
@@ -474,7 +491,10 @@ impl WgpuInstance {
         buffer: &<Wgpu as Backend>::Buffer,
     ) -> Result<(), <Wgpu as Backend>::Error> {
         buffer.inner.unmap();
-        buffer.mapped_ptr.set(None);
+
+        unsafe {
+            *buffer.mapped_ptr.get() = None;
+        }
         Ok(())
     }
 }
@@ -488,9 +508,11 @@ impl Kernel<Wgpu> for WgpuKernel {}
 #[derive(Debug)]
 pub struct WgpuBuffer {
     inner: wgpu::Buffer,
-    mapped_ptr: Cell<Option<*mut u8>>,
+    mapped_ptr: UnsafeCell<Option<*mut u8>>,
     map_mut: Option<bool>,
 }
+unsafe impl Send for WgpuBuffer {}
+unsafe impl Sync for WgpuBuffer {}
 impl Buffer<Wgpu> for WgpuBuffer {}
 #[derive(Debug)]
 pub enum WgpuCommandRecorder {
@@ -585,8 +607,11 @@ pub struct WgpuKernelCache {
 }
 impl KernelCache<Wgpu> for WgpuKernelCache {}
 pub struct WgpuSemaphore {
-    inner: Cell<Option<wgpu::SubmissionIndex>>,
+    inner: UnsafeCell<Option<wgpu::SubmissionIndex>>,
+    device: wgpu::Device,
 }
+unsafe impl Send for WgpuSemaphore {}
+unsafe impl Sync for WgpuSemaphore {}
 impl Debug for WgpuSemaphore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("WgpuSemaphore")
@@ -594,25 +619,18 @@ impl Debug for WgpuSemaphore {
 }
 impl Semaphore<Wgpu> for WgpuSemaphore {
     #[tracing::instrument]
-    unsafe fn wait(
-        &mut self,
-        instance: &mut <Wgpu as Backend>::Instance,
-    ) -> Result<(), <Wgpu as Backend>::Error> {
+    unsafe fn wait(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
         if let Some(a) = self.inner.get_mut() {
-            instance
-                .device
+            self.device
                 .poll(wgpu::PollType::WaitForSubmissionIndex(a.clone()))?;
         }
-        self.inner.set(None);
+        *self.inner.get_mut() = None;
         Ok(())
     }
     #[tracing::instrument]
-    unsafe fn is_signalled(
-        &mut self,
-        instance: &mut <Wgpu as Backend>::Instance,
-    ) -> Result<bool, <Wgpu as Backend>::Error> {
+    unsafe fn is_signalled(&mut self) -> Result<bool, <Wgpu as Backend>::Error> {
         if self.inner.get_mut().is_some() {
-            Ok(instance
+            Ok(self
                 .device
                 .poll(wgpu::PollType::Poll)
                 .is_ok_and(|a| a.wait_finished()))
@@ -621,17 +639,11 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
         }
     }
     #[tracing::instrument]
-    unsafe fn signal(
-        &mut self,
-        instance: &mut <Wgpu as Backend>::Instance,
-    ) -> Result<(), <Wgpu as Backend>::Error> {
+    unsafe fn signal(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
         unreachable!()
     }
-    unsafe fn reset(
-        &mut self,
-        instance: &mut <Wgpu as Backend>::Instance,
-    ) -> Result<(), <Wgpu as Backend>::Error> {
-        self.inner.set(None);
+    unsafe fn reset(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
+        *self.inner.get_mut() = None;
         Ok(())
     }
 }

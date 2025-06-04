@@ -30,8 +30,11 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
 };
 use log::{Level, warn};
-use std::fmt::{Debug, Display};
-use std::{borrow::Cow, cell::Cell, ffi::CStr, sync::Mutex};
+use std::{borrow::Cow, cell::Cell, ffi::CStr, ops::Deref, sync::Mutex};
+use std::{
+    fmt::{Debug, Display},
+    sync::Arc,
+};
 use thiserror::Error;
 use types::{
     Dag, HalBufferDescriptor, HalBufferType, HalInstanceProperties, KernelReflectionInfo,
@@ -40,6 +43,25 @@ use types::{
 
 use scopeguard::defer;
 
+/// # Overview
+/// The default backend for platforms on which it is supported.
+///
+/// ## Issues/workarounds
+/// * Invalid usage won't be caught without debug enabled
+/// * Even with debug enabled, validation is likely to miss many issues
+/// * Debug requires more system libraries than just default GPU drivers - Vulkan SDK is recommended
+/// * Improper usage can cause serious issues, including
+///   * Hanging indefinitely on waits
+///   * Memory corruption
+///   * Memory leaks
+///   * Segfaults and the like
+/// * Very dependent on extensions
+///   * Some very esoteric systems may not support the required extensions
+///   * Systems with untested combinations of extensions might experience other issues
+/// * Detection of unified memory systems is flawed
+/// * Synchronization is good but may miss opportunities for parallelization on some systems
+///   * Cuda is much stronger in this regard
+///   * Lack of multi queue support is a big reason for this
 #[derive(Debug, Clone)]
 pub struct Vulkan;
 impl Backend for Vulkan {
@@ -163,7 +185,7 @@ impl Vulkan {
                         }
                     }
                     None => {
-                        return Err(VulkanError::VulkanVersionTooLow("1.0".to_owned()));
+                        return Err(VulkanError::VulkanVersionTooLow("1.0.0".to_owned()));
                     }
                 }
             }
@@ -219,6 +241,8 @@ impl Vulkan {
                         .iter()
                         .enumerate()
                         .find_map(|(i, q)| {
+                            // Compute queues are guaranteed to support transfer even if not explicitly stated
+                            // TODO: prefer compute only queues(ignore universal queues)
                             if q.queue_flags.contains(vk::QueueFlags::COMPUTE) {
                                 Some(i)
                             } else {
@@ -285,7 +309,6 @@ impl Vulkan {
         debug_callback: Option<vk::DebugUtilsMessengerEXT>,
     ) -> Result<VulkanInstance, VulkanError> {
         unsafe {
-            let err = Cell::new(true);
             let alloc = Allocator::new(&AllocatorCreateDesc {
                 instance: instance.clone(),
                 device: device.clone(),
@@ -309,16 +332,10 @@ impl Vulkan {
                     .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
                 None,
             )?;
-            defer! {
-                if err.get() {
-                    device.destroy_command_pool(pool, None);
-                }
-            }
+            let sync_device = khr::synchronization2::Device::new(&instance, &device);
             let s = VulkanInstance {
-                sync2_dev: khr::synchronization2::Device::new(&instance, &device),
                 entry,
                 instance,
-                device: device.clone(),
                 phyd,
                 alloc: Mutex::new(alloc),
                 queue,
@@ -326,8 +343,11 @@ impl Vulkan {
                 command_pool: pool,
                 unused_command_buffers: Vec::new(),
                 debug: debug_callback,
+                device: Arc::new(DeviceFunctions {
+                    device,
+                    sync2_device: sync_device,
+                }),
             };
-            err.set(false);
             Ok(s)
         }
     }
@@ -387,7 +407,6 @@ impl crate::Error<Vulkan> for VulkanError {
 pub struct VulkanInstance {
     entry: ash::Entry,
     instance: ash::Instance,
-    device: ash::Device,
     phyd: vk::PhysicalDevice,
     alloc: Mutex<Allocator>,
     queue: vk::Queue,
@@ -395,7 +414,7 @@ pub struct VulkanInstance {
     command_pool: vk::CommandPool,
     unused_command_buffers: Vec<vk::CommandBuffer>,
     debug: Option<vk::DebugUtilsMessengerEXT>,
-    sync2_dev: khr::synchronization2::Device,
+    device: Arc<DeviceFunctions>,
 }
 impl Debug for VulkanInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -471,6 +490,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             },
             easily_update_bind_groups: false,
             semaphore_signal: true,
+            map_buffers: true,
             // TODO: add unified memory detection
             is_unified_memory,
         }
@@ -1019,6 +1039,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             Ok(VulkanSemaphore {
                 inner: self.device.create_semaphore(&create_info, None)?,
                 current_value: 0,
+                device: self.device.clone(),
             })
         }
     }
@@ -1216,7 +1237,8 @@ impl VulkanCommandRecorder {
         let dependency_info = vk::DependencyInfoKHR::default().buffer_memory_barriers(&barriers);
         unsafe {
             instance
-                .sync2_dev
+                .device
+                .sync2_device
                 .cmd_pipeline_barrier2(cb, &dependency_info)
         };
         Ok(())
@@ -1334,15 +1356,13 @@ impl KernelCache<Vulkan> for VulkanPipelineCache {}
 pub struct VulkanSemaphore {
     inner: vk::Semaphore,
     current_value: u64,
+    device: Arc<DeviceFunctions>,
 }
 impl Semaphore<Vulkan> for VulkanSemaphore {
     #[tracing::instrument]
-    unsafe fn wait(
-        &mut self,
-        instance: &mut VulkanInstance,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn wait(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            instance.device.wait_semaphores(
+            self.device.wait_semaphores(
                 &vk::SemaphoreWaitInfo::default()
                     .semaphores(std::slice::from_ref(&self.inner))
                     .values(&[self.current_value + 1]),
@@ -1352,22 +1372,16 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         Ok(())
     }
     #[tracing::instrument]
-    unsafe fn is_signalled(
-        &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
-    ) -> Result<bool, <Vulkan as Backend>::Error> {
+    unsafe fn is_signalled(&mut self) -> Result<bool, <Vulkan as Backend>::Error> {
         Ok(
-            unsafe { instance.device.get_semaphore_counter_value(self.inner)? }
+            unsafe { self.device.get_semaphore_counter_value(self.inner)? }
                 == self.current_value + 1,
         )
     }
     #[tracing::instrument]
-    unsafe fn signal(
-        &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn signal(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            instance.device.signal_semaphore(
+            self.device.signal_semaphore(
                 &vk::SemaphoreSignalInfo::default()
                     .semaphore(self.inner)
                     .value(self.current_value + 1),
@@ -1375,11 +1389,23 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         }
         Ok(())
     }
-    unsafe fn reset(
-        &mut self,
-        _instance: &mut <Vulkan as Backend>::Instance,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn reset(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         self.current_value += 1;
         Ok(())
+    }
+}
+pub struct DeviceFunctions {
+    device: ash::Device,
+    sync2_device: khr::synchronization2::Device,
+}
+impl Debug for DeviceFunctions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.device.handle())
+    }
+}
+impl Deref for DeviceFunctions {
+    type Target = ash::Device;
+    fn deref(&self) -> &Self::Target {
+        &self.device
     }
 }

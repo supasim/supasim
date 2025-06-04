@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 /* BEGIN LICENSE
   SupaSim, a GPGPU and simulation toolkit.
   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
@@ -19,6 +20,8 @@ END LICENSE */
 use hal::{BackendInstance, CommandRecorder, GpuResource};
 use std::collections::{HashMap, hash_map::Entry};
 use std::ops::Deref;
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Condvar, Mutex};
 use thunderdome::Index;
 use types::{Dag, NodeIndex, SyncOperations, Walker};
 
@@ -519,4 +522,111 @@ pub fn record_command_streams<B: hal::Backend>(
     }
     // TODO: priority
     Ok(bindgroups)
+}
+pub struct GpuSubmissionInfo<B: hal::Backend> {
+    commands: Vec<BufferCommand<B>>,
+}
+/// A job for the CPU to run when some GPU work has completed or immediately, without ideally blocking for long
+pub enum SemaphoreFinishedJob<B: hal::Backend> {
+    DestroyBuffer(B::Buffer),
+    DestroyHostBuffer(B::Buffer),
+}
+/// An event sent to the sync thread
+pub enum SendSyncThreadEvent<B: hal::Backend> {
+    /// GPU work to be done when all prior work is completed
+    AddSubmission(GpuSubmissionInfo<B>),
+    /// CPU work to be completed when a submission is done or immediately if it is already complete
+    AddFinishedJob(usize, SemaphoreFinishedJob<B>),
+    /// CPU work to be completed between submissions
+    CpuWork,
+    WaitFinishAndShutdown,
+}
+pub struct SyncThreadSharedData<B: hal::Backend> {
+    next_job: usize,
+    previous_cpu_completed_too: bool,
+    error: Option<SupaSimError<B>>,
+}
+pub type SyncThreadShared<B> = Arc<(Mutex<SyncThreadSharedData<B>>, Condvar)>;
+struct SyncThreadData<B: hal::Backend> {
+    shared: SyncThreadShared<B>,
+    receiver: Receiver<SendSyncThreadEvent<B>>,
+    instance: SupaSimInstance<B>,
+}
+pub struct SyncThreadHandle<B: hal::Backend> {
+    sender: Mutex<Sender<SendSyncThreadEvent<B>>>,
+    shared_thread: SyncThreadShared<B>,
+}
+pub fn create_sync_thread<B: hal::Backend>(instance: SupaSimInstance<B>) -> SyncThreadHandle<B> {
+    let shared_thread = SyncThreadSharedData::<B> {
+        next_job: 0,
+        previous_cpu_completed_too: true,
+        error: None,
+    };
+    let shared = Arc::new((Mutex::new(shared_thread), Condvar::new()));
+    let (sender, receiver) = channel::<SendSyncThreadEvent<B>>();
+    let data = SyncThreadData {
+        shared: shared.clone(),
+        receiver,
+        instance,
+    };
+    std::thread::spawn(|| {
+        let mut data = data;
+        if let Err(e) = sync_thread_main(&mut data) {
+            if let Ok(mut lock) = data.shared.0.lock() {
+                lock.error = Some(e);
+                data.shared.1.notify_all();
+            } else {
+                panic!(
+                    "Sync thread encountered error after main thread panicked: {}",
+                    e
+                );
+            }
+        }
+    });
+    SyncThreadHandle {
+        sender: Mutex::new(sender),
+        shared_thread: shared,
+    }
+}
+enum Work {
+    GpuSubmission,
+    CpuWork,
+}
+fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<(), SupaSimError<B>> {
+    // Each submission in the queue is some GPU or CPU work
+    /*let mut queue = Vec::<Work>::new();
+    let mut submitted = VecDeque::<crate::SubmittedCommandRecorder<B>>::new();
+    let mut current_submission_index = 0;*/
+
+    let mut temp_submission_vec = Vec::new();
+    loop {
+        let mut should_shutdown = false;
+        temp_submission_vec.clear();
+        loop {
+            match logic.receiver.try_recv() {
+                Ok(event) => match event {
+                    SendSyncThreadEvent::AddFinishedJob(..) => todo!(),
+                    SendSyncThreadEvent::AddSubmission(submission) => {
+                        temp_submission_vec.push(submission)
+                    }
+                    SendSyncThreadEvent::CpuWork => todo!(),
+                    SendSyncThreadEvent::WaitFinishAndShutdown => should_shutdown = true,
+                },
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    return Err(SupaSimError::Other(anyhow!(
+                        "Main thread disconnected from sync thread"
+                    )));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+            }
+        }
+        if should_shutdown {
+            todo!();
+        }
+        if !temp_submission_vec.is_empty() {
+            let instance = logic.instance.inner_mut()?;
+            // Unwrap is OK here because if there was an error somewhere it would've been handled elsewhere
+            let _lock = instance.usage_lock.lock().unwrap();
+        }
+    }
 }

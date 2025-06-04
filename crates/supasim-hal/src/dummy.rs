@@ -20,6 +20,8 @@ END LICENSE */
 
 use crate::*;
 
+/// # Overview
+/// Testing backend to allow certain tests to run even without GPU support on a system
 #[derive(Clone, Debug)]
 pub struct Dummy;
 impl Backend for Dummy {
@@ -49,6 +51,7 @@ impl BackendInstance<Dummy> for DummyResource {
             },
             easily_update_bind_groups: true,
             semaphore_signal: true,
+            map_buffers: true,
             is_unified_memory: false,
         }
     }
@@ -219,28 +222,16 @@ impl CommandRecorder<Dummy> for DummyResource {
 impl KernelCache<Dummy> for DummyResource {}
 impl BindGroup<Dummy> for DummyResource {}
 impl Semaphore<Dummy> for DummyResource {
-    unsafe fn wait(
-        &mut self,
-        instance: &mut <Dummy as Backend>::Instance,
-    ) -> Result<(), <Dummy as Backend>::Error> {
+    unsafe fn wait(&mut self) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
     }
-    unsafe fn is_signalled(
-        &mut self,
-        instance: &mut <Dummy as Backend>::Instance,
-    ) -> Result<bool, <Dummy as Backend>::Error> {
+    unsafe fn is_signalled(&mut self) -> Result<bool, <Dummy as Backend>::Error> {
         Ok(false)
     }
-    unsafe fn signal(
-        &mut self,
-        instance: &mut <Dummy as Backend>::Instance,
-    ) -> Result<(), <Dummy as Backend>::Error> {
+    unsafe fn signal(&mut self) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
     }
-    unsafe fn reset(
-        &mut self,
-        instance: &mut <Dummy as Backend>::Instance,
-    ) -> Result<(), <Dummy as Backend>::Error> {
+    unsafe fn reset(&mut self) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
     }
 }

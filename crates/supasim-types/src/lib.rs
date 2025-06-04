@@ -159,8 +159,10 @@ pub struct HalInstanceProperties {
     pub kernel_lang: KernelTarget,
     /// Whether the backend supports bind groups that are updated while commands are already recorded. This makes bind groups far cheaper to use
     pub easily_update_bind_groups: bool,
-    /// Whether the backend supports CPU->GPU communication using semaphore signalling.
+    /// Whether the backend supports CPU->GPU synchronization using CPU-side semaphore signalling.
     pub semaphore_signal: bool,
+    /// Whether the backend supports directly mapping host memory on the CPU instead of just reads/writes
+    pub map_buffers: bool,
     /// Whether the system has unified memory, which provides opportunities for optimization, particularly on apple, mobile, or other devices with integrated GPUs
     pub is_unified_memory: bool,
 }
