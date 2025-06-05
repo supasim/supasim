@@ -162,7 +162,7 @@ pub struct HalInstanceProperties {
     /// Whether the backend supports CPU->GPU synchronization using CPU-side semaphore signalling.
     pub semaphore_signal: bool,
     /// Whether the backend supports directly mapping host memory on the CPU instead of just reads/writes.
-    /// This is false only on some wgpu backends such as WebGPU itself
+    /// This is likely false only on some wgpu backends such as WebGPU itself. Currently it is true everywhere.
     pub map_buffers: bool,
     /// Whether the system has unified memory, which provides opportunities for optimization, particularly on apple, mobile, or other devices with integrated GPUs
     pub is_unified_memory: bool,

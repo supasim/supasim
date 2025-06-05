@@ -664,6 +664,9 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             }
             // Memory issues if we don't unmap I guess
             let error = closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e));
+            for b in buffer_datas {
+                std::mem::forget(b);
+            }
             drop(mapped_buffers);
             error?;
         }

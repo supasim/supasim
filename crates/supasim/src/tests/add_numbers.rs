@@ -128,9 +128,14 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
     // * Buffer3 gets the result of adding from 1 and 2
     // * Buffer3 gets copied into download buffer
     // * It should have value [8,10,12,14]
-    let mut download_data = [50, 50, 50, 50];
-    download_buffer.read::<u32>(0, &mut download_data).unwrap();
-    assert_eq!(download_data, [6, 8, 10, 12]);
+    assert_eq!(
+        download_buffer
+            .access(0, 16, false)
+            .unwrap()
+            .readable::<u32>()
+            .unwrap(),
+        [6, 8, 10, 12]
+    );
     Ok(())
 }
 
