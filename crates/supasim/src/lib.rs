@@ -142,6 +142,18 @@ impl<B: hal::Backend> BufferSlice<B> {
             Err(SupaSimError::BufferRegionNotValid)
         }
     }
+    pub fn validate_with_align(&self, align: u64) -> SupaSimResult<B, ()> {
+        let b = self.buffer.inner()?;
+        // This is explained in MappedBuffer associated methods
+        if (align % b.create_info.contents_align) == 0
+            && (self.start % align) == 0
+            && (self.len % align) == 0
+        {
+            Ok(())
+        } else {
+            Err(SupaSimError::BufferRegionNotValid)
+        }
+    }
     pub fn entire_buffer(buffer: &Buffer<B>, needs_mut: bool) -> SupaSimResult<B, Self> {
         Ok(Self {
             buffer: buffer.clone(),
@@ -439,6 +451,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             host_using: Vec::new(),
             create_info: *desc,
             last_used: 0,
+            num_used_mappings: 0,
         });
         b.inner_mut()?.id = s.buffers.insert(Some(b.downgrade()));
         Ok(b)
@@ -583,6 +596,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             #[allow(clippy::never_loop)]
             for &b in buffers {
                 let mut buffer_inner = b.buffer.inner_mut()?;
+                buffer_inner.num_used_mappings += 1;
                 let mapping = unsafe {
                     instance
                         .inner
@@ -598,24 +612,16 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                     buffer_align: buffer_inner.create_info.contents_align,
                     has_mut: b.needs_mut,
                     was_used_mut: false,
+                    in_buffer_offset: b.start,
+                    buffer: b.buffer.clone(),
+                    vec_capacity: None,
                     _p: Default::default(),
                 });
             }
+            drop(instance);
             // Memory issues if we don't unmap I guess
             let error = closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e));
             drop(mapped_buffers);
-            for b in buffers {
-                let mut buffer_inner = b.buffer.inner_mut()?;
-                unsafe {
-                    instance
-                        .inner
-                        .as_mut()
-                        .unwrap()
-                        .unmap_buffer(buffer_inner.inner.as_mut().unwrap())
-                        .map_supasim()?;
-                }
-                // Unmap all the buffers
-            }
             error?;
         } else {
             let mut buffer_datas = Vec::new();
@@ -641,13 +647,17 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             }
             for (i, a) in buffer_datas.iter_mut().enumerate() {
                 let b = &buffers[i];
+                let buffer_inner = b.buffer.inner()?;
                 let mapped = MappedBuffer {
                     instance: self.clone(),
                     inner: a.as_mut_ptr(),
                     len: b.len,
-                    buffer_align: b.buffer.inner()?.create_info.contents_align,
+                    buffer_align: buffer_inner.create_info.contents_align,
                     has_mut: b.needs_mut,
                     was_used_mut: false,
+                    in_buffer_offset: b.start,
+                    buffer: b.buffer.clone(),
+                    vec_capacity: Some(a.capacity()),
                     _p: Default::default(),
                 };
                 mapped_buffers.push(mapped);
@@ -655,24 +665,6 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             // Memory issues if we don't unmap I guess
             let error = closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e));
             drop(mapped_buffers);
-            let _instance = buffers[0].buffer.inner()?.instance.clone();
-            let mut instance = _instance.inner_mut()?;
-            for (i, b) in buffer_datas.iter().enumerate() {
-                unsafe {
-                    if buffers[i].needs_mut {
-                        instance
-                            .inner
-                            .as_mut()
-                            .unwrap()
-                            .write_buffer(
-                                buffers[i].buffer.inner_mut()?.inner.as_mut().unwrap(),
-                                buffers[i].start,
-                                b,
-                            )
-                            .map_supasim()?;
-                    }
-                }
-            }
             error?;
         }
         for b in buffers {
@@ -998,7 +990,124 @@ api_type!(Buffer, {
     host_using: Vec<BufferRange>,
     create_info: BufferDescriptor,
     last_used: u64,
+    num_used_mappings: u64,
 },);
+impl<B: hal::Backend> Buffer<B> {
+    pub fn write<T: bytemuck::Pod>(&self, offset: usize, data: &[T]) -> SupaSimResult<B, ()> {
+        let slice = BufferSlice {
+            buffer: self.clone(),
+            start: offset as u64,
+            len: data.len() as u64,
+            needs_mut: true,
+        };
+        slice.validate_with_align(size_of::<T>() as u64)?;
+        let mut s = self.inner_mut()?;
+        s.num_used_mappings += 1; // This is unnecessary at the moment
+        let _instance = s.instance.clone();
+        let mut instance = _instance.inner_mut()?;
+        let slice = bytemuck::cast_slice::<T, u8>(data);
+        unsafe {
+            instance
+                .inner
+                .as_mut()
+                .unwrap()
+                .write_buffer(s.inner.as_mut().unwrap(), offset as u64, slice)
+                .map_supasim()?;
+        }
+        s.num_used_mappings -= 1;
+        Ok(())
+    }
+    pub fn read<T: bytemuck::Pod>(&self, offset: usize, out: &mut [T]) -> SupaSimResult<B, ()> {
+        let slice = BufferSlice {
+            buffer: self.clone(),
+            start: offset as u64,
+            len: out.len() as u64,
+            needs_mut: false,
+        };
+        slice.validate_with_align(size_of::<T>() as u64)?;
+        let mut s = self.inner_mut()?;
+        let _instance = s.instance.clone();
+        let mut instance = _instance.inner_mut()?;
+        let slice = bytemuck::cast_slice_mut::<T, u8>(out);
+        unsafe {
+            instance
+                .inner
+                .as_mut()
+                .unwrap()
+                .read_buffer(s.inner.as_mut().unwrap(), offset as u64, slice)
+                .map_supasim()?;
+        }
+        Ok(())
+    }
+    pub fn access(
+        &self,
+        offset: usize,
+        len: usize,
+        needs_mut: bool,
+    ) -> SupaSimResult<B, MappedBuffer<B>> {
+        let slice = BufferSlice {
+            buffer: self.clone(),
+            start: offset as u64,
+            len: len as u64,
+            needs_mut,
+        };
+        slice.validate()?;
+        let _instance = self.inner()?.instance.clone();
+        let mut instance = _instance.inner_mut()?;
+        let mut s = self.inner_mut()?;
+        let buffer_align = s.create_info.contents_align;
+        if instance.inner_properties.map_buffers {
+            s.num_used_mappings += 1;
+            let mapped_ptr = unsafe {
+                instance
+                    .inner
+                    .as_mut()
+                    .unwrap()
+                    .map_buffer(s.inner.as_mut().unwrap())
+                    .map_supasim()?
+                    .add(offset)
+            };
+            drop(instance);
+            Ok(MappedBuffer {
+                instance: _instance,
+                inner: mapped_ptr,
+                len: len as u64,
+                has_mut: needs_mut,
+                buffer: slice.buffer,
+                buffer_align,
+                in_buffer_offset: offset as u64,
+                was_used_mut: false,
+                vec_capacity: None,
+                _p: Default::default(),
+            })
+        } else {
+            let mut data = Vec::with_capacity(len);
+            unsafe {
+                instance
+                    .inner
+                    .as_mut()
+                    .unwrap()
+                    .read_buffer(s.inner.as_mut().unwrap(), offset as u64, &mut data)
+                    .map_supasim()?;
+            }
+            drop(instance);
+            let out = Ok(MappedBuffer {
+                instance: _instance,
+                inner: data.as_mut_ptr(),
+                len: len as u64,
+                buffer_align,
+                in_buffer_offset: offset as u64,
+                has_mut: needs_mut,
+                was_used_mut: false,
+                buffer: slice.buffer,
+                vec_capacity: Some(data.capacity()),
+                _p: Default::default(),
+            });
+            std::mem::forget(data);
+            out
+        }
+    }
+}
 impl<B: hal::Backend> std::fmt::Debug for Buffer<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Buffer(undecorated)")
@@ -1034,19 +1143,31 @@ impl<B: hal::Backend> Drop for BufferInner<B> {
     }
 }
 
+/// If the entire buffer isn't the same type you are trying to read, read as bytes first then cast yourself.
+/// SupaSim does checks for alignments and validates offsets with the size of types
 pub struct MappedBuffer<'a, B: hal::Backend> {
     instance: SupaSimInstance<B>,
     inner: *mut u8,
     len: u64,
     buffer_align: u64,
+    in_buffer_offset: u64,
     has_mut: bool,
     was_used_mut: bool,
+    buffer: Buffer<B>,
+    /// Size of the vector in which the data is allocated for non memory mapping scenarios
+    vec_capacity: Option<usize>,
     _p: PhantomData<&'a ()>,
 }
 impl<B: hal::Backend> MappedBuffer<'_, B> {
     pub fn readable<T: bytemuck::Pod>(&self) -> SupaSimResult<B, &[T]> {
         let s = unsafe { std::slice::from_raw_parts(self.inner, self.len as usize) };
-        if (s.len() % size_of::<T>()) == 0 && (s.len() as u64 % self.buffer_align) == 0 {
+        // Length of the slice is a multiple of the length of the type
+        if (self.len % size_of::<T>() as u64) == 0
+        // Length of the type is a multiple of the buffer alignment
+        && (size_of::<T>() as u64 % self.buffer_align) == 0
+            // The offset is reasonable given the size of T
+            && (self.in_buffer_offset % size_of::<T>() as u64) == 0
+        {
             Ok(bytemuck::cast_slice(s))
         } else {
             Err(SupaSimError::BufferRegionNotValid)
@@ -1058,10 +1179,49 @@ impl<B: hal::Backend> MappedBuffer<'_, B> {
         }
         self.was_used_mut = true;
         let s = unsafe { std::slice::from_raw_parts_mut(self.inner, self.len as usize) };
-        if (s.len() % size_of::<T>()) == 0 && (s.len() as u64 % self.buffer_align) == 0 {
+        // Length of the slice is a multiple of the length of the type
+        if (self.len % size_of::<T>() as u64) == 0
+        // Length of the type is a multiple of the buffer alignment
+        && (size_of::<T>() as u64 % self.buffer_align) == 0
+            // The offset is reasonable given the size of T
+            && (self.in_buffer_offset % size_of::<T>() as u64) == 0
+        {
             Ok(bytemuck::cast_slice_mut(s))
         } else {
             Err(SupaSimError::BufferRegionNotValid)
+        }
+    }
+}
+impl<B: hal::Backend> Drop for MappedBuffer<'_, B> {
+    fn drop(&mut self) {
+        let mut instance = self.instance.inner_mut().unwrap();
+        let mut s = self.buffer.inner_mut().unwrap();
+        if instance.inner_properties.map_buffers {
+            s.num_used_mappings -= 1;
+            if s.num_used_mappings == 0 {
+                unsafe {
+                    instance
+                        .inner
+                        .as_mut()
+                        .unwrap()
+                        .unmap_buffer(s.inner.as_mut().unwrap())
+                        .unwrap();
+                }
+            }
+        } else {
+            unsafe {
+                let vec =
+                    Vec::from_raw_parts(self.inner, self.len as usize, self.vec_capacity.unwrap());
+                if self.was_used_mut {
+                    instance
+                        .inner
+                        .as_mut()
+                        .unwrap()
+                        .write_buffer(s.inner.as_mut().unwrap(), self.in_buffer_offset, &vec)
+                        .unwrap();
+                }
+                // And then the vec gets dropped. Tada!
+            }
         }
     }
 }

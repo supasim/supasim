@@ -63,11 +63,12 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
             ..Default::default()
         })
         .unwrap();
-    let cache = if instance.properties().unwrap().supports_pipeline_cache {
-        Some(instance.create_kernel_cache(&[]).unwrap())
-    } else {
-        None
-    };
+    let cache: Option<KernelCache<Backend>> =
+        if instance.properties().unwrap().supports_pipeline_cache {
+            Some(instance.create_kernel_cache(&[]).unwrap())
+        } else {
+            None
+        };
     let global_state = kernels::GlobalState::new_from_env().unwrap();
     let mut spirv = Vec::new();
     let mut reflection_info = global_state
@@ -94,24 +95,9 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
         .compile_kernel(&spirv, reflection_info, cache.as_ref())
         .unwrap();
     let recorder = instance.create_recorder().unwrap();
-    let buffers = [&BufferSlice {
-        buffer: upload_buffer.clone(),
-        start: 0,
-        len: 64,
-        needs_mut: true,
-    }];
 
-    instance
-        .access_buffers(
-            Box::new(|buffers| {
-                buffers[0]
-                    .writeable::<u32>()
-                    .unwrap()
-                    .clone_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 1, 1, 1, 1, 22, 22, 22, 22]);
-                Ok(())
-            }),
-            &buffers,
-        )
+    upload_buffer
+        .write::<u32>(0, &[1, 2, 3, 4, 5, 6, 7, 8, 1, 1, 1, 1, 22, 22, 22, 22])
         .unwrap();
     recorder
         .copy_buffer(upload_buffer.clone(), buffer1.clone(), 0, 0, 16)
@@ -137,27 +123,14 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
         .copy_buffer(buffer3.clone(), download_buffer.clone(), 0, 0, 16)
         .unwrap();
     instance.submit_commands(&mut [recorder]).unwrap();
-    let buffers = [
-        &BufferSlice::entire_buffer(&download_buffer, false).unwrap(),
-        &BufferSlice::entire_buffer(&upload_buffer, false).unwrap(),
-    ];
     // Command summary:
     // * Copy data from upload buffer into 3 used buffers
     // * Buffer3 gets the result of adding from 1 and 2
     // * Buffer3 gets copied into download buffer
     // * It should have value [8,10,12,14]
-    instance
-        .access_buffers(
-            Box::new(|buffers| {
-                for buffer in buffers.iter() {
-                    println!("{:?}", buffer.readable::<u32>()?);
-                }
-                assert_eq!(buffers[0].readable::<u32>()?, [6, 8, 10, 12]);
-                Ok(())
-            }),
-            &buffers,
-        )
-        .unwrap();
+    let mut download_data = [50, 50, 50, 50];
+    download_buffer.read::<u32>(0, &mut download_data).unwrap();
+    assert_eq!(download_data, [6, 8, 10, 12]);
     Ok(())
 }
 
