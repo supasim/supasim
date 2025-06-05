@@ -108,6 +108,12 @@ impl Vulkan {
             level,
             "{message_severity:?}: {message_type:?} [{message_id_name} ({message_id_number})] : {message}\n",
         );
+        #[cfg(test)]
+        if message_severity == vk::DebugUtilsMessageSeverityFlagsEXT::ERROR {
+            panic!(
+                "Vulkan validation error in test. Users of SupaSim should report this as a bug. Error message:\n\t{message_type:?} [{message_id_name} ({message_id_number})] : {message}",
+            )
+        }
 
         vk::FALSE
     }
