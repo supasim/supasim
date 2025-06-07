@@ -1071,6 +1071,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut: true,
         };
         slice.validate_with_align(size_of::<T>() as u64)?;
+        slice.acquire()?;
         let mut s = self.inner_mut()?;
         s.num_used_mappings += 1; // This is unnecessary at the moment
         let _instance = s.instance.clone();
@@ -1095,6 +1096,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut: false,
         };
         slice.validate_with_align(size_of::<T>() as u64)?;
+        slice.acquire()?;
         let mut s = self.inner_mut()?;
         let _instance = s.instance.clone();
         let mut instance = _instance.inner_mut()?;
@@ -1122,6 +1124,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut,
         };
         slice.validate()?;
+        slice.acquire()?;
         let _instance = self.inner()?.instance.clone();
         let mut instance = _instance.inner_mut()?;
         let mut s = self.inner_mut()?;
@@ -1265,6 +1268,13 @@ impl<B: hal::Backend> MappedBuffer<'_, B> {
 impl<B: hal::Backend> Drop for MappedBuffer<'_, B> {
     fn drop(&mut self) {
         let mut instance = self.instance.inner_mut().unwrap();
+        let slice = BufferSlice {
+            buffer: self.buffer.clone(),
+            start: self.in_buffer_offset,
+            len: self.len,
+            needs_mut: self.has_mut,
+        };
+        slice.release().unwrap();
         let mut s = self.buffer.inner_mut().unwrap();
         if instance.inner_properties.map_buffers {
             s.num_used_mappings -= 1;
