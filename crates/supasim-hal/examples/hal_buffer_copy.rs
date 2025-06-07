@@ -29,6 +29,7 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
                 indirect_capable: false,
                 uniform: false,
                 needs_flush: false,
+                min_alignment: 16,
             })
             .unwrap();
         let buffer2 = instance
@@ -39,6 +40,7 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
                 indirect_capable: false,
                 uniform: false,
                 needs_flush: false,
+                min_alignment: 16,
             })
             .unwrap();
         let mut buffer3 = instance
@@ -49,6 +51,7 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
                 indirect_capable: false,
                 uniform: false,
                 needs_flush: false,
+                min_alignment: 16,
             })
             .unwrap();
         instance

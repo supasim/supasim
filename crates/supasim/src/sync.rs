@@ -25,7 +25,7 @@ use thunderdome::Index;
 use types::{Dag, NodeIndex, SyncOperations, Walker};
 
 use crate::{
-    BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner, Kernel,
+    BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner, KernelWeak,
     MapSupasimError, SupaSimError, SupaSimInstance, SupaSimResult,
 };
 use anyhow::anyhow;
@@ -87,6 +87,7 @@ pub struct StreamingCommands {
 #[allow(clippy::type_complexity)]
 pub fn assemble_dag<B: hal::Backend>(
     cr: &mut [&mut CommandRecorderInner<B>],
+    used_kernels: &mut Vec<KernelWeak<B>>,
 ) -> SupaSimResult<B, (CommandDag<B>, HashMap<Index, Vec<BufferRange>>)> {
     let mut buffers_tracker: HashMap<Index, Vec<(BufferRange, usize)>> = HashMap::new();
 
@@ -149,6 +150,10 @@ pub fn assemble_dag<B: hal::Backend>(
                 let buffer = dag[NodeIndex::new(i)].buffers[bf_idx].clone();
                 work_on_buffer(&buffer, &mut dag)?;
             }
+            if let BufferCommandInner::KernelDispatch { kernel, .. } = &dag[NodeIndex::new(i)].inner
+            {
+                used_kernels.push(kernel.downgrade());
+            }
         }
     }
     dag.add_node(BufferCommand {
@@ -170,7 +175,7 @@ pub fn assemble_dag<B: hal::Backend>(
 pub fn record_dag<B: hal::Backend>(
     _dag: &CommandDag<B>,
     _cr: &mut B::CommandRecorder,
-) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
+) -> SupaSimResult<B, Vec<(B::BindGroup, Index)>> {
     // TODO: work on this when cuda support lands
     todo!()
 }
@@ -330,7 +335,7 @@ pub fn record_command_streams<B: hal::Backend>(
     streams: &StreamingCommands,
     instance: SupaSimInstance<B>,
     recorder: &mut B::CommandRecorder,
-) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
+) -> SupaSimResult<B, Vec<(B::BindGroup, Index)>> {
     let mut instance = instance.inner_mut()?;
     let mut bindgroups = Vec::new();
     for bg in &streams.bind_groups {
@@ -338,8 +343,7 @@ pub fn record_command_streams<B: hal::Backend>(
             .kernels
             .get(bg.kernel_idx)
             .ok_or(SupaSimError::AlreadyDestroyed)?
-            .as_ref()
-            .ok_or(SupaSimError::AlreadyDestroyed)?
+            .loaded_ref()
             .upgrade()?;
         let mut kernel = _k.inner_mut()?;
         let mut resources_a = Vec::new();
@@ -375,7 +379,7 @@ pub fn record_command_streams<B: hal::Backend>(
                 .create_bind_group(kernel.inner.as_mut().unwrap(), &resources)
                 .map_supasim()?
         };
-        bindgroups.push((bg, _k.clone()));
+        bindgroups.push((bg, kernel.id));
     }
     for stream in &streams.streams {
         let mut buffer_refs = Vec::new();
@@ -412,8 +416,7 @@ pub fn record_command_streams<B: hal::Backend>(
                             .kernels
                             .get(*kernel)
                             .ok_or(SupaSimError::AlreadyDestroyed)?
-                            .as_ref()
-                            .unwrap()
+                            .loaded_ref()
                             .upgrade()?,
                     );
                 }

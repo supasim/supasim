@@ -18,10 +18,10 @@
 END LICENSE */
 
 use crate::*;
-pub use ::wgpu::Backends;
 use std::cell::UnsafeCell;
 use std::fmt::Debug;
 use std::{borrow::Cow, num::NonZero};
+pub use wgpu::Backends;
 use wgpu::RequestAdapterError;
 
 pub use ::wgpu;
@@ -144,6 +144,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         reflection: &types::KernelReflectionInfo,
         cache: Option<&mut <Wgpu as Backend>::KernelCache>,
     ) -> Result<<Wgpu as Backend>::Kernel, <Wgpu as Backend>::Error> {
+        #[allow(clippy::uninit_vec)]
         let kernel = self
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -154,12 +155,12 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                     } else {
                         let mut v = Vec::with_capacity(binary.len() / 4);
                         unsafe {
+                            v.set_len(binary.len() / 4);
                             std::ptr::copy(
                                 binary.as_ptr(),
                                 v.as_mut_ptr() as *mut u8,
                                 binary.len(),
                             );
-                            v.set_len(binary.len() / 4);
                         }
                         Cow::Owned(v)
                     },
@@ -468,7 +469,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             self.destroy_bind_group(kernel, std::mem::replace(bg, new_bg))?;
         }
         // TODO: work on bindless
-        todo!()
+        Ok(())
     }
 
     #[tracing::instrument]

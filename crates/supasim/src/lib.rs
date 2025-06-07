@@ -32,7 +32,7 @@ mod tests;
 mod sync;
 
 use anyhow::anyhow;
-use hal::{BackendInstance as _, RecorderSubmitInfo, Semaphore};
+use hal::{BackendInstance as _, CommandRecorder as _, RecorderSubmitInfo, Semaphore};
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::{
@@ -120,6 +120,7 @@ impl From<BufferDescriptor> for types::HalBufferDescriptor {
             indirect_capable: s.buffer_type == BufferType::Indirect,
             uniform: s.buffer_type == BufferType::Uniform,
             needs_flush: true,
+            min_alignment: 16,
         }
     }
 }
@@ -321,7 +322,7 @@ api_type!(SupaSimInstance, {
     /// The hal instance properties
     inner_properties: types::HalInstanceProperties,
     /// All created kernels
-    kernels: Arena<Option<KernelWeak<B>>>,
+    kernels: Arena<SavedKernel<B>>,
     /// All created kernel caches
     kernel_caches: Arena<Option<KernelCacheWeak<B>>>,
     /// All created buffers
@@ -407,8 +408,9 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
             reflection_info,
+            last_used: 0,
         });
-        k.inner_mut()?.id = s.kernels.insert(Some(k.downgrade()));
+        k.inner_mut()?.id = s.kernels.insert(SavedKernel::Loaded(k.downgrade()));
         Ok(k)
     }
     pub fn create_kernel_cache(&self, data: &[u8]) -> SupaSimResult<B, KernelCache<B>> {
@@ -479,8 +481,9 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             } else {
                 unsafe { s.inner.as_mut().unwrap().create_recorder() }.map_supasim()?
             };
-            let (dag, sync_info) = sync::assemble_dag(&mut recorder_inners)?;
             let mut used_buffers = Vec::new();
+            let mut used_kernels = Vec::new();
+            let (dag, sync_info) = sync::assemble_dag(&mut recorder_inners, &mut used_kernels)?;
             for (buf_id, ranges) in sync_info {
                 let b = s
                     .buffers
@@ -491,13 +494,18 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                     .upgrade()?;
                 b.inner_mut()?.last_used = s.submitted_semaphore_count;
                 for range in ranges {
-                    used_buffers.push(BufferSlice {
-                        buffer: b.clone(),
-                        start: range.start,
-                        len: range.len,
-                        needs_mut: range.needs_mut,
-                    })
+                    used_buffers.push((
+                        BufferRange {
+                            start: range.start,
+                            len: range.len,
+                            needs_mut: range.needs_mut,
+                        },
+                        b.downgrade(),
+                    ))
                 }
+            }
+            for kernel in &used_kernels {
+                kernel.upgrade()?.inner_mut()?.last_used = s.submitted_semaphore_count;
             }
             let sync_mode = s.inner_properties.sync_mode;
             drop(s);
@@ -536,7 +544,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                     buffers_to_destroy: Vec::new(),
                     bind_groups,
                     used_semaphore: semaphore,
-                    used_buffers,
+                    kernels_to_destroy: Vec::new(),
                 });
         }
         for recorder in recorders {
@@ -720,13 +728,16 @@ impl<B: hal::Backend> Drop for SupaSimInstanceInner<B> {
             }
         }
         for (_, k) in std::mem::take(&mut self.kernels) {
-            if let Some(k) = k {
+            if let SavedKernel::Loaded(k) = k {
                 if let Ok(k) = k.upgrade() {
                     if let Ok(mut k2) = k.inner_mut() {
                         k2.destroy(self);
                     }
                     let _ = k.destroy();
                 }
+            } else {
+                // This is a sanity check, not necessary
+                unreachable!()
             }
         }
         unsafe {
@@ -760,13 +771,45 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
                 };
             }
             for (bg, kernel) in item.bind_groups {
-                let mut k = kernel.inner_mut()?;
+                // TODO: fix issue here if kernel is already destroyed
+                match self.kernels.get_mut(kernel).unwrap() {
+                    SavedKernel::Loaded(k) => {
+                        let kernel = k.upgrade()?;
+                        let mut k = kernel.inner_mut()?;
+                        unsafe {
+                            self.inner
+                                .as_mut()
+                                .unwrap()
+                                .destroy_bind_group(k.inner.as_mut().unwrap(), bg)
+                                .map_supasim()?;
+                        }
+                    }
+                    SavedKernel::WaitingForDestroy { inner } => unsafe {
+                        self.inner
+                            .as_mut()
+                            .unwrap()
+                            .destroy_bind_group(inner, bg)
+                            .map_supasim()?;
+                    },
+                }
+            }
+            for k in item.kernels_to_destroy {
+                match self.kernels.remove(k).unwrap() {
+                    SavedKernel::WaitingForDestroy { inner } => unsafe {
+                        self.inner
+                            .as_mut()
+                            .unwrap()
+                            .destroy_kernel(inner)
+                            .map_supasim()?;
+                    },
+                    SavedKernel::Loaded(_) => {
+                        unreachable!()
+                    }
+                }
+            }
+            for recorder in &mut item.command_recorders {
                 unsafe {
-                    self.inner
-                        .as_mut()
-                        .unwrap()
-                        .destroy_bind_group(k.inner.as_mut().unwrap(), bg)
-                        .map_supasim()?;
+                    recorder.clear(self.inner.as_mut().unwrap()).map_supasim()?;
                 }
             }
             self.hal_command_recorders.extend(item.command_recorders);
@@ -781,6 +824,7 @@ api_type!(Kernel, {
     inner: Option<B::Kernel>,
     id: Index,
     reflection_info: KernelReflectionInfo,
+    last_used: u64,
 },);
 impl<B: hal::Backend> std::fmt::Debug for Kernel<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -789,9 +833,20 @@ impl<B: hal::Backend> std::fmt::Debug for Kernel<B> {
 }
 impl<B: hal::Backend> KernelInner<B> {
     pub fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
-        instance.kernels.remove(self.id);
-        let kernel = std::mem::take(&mut self.inner).unwrap();
-        let _ = unsafe { instance.inner.as_mut().unwrap().destroy_kernel(kernel) };
+        if instance.submitted_command_recorders_start <= self.last_used {
+            let start = instance.submitted_command_recorders_start;
+            instance.submitted_command_recorders[(self.last_used - start) as usize]
+                .kernels_to_destroy
+                .push(self.id);
+            let s = instance.kernels.get_mut(self.id).unwrap();
+            *s = SavedKernel::WaitingForDestroy {
+                inner: std::mem::take(&mut self.inner).unwrap(),
+            };
+        } else {
+            instance.kernels.remove(self.id);
+            let kernel = std::mem::take(&mut self.inner).unwrap();
+            let _ = unsafe { instance.inner.as_mut().unwrap().destroy_kernel(kernel) };
+        }
     }
 }
 impl<B: hal::Backend> Drop for KernelInner<B> {
@@ -800,6 +855,18 @@ impl<B: hal::Backend> Drop for KernelInner<B> {
             if let Ok(mut instance) = self.instance.clone().inner_mut() {
                 self.destroy(&mut instance);
             }
+        }
+    }
+}
+enum SavedKernel<B: hal::Backend> {
+    Loaded(KernelWeak<B>),
+    WaitingForDestroy { inner: B::Kernel },
+}
+impl<B: hal::Backend> SavedKernel<B> {
+    fn loaded_ref(&self) -> KernelWeak<B> {
+        match self {
+            Self::Loaded(l) => l.clone(),
+            Self::WaitingForDestroy { .. } => panic!(),
         }
     }
 }
@@ -867,12 +934,12 @@ enum BufferCommandInner<B: hal::Backend> {
     Dummy,
 }
 struct SubmittedCommandRecorder<B: hal::Backend> {
-    used_buffers: Vec<BufferSlice<B>>,
     command_recorders: Vec<B::CommandRecorder>,
     used_semaphore: B::Semaphore,
     /// Buffers that are waiting for this to be destroyed
     buffers_to_destroy: Vec<B::Buffer>,
-    bind_groups: Vec<(B::BindGroup, Kernel<B>)>,
+    kernels_to_destroy: Vec<Index>,
+    bind_groups: Vec<(B::BindGroup, Index)>,
 }
 api_type!(CommandRecorder, {
     instance: SupaSimInstance<B>,

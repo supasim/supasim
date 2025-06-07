@@ -39,6 +39,7 @@ unsafe fn create_storage_buf<B: Backend>(
             indirect_capable: false,
             uniform: false,
             needs_flush: true,
+            min_alignment: 16,
         })?;
         Ok(buf)
     }
@@ -111,6 +112,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             indirect_capable: false,
             uniform: false,
             needs_flush: true,
+            min_alignment: 16,
         })?;
         let mut download_buffer = instance.create_buffer(&HalBufferDescriptor {
             size: 16,
@@ -119,6 +121,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             indirect_capable: false,
             uniform: false,
             needs_flush: true,
+            min_alignment: 16,
         })?;
         let uniform_buf = instance.create_buffer(&HalBufferDescriptor {
             size: 16,
@@ -127,6 +130,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             indirect_capable: false,
             uniform: true,
             needs_flush: true,
+            min_alignment: 16,
         })?;
         let sb1 = create_storage_buf::<B>(&mut instance, 16)?;
         let sb2 = create_storage_buf::<B>(&mut instance, 16)?;

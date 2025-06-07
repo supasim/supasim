@@ -44,6 +44,7 @@ pub struct HalBufferDescriptor {
     pub indirect_capable: bool,
     pub uniform: bool,
     pub needs_flush: bool,
+    pub min_alignment: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

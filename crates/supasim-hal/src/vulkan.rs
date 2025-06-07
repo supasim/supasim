@@ -656,7 +656,10 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     self.device.destroy_buffer(buffer, None);
                 }
             }
-            let requirements = self.device.get_buffer_memory_requirements(buffer);
+            let requirements = self
+                .device
+                .get_buffer_memory_requirements(buffer)
+                .alignment(alloc_info.min_alignment as u64);
             use types::HalBufferType::*;
             let mut allocation = self
                 .alloc
