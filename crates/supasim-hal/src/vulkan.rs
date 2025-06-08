@@ -499,6 +499,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             map_buffers: true,
             // TODO: add unified memory detection
             is_unified_memory,
+            map_buffer_while_gpu_use: true,
         }
     }
     #[tracing::instrument(skip(binary))]

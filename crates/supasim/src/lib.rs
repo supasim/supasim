@@ -33,8 +33,8 @@ mod sync;
 
 use anyhow::anyhow;
 use hal::{BackendInstance as _, CommandRecorder as _, RecorderSubmitInfo, Semaphore};
-use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Condvar, Mutex};
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -163,36 +163,27 @@ impl<B: hal::Backend> BufferSlice<B> {
             needs_mut,
         })
     }
-    fn acquire(&self) -> SupaSimResult<B, ()> {
-        let mut s = self.buffer.inner_mut()?;
-        let _instance = s.instance.clone();
-        let mut _instance = _instance.inner_mut()?;
-        _instance.wait_for_submission(true, s.last_used)?;
+    fn acquire(&self, submission_id: Option<u64>) -> SupaSimResult<B, BufferUserId> {
+        let s = self.buffer.inner()?;
+        let instance = s.instance.clone();
 
-        s.host_using.push(BufferRange {
-            start: self.start,
-            len: self.len,
-            needs_mut: self.needs_mut,
-        });
-        Ok(())
+        s.slice_tracker.acquire(
+            &mut *instance.inner_mut()?,
+            BufferRange {
+                start: self.start,
+                len: self.len,
+                needs_mut: self.needs_mut,
+            },
+            submission_id,
+        )
     }
-    fn release(&self) -> SupaSimResult<B, ()> {
-        let mut s = self.buffer.inner_mut()?;
-        let range = BufferRange {
-            start: self.start,
-            len: self.len,
-            needs_mut: self.needs_mut,
-        };
+    fn release(&self, id: u64) -> SupaSimResult<B, ()> {
+        let s = self.buffer.inner()?;
         // Clippy generates a confusing warning and nonsense solution
-        #[allow(clippy::unnecessary_filter_map)]
-        let (index_to_remove, _) = s
-            .host_using
-            .iter()
-            .enumerate()
-            .filter_map(|a| if *a.1 == range { Some(a) } else { None })
-            .next()
-            .unwrap();
-        s.host_using.remove(index_to_remove);
+        s.slice_tracker.release(BufferUserId {
+            range: self.into(),
+            id,
+        });
         Ok(())
     }
 }
@@ -450,10 +441,9 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
             _semaphores: Vec::new(),
-            host_using: Vec::new(),
             create_info: *desc,
             last_used: 0,
-            num_used_mappings: 0,
+            slice_tracker: SliceTracker::new(),
         });
         b.inner_mut()?.id = s.buffers.insert(Some(b.downgrade()));
         Ok(b)
@@ -481,10 +471,11 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             } else {
                 unsafe { s.inner.as_mut().unwrap().create_recorder() }.map_supasim()?
             };
-            let mut used_buffers = Vec::new();
+            let mut used_buffers = HashSet::new();
+            let mut used_buffer_ranges = Vec::new();
             let mut used_kernels = Vec::new();
             let (dag, sync_info) = sync::assemble_dag(&mut recorder_inners, &mut used_kernels)?;
-            for (buf_id, ranges) in sync_info {
+            for (&buf_id, ranges) in &sync_info {
                 let b = s
                     .buffers
                     .get(buf_id)
@@ -492,17 +483,15 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                     .as_ref()
                     .unwrap()
                     .upgrade()?;
-                b.inner_mut()?.last_used = s.submitted_semaphore_count;
-                for range in ranges {
-                    used_buffers.push((
-                        BufferRange {
-                            start: range.start,
-                            len: range.len,
-                            needs_mut: range.needs_mut,
-                        },
-                        b.downgrade(),
-                    ))
+                let mut b_mut = b.inner_mut()?;
+                b_mut.last_used = s.submitted_semaphore_count;
+                for &range in ranges {
+                    let id = b_mut
+                        .slice_tracker
+                        .acquire(&mut *s, range, Some(b_mut.last_used))?;
+                    used_buffer_ranges.push((id, b.downgrade()))
                 }
+                used_buffers.insert(buf_id);
             }
             for kernel in &used_kernels {
                 kernel.upgrade()?.inner_mut()?.last_used = s.submitted_semaphore_count;
@@ -538,6 +527,18 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                     .submit_recorders(std::slice::from_mut(&mut submit_info))
                     .map_supasim()?;
             }
+            let used_buffers: Vec<_> = used_buffers
+                .iter()
+                .map(|a| s.buffers.get(*a).unwrap().as_ref().unwrap().clone())
+                .collect();
+            if !s.inner_properties.map_buffer_while_gpu_use {
+                for b in &used_buffers {
+                    b.upgrade()?
+                        .inner()?
+                        .slice_tracker
+                        .acquire_cpu(s.submitted_semaphore_count)?;
+                }
+            }
             s.submitted_command_recorders
                 .push_back(SubmittedCommandRecorder {
                     command_recorders: vec![recorder],
@@ -545,6 +546,8 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                     bind_groups,
                     used_semaphore: semaphore,
                     kernels_to_destroy: Vec::new(),
+                    used_buffer_ranges,
+                    used_buffers,
                 });
         }
         for recorder in recorders {
@@ -595,16 +598,16 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         };
         let _lock2 = _lock.lock().map_err(|_| SupaSimError::Other(anyhow!("Failed to get usage lock for a buffer - an error has already occured in another thread")))?;
         let mut mapped_buffers = Vec::with_capacity(buffers.len());
+        let mut ids = Vec::new();
         for b in buffers {
             b.validate()?;
-            b.acquire()?;
+            ids.push(b.acquire(None)?.id);
         }
         if properties.map_buffers {
             let mut instance = self.inner_mut()?;
             #[allow(clippy::never_loop)]
-            for &b in buffers {
+            for (i, b) in buffers.iter().enumerate() {
                 let mut buffer_inner = b.buffer.inner_mut()?;
-                buffer_inner.num_used_mappings += 1;
                 let mapping = unsafe {
                     instance
                         .inner
@@ -623,6 +626,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                     in_buffer_offset: b.start,
                     buffer: b.buffer.clone(),
                     vec_capacity: None,
+                    user_id: ids[i],
                     _p: Default::default(),
                 });
             }
@@ -666,6 +670,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                     in_buffer_offset: b.start,
                     buffer: b.buffer.clone(),
                     vec_capacity: Some(a.capacity()),
+                    user_id: ids[i],
                     _p: Default::default(),
                 };
                 mapped_buffers.push(mapped);
@@ -677,9 +682,6 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             }
             drop(mapped_buffers);
             error?;
-        }
-        for b in buffers {
-            b.release()?;
         }
         drop(_lock2);
         Ok(())
@@ -750,9 +752,12 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
     pub fn wait_for_submission(&mut self, force_wait: bool, id: u64) -> SupaSimResult<B, bool> {
         if id < self.submitted_command_recorders_start {
             return Ok(true);
+        } else if id >= self.submitted_semaphore_count {
+            panic!();
         }
         while self.submitted_command_recorders_start <= id {
             let thing = &mut self.submitted_command_recorders[0];
+            self.submitted_command_recorders_start += 1;
             if force_wait {
                 unsafe { thing.used_semaphore.wait().map_supasim()? };
             } else if !unsafe { thing.used_semaphore.is_signalled().map_supasim()? } {
@@ -760,7 +765,6 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
             }
             //unsafe { self.inner.wait_for_idle().map_supasim()? };
             let mut item = self.submitted_command_recorders.pop_front().unwrap();
-            self.submitted_command_recorders_start += 1;
             for b in item.buffers_to_destroy {
                 unsafe {
                     self.inner
@@ -769,6 +773,24 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
                         .destroy_buffer(b)
                         .map_supasim()?
                 };
+            }
+            for b in item.used_buffer_ranges {
+                if let Ok(buffer) = b.1.upgrade() {
+                    if let Ok(b_inner) = buffer.inner() {
+                        b_inner.slice_tracker.release(b.0);
+                    }
+                }
+            }
+            if !self.inner_properties.map_buffer_while_gpu_use {
+                for b in item.used_buffers {
+                    if let Ok(buffer) = b.upgrade() {
+                        if let Ok(b_inner) = buffer.inner() {
+                            if b_inner.last_used == self.submitted_command_recorders_start - 1 {
+                                b_inner.slice_tracker.release_cpu();
+                            }
+                        }
+                    }
+                }
             }
             for (bg, kernel) in item.bind_groups {
                 // TODO: fix issue here if kernel is already destroyed
@@ -940,6 +962,8 @@ struct SubmittedCommandRecorder<B: hal::Backend> {
     buffers_to_destroy: Vec<B::Buffer>,
     kernels_to_destroy: Vec<Index>,
     bind_groups: Vec<(B::BindGroup, Index)>,
+    used_buffer_ranges: Vec<(BufferUserId, BufferWeak<B>)>,
+    used_buffers: Vec<BufferWeak<B>>,
 }
 api_type!(CommandRecorder, {
     instance: SupaSimInstance<B>,
@@ -1026,7 +1050,7 @@ impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct BufferRange {
     start: u64,
     len: u64,
@@ -1057,23 +1081,21 @@ api_type!(Buffer, {
     inner: Option<B::Buffer>,
     id: Index,
     _semaphores: Vec<(Index, BufferRange)>,
-    host_using: Vec<BufferRange>,
     create_info: BufferDescriptor,
     last_used: u64,
-    num_used_mappings: u64,
+    slice_tracker: SliceTracker,
 },);
 impl<B: hal::Backend> Buffer<B> {
     pub fn write<T: bytemuck::Pod>(&self, offset: usize, data: &[T]) -> SupaSimResult<B, ()> {
-        let slice = BufferSlice {
+        let buffer_slice = BufferSlice {
             buffer: self.clone(),
             start: offset as u64,
             len: data.len() as u64,
             needs_mut: true,
         };
-        slice.validate_with_align(size_of::<T>() as u64)?;
-        slice.acquire()?;
+        buffer_slice.validate_with_align(size_of::<T>() as u64)?;
+        let id = buffer_slice.acquire(None)?.id;
         let mut s = self.inner_mut()?;
-        s.num_used_mappings += 1; // This is unnecessary at the moment
         let _instance = s.instance.clone();
         let mut instance = _instance.inner_mut()?;
         let slice = bytemuck::cast_slice::<T, u8>(data);
@@ -1085,7 +1107,8 @@ impl<B: hal::Backend> Buffer<B> {
                 .write_buffer(s.inner.as_mut().unwrap(), offset as u64, slice)
                 .map_supasim()?;
         }
-        s.num_used_mappings -= 1;
+        drop(s);
+        buffer_slice.release(id)?;
         Ok(())
     }
     pub fn read<T: bytemuck::Pod>(&self, offset: usize, out: &mut [T]) -> SupaSimResult<B, ()> {
@@ -1096,7 +1119,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut: false,
         };
         slice.validate_with_align(size_of::<T>() as u64)?;
-        slice.acquire()?;
+        let id = slice.acquire(None)?;
         let mut s = self.inner_mut()?;
         let _instance = s.instance.clone();
         let mut instance = _instance.inner_mut()?;
@@ -1109,6 +1132,8 @@ impl<B: hal::Backend> Buffer<B> {
                 .read_buffer(s.inner.as_mut().unwrap(), offset as u64, slice)
                 .map_supasim()?;
         }
+        drop(s);
+        self.inner()?.slice_tracker.release(id);
         Ok(())
     }
     pub fn access(
@@ -1124,13 +1149,12 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut,
         };
         slice.validate()?;
-        slice.acquire()?;
+        let id = slice.acquire(None)?.id;
         let _instance = self.inner()?.instance.clone();
         let mut instance = _instance.inner_mut()?;
         let mut s = self.inner_mut()?;
         let buffer_align = s.create_info.contents_align;
         if instance.inner_properties.map_buffers {
-            s.num_used_mappings += 1;
             let mapped_ptr = unsafe {
                 instance
                     .inner
@@ -1151,6 +1175,7 @@ impl<B: hal::Backend> Buffer<B> {
                 in_buffer_offset: offset as u64,
                 was_used_mut: false,
                 vec_capacity: None,
+                user_id: id,
                 _p: Default::default(),
             })
         } else {
@@ -1174,6 +1199,7 @@ impl<B: hal::Backend> Buffer<B> {
                 was_used_mut: false,
                 buffer: slice.buffer,
                 vec_capacity: Some(data.capacity()),
+                user_id: id,
                 _p: Default::default(),
             });
             std::mem::forget(data);
@@ -1227,6 +1253,7 @@ pub struct MappedBuffer<'a, B: hal::Backend> {
     has_mut: bool,
     was_used_mut: bool,
     buffer: Buffer<B>,
+    user_id: u64,
     /// Size of the vector in which the data is allocated for non memory mapping scenarios
     vec_capacity: Option<usize>,
     _p: PhantomData<&'a ()>,
@@ -1274,20 +1301,10 @@ impl<B: hal::Backend> Drop for MappedBuffer<'_, B> {
             len: self.len,
             needs_mut: self.has_mut,
         };
-        slice.release().unwrap();
+        slice.release(self.user_id).unwrap();
         let mut s = self.buffer.inner_mut().unwrap();
         if instance.inner_properties.map_buffers {
-            s.num_used_mappings -= 1;
-            if s.num_used_mappings == 0 {
-                unsafe {
-                    instance
-                        .inner
-                        .as_mut()
-                        .unwrap()
-                        .unmap_buffer(s.inner.as_mut().unwrap())
-                        .unwrap();
-                }
-            }
+            // Nothing needs to be done for now
         } else {
             unsafe {
                 let vec =
@@ -1336,9 +1353,125 @@ impl<B: hal::Backend> WaitHandle<B> {
         instance.wait_for_submission(true, s.index)?;
         Ok(())
     }
+    pub fn is_complete(&self) -> SupaSimResult<B, bool> {
+        let s = self.inner_mut()?;
+        let _i = s.instance.clone();
+        let mut instance = _i.inner_mut()?;
+        instance.wait_for_submission(false, s.index)
+    }
 }
 #[allow(clippy::type_complexity)]
 pub type CpuCallback<B> = (
     Box<dyn Fn(Vec<MappedBuffer<B>>) -> Result<(), SupaSimError<B>>>,
     Vec<Buffer<B>>,
 );
+struct SliceTrackerInner {
+    uses: HashMap<BufferUserId, Option<u64>>,
+    current_id: u64,
+    cpu_locked: Option<u64>,
+}
+struct SliceTracker {
+    condvar: Condvar,
+    /// Contains a submission index.
+    ///
+    /// Also, the higher level u64 is for the current id. Bool is for whether cpu work is prevented(used for mapping logic)
+    mutex: Mutex<SliceTrackerInner>,
+}
+impl SliceTracker {
+    pub fn new() -> Self {
+        Self {
+            condvar: Condvar::new(),
+            mutex: Mutex::new(SliceTrackerInner {
+                uses: HashMap::new(),
+                current_id: 0,
+                cpu_locked: None,
+            }),
+        }
+    }
+    pub fn acquire<B: hal::Backend>(
+        &self,
+        instance: &mut SupaSimInstanceInner<B>,
+        range: BufferRange,
+        submission_id: Option<u64>,
+    ) -> SupaSimResult<B, BufferUserId> {
+        let mut lock = self.mutex.lock().unwrap();
+        let mut cont = true;
+        let mut gpu_submissions = Vec::new();
+        while cont {
+            let mut has_cpu = false;
+            cont = false;
+            gpu_submissions.clear();
+            if submission_id.is_none() && lock.cpu_locked.is_some() {
+                cont = true;
+                gpu_submissions.push(lock.cpu_locked.unwrap());
+            }
+            for (&a, &submission) in &lock.uses {
+                if a.range.overlaps(&range) {
+                    // If this is part of the same GPU submission, don't try to wait
+                    if submission == submission_id && submission.is_some() {
+                        continue;
+                    }
+                    cont = true;
+                    if let Some(sub) = submission {
+                        gpu_submissions.push(sub);
+                    } else {
+                        has_cpu = true;
+                    }
+                    break;
+                }
+            }
+            if cont && has_cpu {
+                lock = self.condvar.wait(lock).unwrap();
+            } else if cont {
+                drop(lock);
+                instance.wait_for_submission(true, *gpu_submissions.iter().min().unwrap())?;
+                lock = self.mutex.lock().unwrap();
+            } else {
+                break;
+            }
+        }
+        let id = BufferUserId {
+            range,
+            id: lock.current_id,
+        };
+        lock.current_id += 1;
+        lock.uses.insert(id, submission_id);
+        Ok(id)
+    }
+    pub fn release(&self, range: BufferUserId) {
+        self.mutex.lock().unwrap().uses.remove(&range);
+        self.condvar.notify_all();
+    }
+    pub fn acquire_cpu<B: hal::Backend>(&self, submission_id: u64) -> SupaSimResult<B, ()> {
+        let mut lock = self.mutex.lock().unwrap();
+        let mut cont = true;
+        while cont {
+            cont = false;
+            for &submission in lock.uses.values() {
+                if submission.is_none() {
+                    cont = true;
+                    break;
+                }
+            }
+            if cont {
+                lock = self.condvar.wait(lock).unwrap();
+            }
+        }
+        lock.cpu_locked = Some(submission_id);
+        Ok(())
+    }
+    pub fn release_cpu(&self) {
+        self.mutex.lock().unwrap().cpu_locked = None;
+        self.condvar.notify_all();
+    }
+}
+impl Default for SliceTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct BufferUserId {
+    range: BufferRange,
+    id: u64,
+}

@@ -53,6 +53,7 @@ impl BackendInstance<Dummy> for DummyResource {
             semaphore_signal: true,
             map_buffers: true,
             is_unified_memory: false,
+            map_buffer_while_gpu_use: true,
         }
     }
 

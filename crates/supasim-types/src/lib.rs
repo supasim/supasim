@@ -167,6 +167,8 @@ pub struct HalInstanceProperties {
     pub map_buffers: bool,
     /// Whether the system has unified memory, which provides opportunities for optimization, particularly on apple, mobile, or other devices with integrated GPUs
     pub is_unified_memory: bool,
+    /// Whether you can map buffers while they are in use on the GPU(even if the slices don't overlap)
+    pub map_buffer_while_gpu_use: bool,
 }
 /// # Safety
 /// This is undefined behavior lol

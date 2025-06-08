@@ -134,6 +134,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             // TODO: detect unified memory
             is_unified_memory: self.unified_memory,
             map_buffers: true,
+            map_buffer_while_gpu_use: false,
         }
     }
 
