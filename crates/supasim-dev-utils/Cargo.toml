@@ -18,6 +18,7 @@
 # END LICENSE
 [package]
 name = "supasim-dev-utils"
+description = "A set of utilities used internally by supasim, such as for testing"
 version.workspace = true
 authors.workspace = true
 repository.workspace = true

@@ -18,6 +18,7 @@
 # END LICENSE
 [package]
 name = "supasim-types"
+description = "A set of types for supasim crates for dependency graph purposes"
 version.workspace = true
 authors.workspace = true
 repository.workspace = true
