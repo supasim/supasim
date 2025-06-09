@@ -42,6 +42,7 @@ thiserror.workspace = true
 bytemuck.workspace = true
 thunderdome.workspace = true
 paste.workspace = true
+parking_lot = "0.12"
 
 kernels.workspace = true
 types.workspace = true

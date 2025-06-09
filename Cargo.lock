@@ -1150,6 +1150,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "log",
+ "parking_lot",
  "paste",
  "supasim-dev-utils",
  "supasim-hal",

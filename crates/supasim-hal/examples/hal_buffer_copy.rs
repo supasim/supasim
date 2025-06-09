@@ -81,7 +81,7 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
         instance
             .submit_recorders(&mut [RecorderSubmitInfo {
                 command_recorder: &mut recorder,
-                wait_semaphores: &mut [],
+                wait_semaphore: None,
                 signal_semaphore: None,
             }])
             .unwrap();

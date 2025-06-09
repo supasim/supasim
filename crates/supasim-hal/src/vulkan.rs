@@ -1062,7 +1062,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         let mut signal_semaphores = Vec::new();
         let mut cb_infos = Vec::new();
         for info in &*infos {
-            for sem in &*info.wait_semaphores {
+            if let Some(sem) = info.wait_semaphore {
                 wait_semaphores.push(
                     vk::SemaphoreSubmitInfoKHR::default()
                         .semaphore(sem.inner)
@@ -1090,7 +1090,8 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 let submit = vk::SubmitInfo2KHR::default()
                     .command_buffer_infos(std::slice::from_ref(&cb_infos[cb_idx]))
                     .wait_semaphore_infos(
-                        &wait_semaphores[wait_idx..wait_idx + info.wait_semaphores.len()],
+                        &wait_semaphores
+                            [wait_idx..wait_idx + info.wait_semaphore.is_some() as u8 as usize],
                     )
                     .signal_semaphore_infos(if info.signal_semaphore.is_some() {
                         std::slice::from_ref(&signal_semaphores[signal_idx])
@@ -1098,7 +1099,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                         &[]
                     });
                 submits.push(submit);
-                wait_idx += info.wait_semaphores.len();
+                wait_idx += info.wait_semaphore.is_some() as u8 as usize;
                 signal_idx += info.signal_semaphore.is_some() as usize;
             }
         }

@@ -246,7 +246,7 @@ pub trait Semaphore<B: Backend<Semaphore = Self>>: Send + Sync {
 #[derive(Debug)]
 pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub command_recorder: &'a mut B::CommandRecorder,
-    pub wait_semaphores: &'a mut [&'a mut B::Semaphore],
+    pub wait_semaphore: Option<&'a B::Semaphore>,
     pub signal_semaphore: Option<&'a B::Semaphore>,
 }
 #[must_use]

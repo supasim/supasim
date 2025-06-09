@@ -16,17 +16,21 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
-use hal::{BackendInstance, CommandRecorder, HalBufferSlice};
+use hal::{BackendInstance, CommandRecorder, HalBufferSlice, RecorderSubmitInfo, Semaphore};
+use parking_lot::{Condvar, Mutex};
 use std::collections::{HashMap, hash_map::Entry};
+use std::marker::PhantomData;
 use std::ops::Deref;
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::time::{Duration, Instant};
 use thunderdome::Index;
 use types::{Dag, NodeIndex, SyncOperations, Walker};
 
 use crate::{
     BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner, KernelWeak,
-    MapSupasimError, SupaSimError, SupaSimInstance, SupaSimInstanceInner, SupaSimResult,
+    MapSupasimError, SupaSimError, SupaSimInstance, SupaSimInstanceInner, SupaSimInstanceWeak,
+    SupaSimResult,
 };
 use anyhow::anyhow;
 
@@ -167,6 +171,7 @@ pub fn assemble_dag<B: hal::Backend>(
         let mut buf = unsafe {
             instance
                 .inner
+                .lock()
                 .as_mut()
                 .unwrap()
                 .create_buffer(&types::HalBufferDescriptor {
@@ -181,6 +186,7 @@ pub fn assemble_dag<B: hal::Backend>(
             unsafe {
                 instance
                     .inner
+                    .lock()
                     .as_mut()
                     .unwrap()
                     .write_buffer(&mut buf, current_offset, &cr.writes_slice)
@@ -354,7 +360,7 @@ pub fn record_command_streams<B: hal::Backend>(
     recorder: &mut B::CommandRecorder,
     write_buffer: &Option<B::Buffer>,
 ) -> SupaSimResult<B, Vec<(B::BindGroup, Index)>> {
-    let mut instance = instance.inner_mut()?;
+    let instance = instance.inner()?;
     let mut bindgroups = Vec::new();
     for bg in &streams.bind_groups {
         let _k = instance
@@ -392,6 +398,7 @@ pub fn record_command_streams<B: hal::Backend>(
         let bg = unsafe {
             instance
                 .inner
+                .lock()
                 .as_mut()
                 .unwrap()
                 .create_bind_group(kernel.inner.as_mut().unwrap(), &resources)
@@ -552,19 +559,51 @@ pub fn record_command_streams<B: hal::Backend>(
         }
         unsafe {
             recorder
-                .record_commands(instance.inner.as_mut().unwrap(), &mut hal_commands)
+                .record_commands(instance.inner.lock().as_mut().unwrap(), &mut hal_commands)
                 .map_supasim()?
         };
     }
     Ok(bindgroups)
 }
 pub struct GpuSubmissionInfo<B: hal::Backend> {
-    commands: Vec<BufferCommand<B>>,
+    command_recorder: Option<B::CommandRecorder>,
 }
-/// A job for the CPU to run when some GPU work has completed or immediately, without ideally blocking for long
+/// A job for the CPU to run when some GPU work has completed or immediately, without ideally blocking for long. This won't necessarily run before other submissions
 pub enum SemaphoreFinishedJob<B: hal::Backend> {
     DestroyBuffer(B::Buffer),
-    DestroyHostBuffer(B::Buffer),
+}
+impl<B: hal::Backend> SemaphoreFinishedJob<B> {
+    pub fn run(self, instance: &SupaSimInstance<B>) -> SupaSimResult<B, ()> {
+        match self {
+            Self::DestroyBuffer(b) => unsafe {
+                instance
+                    .inner()?
+                    .inner
+                    .lock()
+                    .as_mut()
+                    .unwrap()
+                    .destroy_buffer(b)
+                    .map_supasim()?
+            },
+        }
+        Ok(())
+    }
+}
+/// A job for the CPU to run in between GPU submissions
+pub enum CpuSubmission<B: hal::Backend> {
+    CreateGpuBuffer { buffer_id: Index },
+    DestroyGpuBuffer { buffer_id: Index },
+    Dummy(PhantomData<B>),
+}
+impl<B: hal::Backend> CpuSubmission<B> {
+    pub fn run(self, _instance: &SupaSimInstance<B>) -> SupaSimResult<B, ()> {
+        match self {
+            Self::CreateGpuBuffer { .. } => todo!(),
+            Self::DestroyGpuBuffer { .. } => todo!(),
+            Self::Dummy(_) => (),
+        }
+        Ok(())
+    }
 }
 /// An event sent to the sync thread
 pub enum SendSyncThreadEvent<B: hal::Backend> {
@@ -573,28 +612,30 @@ pub enum SendSyncThreadEvent<B: hal::Backend> {
     /// CPU work to be completed when a submission is done or immediately if it is already complete
     AddFinishedJob(usize, SemaphoreFinishedJob<B>),
     /// CPU work to be completed between submissions
-    CpuWork,
-    WaitFinishAndShutdown,
+    CpuWork(CpuSubmission<B>),
+    /// Any currently queued work will begin immediately instead of waiting for more
+    SubmitBatchNow,
+    WaitFinishAndShutdown(&'static mut SupaSimInstanceInner<B>),
 }
 pub struct SyncThreadSharedData<B: hal::Backend> {
-    next_job: usize,
-    previous_cpu_completed_too: bool,
-    error: Option<SupaSimError<B>>,
+    pub next_job: usize,
+    pub error: Option<SupaSimError<B>>,
 }
 pub type SyncThreadShared<B> = Arc<(Mutex<SyncThreadSharedData<B>>, Condvar)>;
 struct SyncThreadData<B: hal::Backend> {
     shared: SyncThreadShared<B>,
     receiver: Receiver<SendSyncThreadEvent<B>>,
-    instance: SupaSimInstance<B>,
+    instance: SupaSimInstanceWeak<B>,
 }
 pub struct SyncThreadHandle<B: hal::Backend> {
-    sender: Mutex<Sender<SendSyncThreadEvent<B>>>,
-    shared_thread: SyncThreadShared<B>,
+    /// The number is for the number already submitted
+    pub sender: Mutex<(Sender<SendSyncThreadEvent<B>>, usize)>,
+    pub shared_thread: SyncThreadShared<B>,
+    pub thread: std::thread::JoinHandle<()>,
 }
 pub fn create_sync_thread<B: hal::Backend>(instance: SupaSimInstance<B>) -> SyncThreadHandle<B> {
     let shared_thread = SyncThreadSharedData::<B> {
-        next_job: 0,
-        previous_cpu_completed_too: true,
+        next_job: 1,
         error: None,
     };
     let shared = Arc::new((Mutex::new(shared_thread), Condvar::new()));
@@ -602,66 +643,265 @@ pub fn create_sync_thread<B: hal::Backend>(instance: SupaSimInstance<B>) -> Sync
     let data = SyncThreadData {
         shared: shared.clone(),
         receiver,
-        instance,
+        instance: instance.downgrade(),
     };
-    std::thread::spawn(|| {
+    let thread = std::thread::spawn(|| {
         let mut data = data;
         if let Err(e) = sync_thread_main(&mut data) {
-            if let Ok(mut lock) = data.shared.0.lock() {
-                lock.error = Some(e);
-                data.shared.1.notify_all();
-            } else {
-                panic!(
-                    "Sync thread encountered error after main thread panicked: {}",
-                    e
-                );
-            }
+            let mut lock = data.shared.0.lock();
+            lock.error = Some(e);
+            data.shared.1.notify_all();
+            let reference = lock.error.as_ref().unwrap() as *const _;
+            drop(lock);
+            panic!("Sync thread encountered error: {}", unsafe { &*reference });
         }
     });
     SyncThreadHandle {
-        sender: Mutex::new(sender),
+        sender: Mutex::new((sender, 1)),
         shared_thread: shared,
+        thread,
     }
 }
-enum Work {
-    GpuSubmission,
-    CpuWork,
+enum Work<B: hal::Backend> {
+    GpuSubmission(GpuSubmissionInfo<B>),
+    CpuWork(CpuSubmission<B>),
 }
 fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<(), SupaSimError<B>> {
-    // Each submission in the queue is some GPU or CPU work
-    /*let mut queue = Vec::<Work>::new();
-    let mut submitted = VecDeque::<crate::SubmittedCommandRecorder<B>>::new();
-    let mut current_submission_index = 0;*/
+    const SUBMISSION_WAIT_PERIOD: Duration = Duration::from_millis(10);
+    const MAX_SUBMISSION_WINDOW: Duration = Duration::from_millis(50);
 
-    let mut temp_submission_vec = Vec::new();
+    // Loop logic:
+    // First, wait for a submission. Record that submission and wait the rest of ~5ms.
+    // If there are more submissions during or by the end of this time, also record those. Then submit altogether.
+    // A CPU submission before a GPU submission must break up the submission if the device doesn't support CPU semaphore signalling.
+    // Otherwise, the following submission must wait on a CPu signalled semaphore
+    //
+    // Downsides of this are that if recording takes a long time there will be significant downtime. This can be prevented in the future using other methods, such as an intermediate recorder thread.
+    let mut jobs = Vec::new();
+    let mut next_submission_idx = 1;
+    let mut _num_submitted_so_far = 1;
+    let semaphore_signal = logic
+        .instance
+        .upgrade()?
+        .inner()?
+        .inner_properties
+        .semaphore_signal;
+    let mut semaphores = Vec::new();
+    let mut acquire_semaphore = || -> SupaSimResult<B, B::Semaphore> {
+        Ok(if let Some(s) = semaphores.pop() {
+            s
+        } else {
+            unsafe {
+                logic
+                    .instance
+                    .upgrade()?
+                    .inner()?
+                    .inner
+                    .lock()
+                    .as_mut()
+                    .unwrap()
+                    .create_semaphore()
+                    .map_supasim()?
+            }
+        })
+    };
     loop {
-        let mut should_shutdown = false;
-        temp_submission_vec.clear();
+        let mut temp_submission_vec = Vec::new();
+        let mut submits = Vec::new();
+        let mut used_semaphores = Vec::new();
+        // Initial stuff - any non GPU work can be completed immediately
         loop {
-            match logic.receiver.try_recv() {
-                Ok(event) => match event {
-                    SendSyncThreadEvent::AddFinishedJob(..) => todo!(),
-                    SendSyncThreadEvent::AddSubmission(submission) => {
-                        temp_submission_vec.push(submission)
-                    }
-                    SendSyncThreadEvent::CpuWork => todo!(),
-                    SendSyncThreadEvent::WaitFinishAndShutdown => should_shutdown = true,
-                },
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    return Err(SupaSimError::Other(anyhow!(
-                        "Main thread disconnected from sync thread"
-                    )));
+            match logic.receiver.recv().unwrap() {
+                SendSyncThreadEvent::AddFinishedJob(_, job) => {
+                    job.run(&logic.instance.upgrade()?)?
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                SendSyncThreadEvent::CpuWork(job) => job.run(&logic.instance.upgrade()?)?,
+                SendSyncThreadEvent::WaitFinishAndShutdown(instance) => {
+                    for semaphore in semaphores {
+                        unsafe {
+                            instance
+                                .inner
+                                .lock()
+                                .as_mut()
+                                .unwrap()
+                                .destroy_semaphore(semaphore)
+                                .map_supasim()?;
+                        }
+                    }
+                    return Ok(());
+                }
+                SendSyncThreadEvent::AddSubmission(submission) => {
+                    temp_submission_vec.push(Work::GpuSubmission(submission));
+                    break;
+                }
+                SendSyncThreadEvent::SubmitBatchNow => (),
             }
         }
-        if should_shutdown {
-            todo!();
+        let first_submission_time = Instant::now();
+        let mut last_submission_time = first_submission_time;
+        let mut last_was_submission = true;
+        let mut final_cpu = None;
+        loop {
+            let now = Instant::now();
+            if (now - first_submission_time) > MAX_SUBMISSION_WINDOW
+                || (!last_was_submission && (now - last_submission_time) > SUBMISSION_WAIT_PERIOD)
+            {
+                break;
+            }
+            let max_wait = if last_was_submission {
+                SUBMISSION_WAIT_PERIOD
+            } else {
+                SUBMISSION_WAIT_PERIOD - (now - last_submission_time)
+            }
+            .min(MAX_SUBMISSION_WINDOW - (now - first_submission_time));
+            match logic.receiver.recv_timeout(max_wait) {
+                Ok(SendSyncThreadEvent::WaitFinishAndShutdown(instance)) => {
+                    for semaphore in semaphores {
+                        unsafe {
+                            instance
+                                .inner
+                                .lock()
+                                .as_mut()
+                                .unwrap()
+                                .destroy_semaphore(semaphore)
+                                .map_supasim()?;
+                        }
+                    }
+                    return Ok(());
+                }
+                Ok(SendSyncThreadEvent::CpuWork(job)) => {
+                    if !semaphore_signal {
+                        final_cpu = Some(job);
+                        break;
+                    }
+                    temp_submission_vec.push(Work::CpuWork(job));
+                    last_submission_time = Instant::now();
+                    last_was_submission = true;
+                }
+                Ok(SendSyncThreadEvent::AddFinishedJob(idx, job)) => {
+                    last_was_submission = false;
+                    if idx < next_submission_idx {
+                        job.run(&logic.instance.upgrade()?)?;
+                    } else {
+                        jobs.push((idx, job));
+                    }
+                }
+                Ok(SendSyncThreadEvent::AddSubmission(submission)) => {
+                    temp_submission_vec.push(Work::GpuSubmission(submission));
+                    last_submission_time = Instant::now();
+                    last_was_submission = true;
+                }
+                Ok(SendSyncThreadEvent::SubmitBatchNow) => break,
+                Err(RecvTimeoutError::Timeout) => break,
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(SupaSimError::Other(anyhow!(
+                        "Main thread disconnected from sender"
+                    )));
+                }
+            }
         }
-        if !temp_submission_vec.is_empty() {
-            let instance = logic.instance.inner_mut()?;
-            // Unwrap is OK here because if there was an error somewhere it would've been handled elsewhere
-            let _lock = instance.usage_lock.lock().unwrap();
+        // Reverse sort so we can pop off the end
+        jobs.sort_unstable_by_key(|a| usize::MAX - a.0);
+        let mut semaphores: Vec<B::Semaphore> = Vec::new();
+        let mut recorders = Vec::new();
+        // Setup the submits and collect all needed semaphores
+        {
+            let mut prev_was_cpu = false;
+            // First submit is always guaranteed to be a GPU submission
+            for item in temp_submission_vec.iter_mut() {
+                match item {
+                    Work::CpuWork(_) => {
+                        prev_was_cpu = true;
+                    }
+                    Work::GpuSubmission(g) => {
+                        used_semaphores.push(acquire_semaphore()?);
+                        if prev_was_cpu {
+                            used_semaphores.push(acquire_semaphore()?);
+                        }
+                        prev_was_cpu = false;
+                        recorders.push(std::mem::take(&mut g.command_recorder).unwrap());
+                    }
+                }
+            }
         }
+        _num_submitted_so_far += temp_submission_vec.len();
+        // Give the wait/signal semaphores to the submits
+        {
+            let mut prev_was_cpu = false;
+            let mut recorders_iter = recorders.iter_mut();
+            let mut semaphore_idx = 0;
+            for item in temp_submission_vec.iter_mut() {
+                match item {
+                    Work::CpuWork(_) => prev_was_cpu = true,
+                    Work::GpuSubmission(_) => {
+                        submits.push(RecorderSubmitInfo {
+                            command_recorder: recorders_iter.next().unwrap(),
+                            wait_semaphore: if prev_was_cpu {
+                                semaphore_idx += 1;
+
+                                Some(&used_semaphores[semaphore_idx])
+                            } else {
+                                None
+                            },
+                            signal_semaphore: Some(&used_semaphores[semaphore_idx]),
+                        });
+                        semaphore_idx += 1;
+                        prev_was_cpu = false;
+                    }
+                }
+            }
+        }
+        // Submit
+        unsafe {
+            logic
+                .instance
+                .upgrade()?
+                .inner()?
+                .inner
+                .lock()
+                .as_mut()
+                .unwrap()
+                .submit_recorders(&mut submits)
+                .map_supasim()?;
+        }
+        // Do the incremental waiting
+        {
+            let mut submit_idx = 0;
+            let mut semaphore_idx = 0;
+            for s in temp_submission_vec {
+                match s {
+                    Work::CpuWork(w) => {
+                        w.run(&logic.instance.upgrade()?)?;
+                    }
+                    Work::GpuSubmission(_) => {
+                        if submits[submit_idx].wait_semaphore.is_some() {
+                            unsafe {
+                                semaphores[semaphore_idx].signal().map_supasim()?;
+                            }
+                            semaphore_idx += 1;
+                        }
+                        unsafe {
+                            semaphores[semaphore_idx].wait().map_supasim()?;
+                        }
+                        semaphore_idx += 1;
+                        submit_idx += 1;
+                    }
+                }
+                next_submission_idx += 1;
+                while let Some(last) = jobs.last() {
+                    if last.0 < next_submission_idx {
+                        jobs.pop().unwrap().1.run(&logic.instance.upgrade()?)?;
+                    } else {
+                        break;
+                    }
+                }
+                logic.shared.0.lock().next_job = next_submission_idx;
+                logic.shared.1.notify_all();
+            }
+        }
+        if let Some(final_cpu) = final_cpu {
+            final_cpu.run(&logic.instance.upgrade()?)?;
+        }
+        semaphores.append(&mut used_semaphores);
     }
 }
