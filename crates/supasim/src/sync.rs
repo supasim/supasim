@@ -26,7 +26,7 @@ use types::{Dag, NodeIndex, SyncOperations, Walker};
 
 use crate::{
     BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner, KernelWeak,
-    MapSupasimError, SupaSimError, SupaSimInstance, SupaSimResult,
+    MapSupasimError, SupaSimError, SupaSimInstance, SupaSimInstanceInner, SupaSimResult,
 };
 use anyhow::anyhow;
 
@@ -40,18 +40,17 @@ pub enum HalCommandBuilder {
         dst_offset: u64,
         len: u64,
     },
+    CopyFromTemp {
+        src_offset: u64,
+        dst_buffer: Index,
+        dst_offset: u64,
+        len: u64,
+    },
     DispatchKernel {
         kernel: Index,
         bg: u32,
         push_constants: Vec<u8>,
         workgroup_dims: [u32; 3],
-    },
-    /// Only for vulkan like synchronization
-    SetEvent { event: Index, wait: SyncOperations },
-    /// Only for vulkan like synchronization
-    WaitEvent {
-        event: Index,
-        signal: SyncOperations,
     },
     /// Only for vulkan like synchronization
     PipelineBarrier {
@@ -69,6 +68,7 @@ pub enum HalCommandBuilder {
         kernel: Index,
         resources: Vec<Index>,
     },
+    Dummy,
 }
 pub struct BindGroupDesc {
     kernel_idx: Index,
@@ -86,15 +86,34 @@ pub struct StreamingCommands {
 
 #[allow(clippy::type_complexity)]
 pub fn assemble_dag<B: hal::Backend>(
-    cr: &mut [&mut CommandRecorderInner<B>],
+    crs: &mut [&mut CommandRecorderInner<B>],
     used_kernels: &mut Vec<KernelWeak<B>>,
-) -> SupaSimResult<B, (CommandDag<B>, HashMap<Index, Vec<BufferRange>>)> {
+    instance: &mut SupaSimInstanceInner<B>,
+) -> SupaSimResult<
+    B,
+    (
+        CommandDag<B>,
+        HashMap<Index, Vec<BufferRange>>,
+        Option<B::Buffer>,
+    ),
+> {
     let mut buffers_tracker: HashMap<Index, Vec<(BufferRange, usize)>> = HashMap::new();
 
     let mut commands = Vec::new();
-    for cr in cr {
-        let cmds = std::mem::take(&mut cr.commands);
+    let mut src_buffer_len = 0;
+    for cr in crs.iter_mut() {
+        let mut cmds = std::mem::take(&mut cr.commands);
+        for cmd in &mut cmds {
+            if let BufferCommandInner::CopyFromTemp { src_offset } = &mut cmd.inner {
+                *src_offset += src_buffer_len;
+            }
+        }
         commands.extend(cmds);
+        commands.push(BufferCommand {
+            inner: BufferCommandInner::CommandRecorderEnd,
+            buffers: vec![],
+        });
+        src_buffer_len += cr.writes_slice.len() as u64;
     }
 
     let mut dag = Dag::new();
@@ -123,37 +142,12 @@ pub fn assemble_dag<B: hal::Backend>(
                 }
                 Ok(())
             };
-        if let BufferCommandInner::CopyBufferToBuffer {
-            src_buffer,
-            dst_buffer,
-            src_offset,
-            dst_offset,
-            len,
-        } = &dag[NodeIndex::new(i)].inner
-        {
-            let src_slice = BufferSlice {
-                buffer: src_buffer.clone(),
-                start: *src_offset,
-                len: *len,
-                needs_mut: false,
-            };
-            let dst_slice = BufferSlice {
-                buffer: dst_buffer.clone(),
-                start: *dst_offset,
-                len: *len,
-                needs_mut: true,
-            };
-            work_on_buffer(&src_slice, &mut dag)?;
-            work_on_buffer(&dst_slice, &mut dag)?;
-        } else {
-            for bf_idx in 0..dag[NodeIndex::new(i)].buffers.len() {
-                let buffer = dag[NodeIndex::new(i)].buffers[bf_idx].clone();
-                work_on_buffer(&buffer, &mut dag)?;
-            }
-            if let BufferCommandInner::KernelDispatch { kernel, .. } = &dag[NodeIndex::new(i)].inner
-            {
-                used_kernels.push(kernel.downgrade());
-            }
+        for bf_idx in 0..dag[NodeIndex::new(i)].buffers.len() {
+            let buffer = dag[NodeIndex::new(i)].buffers[bf_idx].clone();
+            work_on_buffer(&buffer, &mut dag)?;
+        }
+        if let BufferCommandInner::KernelDispatch { kernel, .. } = &dag[NodeIndex::new(i)].inner {
+            used_kernels.push(kernel.downgrade());
         }
     }
     dag.add_node(BufferCommand {
@@ -169,7 +163,36 @@ pub fn assemble_dag<B: hal::Backend>(
         .into_iter()
         .map(|(key, value)| (key, value.iter().map(|a| a.0).collect()))
         .collect();
-    Ok((dag, out_map))
+    let src_buffer = if src_buffer_len > 0 {
+        let mut buf = unsafe {
+            instance
+                .inner
+                .as_mut()
+                .unwrap()
+                .create_buffer(&types::HalBufferDescriptor {
+                    size: src_buffer_len,
+                    memory_type: types::HalBufferType::Upload,
+                    min_alignment: 16,
+                })
+                .map_supasim()?
+        };
+        let mut current_offset = 0;
+        for cr in crs.iter_mut() {
+            unsafe {
+                instance
+                    .inner
+                    .as_mut()
+                    .unwrap()
+                    .write_buffer(&mut buf, current_offset, &cr.writes_slice)
+                    .map_supasim()?;
+            }
+            current_offset += cr.writes_slice.len() as u64;
+        }
+        Some(buf)
+    } else {
+        None
+    };
+    Ok((dag, out_map, src_buffer))
 }
 #[allow(clippy::type_complexity)]
 pub fn record_dag<B: hal::Backend>(
@@ -241,25 +264,16 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                 });
                 for &idx in &layer {
                     let cmd = &nodes[idx].weight;
-                    if let BufferCommandInner::CopyBufferToBuffer {
-                        src_buffer,
-                        dst_buffer,
-                        src_offset,
-                        dst_offset,
-                        len,
-                    } = &cmd.inner
-                    {
-                        let src_id = src_buffer.inner()?.id;
-                        let dst_id = dst_buffer.inner()?.id;
+                    if let BufferCommandInner::CopyBufferToBuffer = &cmd.inner {
                         stream.commands.push(HalCommandBuilder::MemoryBarrier {
-                            resource: src_id,
-                            offset: *src_offset,
-                            len: *len,
+                            resource: cmd.buffers[0].buffer.inner()?.id,
+                            offset: cmd.buffers[0].start,
+                            len: cmd.buffers[0].len,
                         });
                         stream.commands.push(HalCommandBuilder::MemoryBarrier {
-                            resource: dst_id,
-                            offset: *dst_offset,
-                            len: *len,
+                            resource: cmd.buffers[1].buffer.inner()?.id,
+                            offset: cmd.buffers[1].start,
+                            len: cmd.buffers[1].len,
                         });
                     } else {
                         for buffer in &cmd.buffers {
@@ -277,18 +291,12 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                 let cmd = &nodes[idx].weight;
                 let hal = match &cmd.inner {
                     BufferCommandInner::Dummy => continue,
-                    BufferCommandInner::CopyBufferToBuffer {
-                        src_buffer,
-                        dst_buffer,
-                        src_offset,
-                        dst_offset,
-                        len,
-                    } => HalCommandBuilder::CopyBuffer {
-                        src_buffer: src_buffer.inner()?.id,
-                        dst_buffer: dst_buffer.inner()?.id,
-                        src_offset: *src_offset,
-                        dst_offset: *dst_offset,
-                        len: *len,
+                    BufferCommandInner::CopyBufferToBuffer => HalCommandBuilder::CopyBuffer {
+                        src_buffer: cmd.buffers[0].buffer.inner()?.id,
+                        dst_buffer: cmd.buffers[1].buffer.inner()?.id,
+                        src_offset: cmd.buffers[0].start,
+                        dst_offset: cmd.buffers[1].start,
+                        len: cmd.buffers[0].len,
                     },
                     BufferCommandInner::KernelDispatch {
                         kernel,
@@ -320,6 +328,15 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                             workgroup_dims: *workgroup_dims,
                         }
                     }
+                    BufferCommandInner::CopyFromTemp { src_offset } => {
+                        HalCommandBuilder::CopyFromTemp {
+                            src_offset: *src_offset,
+                            dst_buffer: cmd.buffers[0].buffer.inner()?.id,
+                            dst_offset: cmd.buffers[0].start,
+                            len: cmd.buffers[0].len,
+                        }
+                    }
+                    BufferCommandInner::CommandRecorderEnd => HalCommandBuilder::Dummy,
                 };
                 stream.commands.push(hal);
             }
@@ -335,6 +352,7 @@ pub fn record_command_streams<B: hal::Backend>(
     streams: &StreamingCommands,
     instance: SupaSimInstance<B>,
     recorder: &mut B::CommandRecorder,
+    write_buffer: &Option<B::Buffer>,
 ) -> SupaSimResult<B, Vec<(B::BindGroup, Index)>> {
     let mut instance = instance.inner_mut()?;
     let mut bindgroups = Vec::new();
@@ -431,6 +449,15 @@ pub fn record_command_streams<B: hal::Backend>(
                             .upgrade()?,
                     );
                 }
+                HalCommandBuilder::CopyFromTemp { dst_buffer, .. } => buffer_refs.push(
+                    instance
+                        .buffers
+                        .get(*dst_buffer)
+                        .ok_or(SupaSimError::AlreadyDestroyed)?
+                        .as_ref()
+                        .unwrap()
+                        .upgrade()?,
+                ),
                 _ => (),
             }
         }
@@ -504,8 +531,20 @@ pub fn record_command_streams<B: hal::Backend>(
                             after: *after,
                         }
                     }
-                    // TODO: implement stuff bind group updates
-                    _ => unreachable!(),
+                    HalCommandBuilder::CopyFromTemp {
+                        src_offset,
+                        dst_offset,
+                        len,
+                        ..
+                    } => hal::BufferCommand::CopyBuffer {
+                        src_buffer: write_buffer.as_ref().unwrap(),
+                        dst_buffer: get_buffer(),
+                        src_offset: *src_offset,
+                        dst_offset: *dst_offset,
+                        len: *len,
+                    },
+                    HalCommandBuilder::UpdateBindGroup { .. } => todo!(),
+                    HalCommandBuilder::Dummy => hal::BufferCommand::Dummy,
                 };
                 hal_commands.push(cmd);
                 // Add the commands n shit

@@ -25,7 +25,6 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
             .create_buffer(&HalBufferDescriptor {
                 size: 16,
                 memory_type: types::HalBufferType::Upload,
-                visible_to_renderer: false,
                 min_alignment: 16,
             })
             .unwrap();
@@ -33,7 +32,6 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
             .create_buffer(&HalBufferDescriptor {
                 size: 16,
                 memory_type: types::HalBufferType::Storage,
-                visible_to_renderer: false,
                 min_alignment: 16,
             })
             .unwrap();
@@ -41,7 +39,6 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
             .create_buffer(&HalBufferDescriptor {
                 size: 16,
                 memory_type: types::HalBufferType::Download,
-                visible_to_renderer: false,
                 min_alignment: 16,
             })
             .unwrap();

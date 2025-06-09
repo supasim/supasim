@@ -728,17 +728,10 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     ) -> Result<<Vulkan as Backend>::Buffer, <Vulkan as Backend>::Error> {
         unsafe {
             let err = Cell::new(true);
-            if alloc_info.visible_to_renderer {
-                return Err(VulkanError::ExternalRendererUnsupported);
-            }
             let queue_family_indices = [self.queue_family_idx]; // This would need to change to support external renderers
             let create_info = vk::BufferCreateInfo::default()
                 .size(alloc_info.size)
-                .sharing_mode(if alloc_info.visible_to_renderer {
-                    vk::SharingMode::CONCURRENT
-                } else {
-                    vk::SharingMode::EXCLUSIVE
-                })
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .queue_family_indices(&queue_family_indices)
                 .usage({
                     use vk::BufferUsageFlags as F;
@@ -1356,6 +1349,7 @@ impl VulkanCommandRecorder {
                 unreachable!()
             }
             BufferCommand::UpdateBindGroup { .. } => unreachable!(),
+            BufferCommand::Dummy => (),
         }
         Ok(())
     }

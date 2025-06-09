@@ -37,7 +37,6 @@ pub enum HalBufferType {
 pub struct HalBufferDescriptor {
     pub size: u64,
     pub memory_type: HalBufferType,
-    pub visible_to_renderer: bool,
     pub min_alignment: usize,
 }
 

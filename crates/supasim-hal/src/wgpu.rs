@@ -575,6 +575,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                     unreachable!()
                 }
                 BufferCommand::MemoryBarrier { .. } | BufferCommand::PipelineBarrier { .. } => (),
+                BufferCommand::Dummy => (),
             }
         }
 

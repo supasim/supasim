@@ -100,27 +100,25 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
         .write::<u32>(0, &[1, 2, 3, 4, 5, 6, 7, 8, 1, 1, 1, 1, 22, 22, 22, 22])
         .unwrap();
     recorder
-        .copy_buffer(upload_buffer.clone(), buffer1.clone(), 0, 0, 16)
+        .write_buffer::<u32>(&buffer1, 0, &[1, 2, 3, 4])
         .unwrap();
     recorder
-        .copy_buffer(upload_buffer.clone(), buffer2.clone(), 16, 0, 16)
+        .write_buffer::<u32>(&buffer2, 0, &[5, 6, 7, 8])
         .unwrap();
     recorder
-        .copy_buffer(upload_buffer.clone(), buffer3.clone(), 32, 0, 16)
+        .write_buffer::<u32>(&buffer3, 0, &[1, 1, 1, 1])
         .unwrap();
-    recorder
-        .copy_buffer(upload_buffer.clone(), download_buffer.clone(), 48, 0, 16)
-        .unwrap();
+
     let buffers = [
         &BufferSlice::entire_buffer(&buffer1, false).unwrap(),
         &BufferSlice::entire_buffer(&buffer2, false).unwrap(),
         &BufferSlice::entire_buffer(&buffer3, true).unwrap(),
     ];
     recorder
-        .dispatch_kernel(kernel.clone(), &buffers, [4, 1, 1])
+        .dispatch_kernel(&kernel, &buffers, [4, 1, 1])
         .unwrap();
     recorder
-        .copy_buffer(buffer3.clone(), download_buffer.clone(), 0, 0, 16)
+        .copy_buffer(&buffer3, &download_buffer, 0, 0, 16)
         .unwrap();
     instance.submit_commands(&mut [recorder]).unwrap();
     // Command summary:

@@ -128,7 +128,6 @@ impl From<BufferDescriptor> for types::HalBufferDescriptor {
                 BufferType::Download => types::HalBufferType::Download,
                 BufferType::Automatic => types::HalBufferType::Storage,
             },
-            visible_to_renderer: false,
             min_alignment: 16,
         }
     }
@@ -437,6 +436,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             id: Index::DANGLING,
             commands: Vec::new(),
             is_alive: true,
+            writes_slice: Vec::new(),
         });
         r.inner_mut()?.id = s.command_recorders.insert(Some(r.downgrade()));
         Ok(r)
@@ -492,7 +492,8 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             let mut used_buffers = HashSet::new();
             let mut used_buffer_ranges = Vec::new();
             let mut used_kernels = Vec::new();
-            let (dag, sync_info) = sync::assemble_dag(&mut recorder_inners, &mut used_kernels)?;
+            let (dag, sync_info, src_buffer) =
+                sync::assemble_dag(&mut recorder_inners, &mut used_kernels, &mut *s)?;
             for (&buf_id, ranges) in &sync_info {
                 let b = s
                     .buffers
@@ -527,11 +528,21 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                 types::SyncMode::Dag => sync::record_dag(&dag, &mut recorder)?,
                 types::SyncMode::VulkanStyle => {
                     let streams = sync::dag_to_command_streams(&dag, true)?;
-                    sync::record_command_streams(&streams, self.clone(), &mut recorder)?
+                    sync::record_command_streams(
+                        &streams,
+                        self.clone(),
+                        &mut recorder,
+                        &src_buffer,
+                    )?
                 }
                 types::SyncMode::Automatic => {
                     let streams = sync::dag_to_command_streams(&dag, false)?;
-                    sync::record_command_streams(&streams, self.clone(), &mut recorder)?
+                    sync::record_command_streams(
+                        &streams,
+                        self.clone(),
+                        &mut recorder,
+                        &src_buffer,
+                    )?
                 }
             };
             let mut s = self.inner_mut()?;
@@ -567,7 +578,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             s.submitted_command_recorders
                 .push_back(SubmittedCommandRecorder {
                     command_recorders: vec![recorder],
-                    buffers_to_destroy: Vec::new(),
+                    buffers_to_destroy: src_buffer.into_iter().collect(),
                     bind_groups,
                     used_semaphore: semaphore,
                     kernels_to_destroy: Vec::new(),
@@ -966,18 +977,15 @@ struct BufferCommand<B: hal::Backend> {
 }
 #[derive(Debug)]
 enum BufferCommandInner<B: hal::Backend> {
-    CopyBufferToBuffer {
-        src_buffer: Buffer<B>,
-        dst_buffer: Buffer<B>,
+    CopyBufferToBuffer,
+    CopyFromTemp {
         src_offset: u64,
-        dst_offset: u64,
-        len: u64,
     },
-    /// Kernel, workgroup size
     KernelDispatch {
         kernel: Kernel<B>,
         workgroup_dims: [u32; 3],
     },
+    CommandRecorderEnd,
     Dummy,
 }
 struct SubmittedCommandRecorder<B: hal::Backend> {
@@ -995,6 +1003,7 @@ api_type!(CommandRecorder, {
     is_alive: bool,
     id: Index,
     commands: Vec<BufferCommand<B>>,
+    writes_slice: Vec<u8>,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
     /// Valid copies (automatic can replace any of these)
@@ -1006,8 +1015,8 @@ impl<B: hal::Backend> CommandRecorder<B> {
     /// So, basically anything that isn't starting from download or landing in upload
     pub fn copy_buffer(
         &self,
-        src_buffer: Buffer<B>,
-        dst_buffer: Buffer<B>,
+        src_buffer: &Buffer<B>,
+        dst_buffer: &Buffer<B>,
         src_offset: u64,
         dst_offset: u64,
         len: u64,
@@ -1038,21 +1047,42 @@ impl<B: hal::Backend> CommandRecorder<B> {
         {
             let mut lock = self.inner_mut()?;
             lock.commands.push(BufferCommand {
-                inner: BufferCommandInner::CopyBufferToBuffer {
-                    src_buffer,
-                    dst_buffer,
-                    src_offset,
-                    dst_offset,
-                    len,
-                },
+                inner: BufferCommandInner::CopyBufferToBuffer,
                 buffers: vec![src_slice, dst_slice],
             });
         }
         Ok(())
     }
+    pub fn write_buffer<T: bytemuck::Pod>(
+        &self,
+        buffer: &Buffer<B>,
+        offset: u64,
+        data: &[T],
+    ) -> SupaSimResult<B, ()> {
+        let data = bytemuck::cast_slice(data);
+        let len = data.len() as u64;
+        let dst_slice = BufferSlice {
+            buffer: buffer.clone(),
+            start: offset,
+            len,
+            needs_mut: true,
+        };
+        dst_slice.validate()?;
+        if buffer.inner()?.create_info.buffer_type == BufferType::Upload {
+            return Err(SupaSimError::BufferLocalityViolated);
+        }
+        let mut s = self.inner_mut()?;
+        let src_offset = s.writes_slice.len() as u64;
+        s.commands.push(BufferCommand {
+            inner: BufferCommandInner::CopyFromTemp { src_offset },
+            buffers: vec![dst_slice],
+        });
+        s.writes_slice.extend_from_slice(data);
+        Ok(())
+    }
     pub fn dispatch_kernel(
         &self,
-        kernel: Kernel<B>,
+        kernel: &Kernel<B>,
         buffers: &[&BufferSlice<B>],
         workgroup_dims: [u32; 3],
     ) -> SupaSimResult<B, ()> {
@@ -1070,7 +1100,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
         let mut s = self.inner_mut()?;
         s.commands.push(BufferCommand {
             inner: BufferCommandInner::KernelDispatch {
-                kernel,
+                kernel: kernel.clone(),
                 workgroup_dims,
             },
             buffers: buffers.iter().map(|&b| b.clone()).collect(),

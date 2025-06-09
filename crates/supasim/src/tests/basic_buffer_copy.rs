@@ -54,10 +54,10 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(hal: Backend::Instance) -> Resul
     upload_buffer.write::<u32>(0, &[1, 2, 3, 4]).unwrap();
     let recorder = instance.create_recorder().unwrap();
     recorder
-        .copy_buffer(upload_buffer.clone(), gpu_buffer.clone(), 0, 0, 16)
+        .copy_buffer(&upload_buffer, &gpu_buffer, 0, 0, 16)
         .unwrap();
     recorder
-        .copy_buffer(gpu_buffer.clone(), download_buffer.clone(), 0, 0, 16)
+        .copy_buffer(&gpu_buffer, &download_buffer, 0, 0, 16)
         .unwrap();
     instance.submit_commands(&mut [recorder]).unwrap();
     instance.wait_for_idle(1.0).unwrap();

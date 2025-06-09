@@ -262,11 +262,14 @@ pub enum BufferCommand<'a, B: Backend> {
         after: SyncOperations,
     },
     /// Only for vulkan like synchronization. Consecutive pipeline and memory barriers will combine. Memory barriers without such a pipeline barrier are undefined behavior.
-    MemoryBarrier { buffer: HalBufferSlice<'a, B> },
+    MemoryBarrier {
+        buffer: HalBufferSlice<'a, B>,
+    },
     /// Writes a bind group. This is for instances with the `easily_update_bind_groups` property.
     UpdateBindGroup {
         bg: &'a B::BindGroup,
         kernel: &'a B::Kernel,
         buffers: &'a [HalBufferSlice<'a, B>],
     },
+    Dummy,
 }
