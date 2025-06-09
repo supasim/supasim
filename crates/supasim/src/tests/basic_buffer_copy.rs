@@ -20,8 +20,8 @@ use crate::*;
 use std::any::TypeId;
 
 pub fn basic_buffer_copy<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), ()> {
-    // Dummy test won't be necessary here
     if TypeId::of::<Backend>() == TypeId::of::<hal::Dummy>() {
+        // We don't want to "test" on the dummy backend, where nothing happens so the result will be wrong
         return Ok(());
     }
     println!("Hello, world!");

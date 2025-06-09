@@ -19,21 +19,18 @@ END LICENSE */
 use crate::*;
 use std::any::TypeId;
 pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), ()> {
-    // Dummy test won't be necessary here
+    // Test specific stuff
     if TypeId::of::<Backend>() == TypeId::of::<hal::Dummy>() {
+        // We don't want to "test" on the dummy backend, where nothing happens so the result will be wrong
         return Ok(());
     }
     println!("Hello, world!");
     dev_utils::setup_trace_printer_if_env();
+
+    // Create the instance
     let instance: SupaSimInstance<Backend> = SupaSimInstance::from_hal(hal);
-    let upload_buffer = instance
-        .create_buffer(&crate::BufferDescriptor {
-            size: 64,
-            buffer_type: BufferType::Upload,
-            contents_align: 4,
-            ..Default::default()
-        })
-        .unwrap();
+
+    // Create the buffers
     let download_buffer = instance
         .create_buffer(&crate::BufferDescriptor {
             size: 16,
@@ -69,6 +66,8 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
         } else {
             None
         };
+
+    // Compile the kernels
     let global_state = kernels::GlobalState::new_from_env().unwrap();
     let mut spirv = Vec::new();
     let mut reflection_info = global_state
@@ -90,15 +89,19 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
         .unwrap();
     // Reflection isn't working yet so this is a temporary workaround
     reflection_info.num_buffers = 3;
-    println!("Reflection info: {:?}", reflection_info);
     let kernel = instance
         .compile_kernel(&spirv, reflection_info, cache.as_ref())
         .unwrap();
-    let recorder = instance.create_recorder().unwrap();
 
-    upload_buffer
-        .write::<u32>(0, &[1, 2, 3, 4, 5, 6, 7, 8, 1, 1, 1, 1, 22, 22, 22, 22])
-        .unwrap();
+    // Record and submit commands
+    //
+    // Command summary:
+    // * Copy data from upload buffer into 3 used buffers
+    // * Buffer3 gets the result of adding from 1 and 2
+    // * Buffer3 gets copied into download buffer
+    // * It should have value [8,10,12,14]
+
+    let recorder = instance.create_recorder().unwrap();
     recorder
         .write_buffer::<u32>(&buffer1, 0, &[1, 2, 3, 4])
         .unwrap();
@@ -108,24 +111,23 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
     recorder
         .write_buffer::<u32>(&buffer3, 0, &[1, 1, 1, 1])
         .unwrap();
-
-    let buffers = [
-        &BufferSlice::entire_buffer(&buffer1, false).unwrap(),
-        &BufferSlice::entire_buffer(&buffer2, false).unwrap(),
-        &BufferSlice::entire_buffer(&buffer3, true).unwrap(),
-    ];
     recorder
-        .dispatch_kernel(&kernel, &buffers, [4, 1, 1])
+        .dispatch_kernel(
+            &kernel,
+            &[
+                &BufferSlice::entire_buffer(&buffer1, false).unwrap(),
+                &BufferSlice::entire_buffer(&buffer2, false).unwrap(),
+                &BufferSlice::entire_buffer(&buffer3, true).unwrap(),
+            ],
+            [4, 1, 1],
+        )
         .unwrap();
     recorder
         .copy_buffer(&buffer3, &download_buffer, 0, 0, 16)
         .unwrap();
     instance.submit_commands(&mut [recorder]).unwrap();
-    // Command summary:
-    // * Copy data from upload buffer into 3 used buffers
-    // * Buffer3 gets the result of adding from 1 and 2
-    // * Buffer3 gets copied into download buffer
-    // * It should have value [8,10,12,14]
+
+    // Check the result from the download buffer
     assert_eq!(
         download_buffer
             .access(0, 16, false)
