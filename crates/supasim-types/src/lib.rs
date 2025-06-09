@@ -22,28 +22,22 @@ pub use daggy::Walker;
 pub use daggy::petgraph::algo::toposort;
 pub use daggy::petgraph::graph::NodeIndex;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum HalBufferType {
-    /// Driver decides
-    #[default]
-    Any,
     /// Used for kernel access. Memory type on GPU that can be copied around on GPU but is optimized for local access.
+    #[default]
     Storage,
     /// Best for uploading data to GPU. Memory type on GPU that can be written to from CPU and copied from on GPU.
     Upload,
     /// Best for downloading data from GPU. Memory type on GPU that can be copied to from GPU and read from CPU.
     Download,
-    /// Can be copied to from GPU and used in other use cases such as uniform buffers.
-    Other,
+    UploadDownload,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HalBufferDescriptor {
     pub size: u64,
     pub memory_type: HalBufferType,
     pub visible_to_renderer: bool,
-    pub indirect_capable: bool,
-    pub uniform: bool,
-    pub needs_flush: bool,
     pub min_alignment: usize,
 }
 
@@ -169,6 +163,8 @@ pub struct HalInstanceProperties {
     pub is_unified_memory: bool,
     /// Whether you can map buffers while they are in use on the GPU(even if the slices don't overlap)
     pub map_buffer_while_gpu_use: bool,
+    /// Whether it supports dual upload-download buffers
+    pub upload_download_buffers: bool,
 }
 /// # Safety
 /// This is undefined behavior lol

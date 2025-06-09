@@ -135,6 +135,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             is_unified_memory: self.unified_memory,
             map_buffers: true,
             map_buffer_while_gpu_use: false,
+            upload_download_buffers: false,
         }
     }
 
@@ -291,32 +292,19 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: alloc_info.size,
-            usage: {
-                let mut usage = match alloc_info.memory_type {
-                    HalBufferType::Storage => {
-                        wgpu::BufferUsages::STORAGE
-                            | wgpu::BufferUsages::COPY_SRC
-                            | wgpu::BufferUsages::COPY_DST
-                    }
-                    HalBufferType::Download => {
-                        wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ
-                    }
-                    HalBufferType::Upload => {
-                        wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::MAP_WRITE
-                    }
-                    HalBufferType::Other => wgpu::BufferUsages::COPY_DST,
-                    HalBufferType::Any => {
-                        unreachable!()
-                    }
-                };
-
-                if alloc_info.indirect_capable {
-                    usage |= wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE;
+            usage: match alloc_info.memory_type {
+                HalBufferType::Storage => {
+                    wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST
                 }
-                if alloc_info.uniform {
-                    usage |= wgpu::BufferUsages::UNIFORM;
+                HalBufferType::Download => {
+                    wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ
                 }
-                usage
+                HalBufferType::Upload => {
+                    wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::MAP_WRITE
+                }
+                HalBufferType::UploadDownload => unreachable!(),
             },
             mapped_at_creation: false,
         });

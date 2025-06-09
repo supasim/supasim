@@ -607,6 +607,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             map_buffers: true,
             is_unified_memory: self.is_unified_memory,
             map_buffer_while_gpu_use: true,
+            upload_download_buffers: true,
         }
     }
     #[tracing::instrument(skip(binary))]
@@ -741,22 +742,14 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .queue_family_indices(&queue_family_indices)
                 .usage({
                     use vk::BufferUsageFlags as F;
-                    let mut flags = match alloc_info.memory_type {
+                    match alloc_info.memory_type {
                         HalBufferType::Storage => {
                             F::TRANSFER_SRC | F::TRANSFER_DST | F::STORAGE_BUFFER
                         }
                         HalBufferType::Upload => F::TRANSFER_SRC,
                         HalBufferType::Download => F::TRANSFER_DST,
-                        HalBufferType::Other => F::TRANSFER_DST,
-                        HalBufferType::Any => unreachable!(),
-                    };
-                    if alloc_info.indirect_capable {
-                        flags |= F::INDIRECT_BUFFER | F::STORAGE_BUFFER
+                        HalBufferType::UploadDownload => F::TRANSFER_SRC | F::TRANSFER_DST,
                     }
-                    if alloc_info.uniform {
-                        flags |= F::UNIFORM_BUFFER
-                    };
-                    flags
                 });
             let buffer = self.device.create_buffer(&create_info, None)?;
             defer! {
@@ -777,11 +770,10 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     name: "",
                     requirements,
                     location: match alloc_info.memory_type {
-                        Any => gpu_allocator::MemoryLocation::Unknown,
                         Storage => gpu_allocator::MemoryLocation::GpuOnly,
                         Upload => gpu_allocator::MemoryLocation::CpuToGpu,
                         Download => gpu_allocator::MemoryLocation::GpuToCpu,
-                        Other => gpu_allocator::MemoryLocation::CpuToGpu,
+                        UploadDownload => gpu_allocator::MemoryLocation::CpuToGpu,
                     },
                     linear: true,
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,

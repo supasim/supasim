@@ -54,6 +54,7 @@ impl BackendInstance<Dummy> for DummyResource {
             map_buffers: true,
             is_unified_memory: false,
             map_buffer_while_gpu_use: true,
+            upload_download_buffers: true,
         }
     }
 

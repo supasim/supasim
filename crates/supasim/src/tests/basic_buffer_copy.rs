@@ -38,7 +38,7 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(hal: Backend::Instance) -> Resul
     let gpu_buffer = instance
         .create_buffer(&BufferDescriptor {
             size: 16,
-            buffer_type: BufferType::Storage,
+            buffer_type: BufferType::Gpu,
             contents_align: 4,
             priority: 0.0,
         })

@@ -36,9 +36,6 @@ unsafe fn create_storage_buf<B: Backend>(
             size,
             memory_type: types::HalBufferType::Storage,
             visible_to_renderer: false,
-            indirect_capable: false,
-            uniform: false,
-            needs_flush: true,
             min_alignment: 16,
         })?;
         Ok(buf)
@@ -112,27 +109,12 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             size: 16,
             memory_type: types::HalBufferType::Upload,
             visible_to_renderer: false,
-            indirect_capable: false,
-            uniform: false,
-            needs_flush: true,
             min_alignment: 16,
         })?;
         let mut download_buffer = instance.create_buffer(&HalBufferDescriptor {
             size: 16,
             memory_type: types::HalBufferType::Download,
             visible_to_renderer: false,
-            indirect_capable: false,
-            uniform: false,
-            needs_flush: true,
-            min_alignment: 16,
-        })?;
-        let uniform_buf = instance.create_buffer(&HalBufferDescriptor {
-            size: 16,
-            memory_type: types::HalBufferType::Other,
-            visible_to_renderer: false,
-            indirect_capable: false,
-            uniform: true,
-            needs_flush: true,
             min_alignment: 16,
         })?;
         let sb1 = create_storage_buf::<B>(&mut instance, 16)?;
@@ -292,7 +274,6 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
         instance.destroy_bind_group(&mut kernel2, bind_group2)?;
         instance.destroy_kernel(kernel)?;
         instance.destroy_kernel(kernel2)?;
-        instance.destroy_buffer(uniform_buf)?;
         instance.destroy_buffer(sb1)?;
         instance.destroy_buffer(sb2)?;
         instance.destroy_buffer(sbout)?;

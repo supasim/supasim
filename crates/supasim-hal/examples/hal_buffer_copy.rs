@@ -26,9 +26,6 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
                 size: 16,
                 memory_type: types::HalBufferType::Upload,
                 visible_to_renderer: false,
-                indirect_capable: false,
-                uniform: false,
-                needs_flush: false,
                 min_alignment: 16,
             })
             .unwrap();
@@ -37,9 +34,6 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
                 size: 16,
                 memory_type: types::HalBufferType::Storage,
                 visible_to_renderer: false,
-                indirect_capable: false,
-                uniform: false,
-                needs_flush: false,
                 min_alignment: 16,
             })
             .unwrap();
@@ -48,9 +42,6 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
                 size: 16,
                 memory_type: types::HalBufferType::Download,
                 visible_to_renderer: false,
-                indirect_capable: false,
-                uniform: false,
-                needs_flush: false,
                 min_alignment: 16,
             })
             .unwrap();

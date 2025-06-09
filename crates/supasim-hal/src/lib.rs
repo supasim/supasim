@@ -97,7 +97,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
     /// * All submissions using this recorder must have completed
     unsafe fn destroy_recorder(&mut self, recorder: B::CommandRecorder) -> Result<(), B::Error>;
     /// # Safety
-    /// * Indirect must only be set if the instance supports it
+    /// * If the device doesn't support `upload_download_buffers`, `memory_type` cannot be `UploadDownload`
     unsafe fn create_buffer(
         &mut self,
         alloc_info: &HalBufferDescriptor,
@@ -129,9 +129,12 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
         data: &mut [u8],
     ) -> Result<(), B::Error>;
     /// # Safety
+    /// * The device must support `map_buffers`
     /// * Map buffer may be called multiple times to obtain multiple pointers
     /// * Unmap buffer invalidates all such pointers
     /// * Writing to a mapped upload buffer is illegal(except on unified memory systems)
+    /// * If the device doesn't support `map_buffer_while_gpu_use`, the buffer must be unmapped before
+    ///   any GPU work using the buffer is submitted
     unsafe fn map_buffer(&mut self, buffer: &mut B::Buffer) -> Result<*mut u8, B::Error>;
     /// # Safety
     /// * All mapped pointers are invalidated

@@ -75,15 +75,27 @@ impl<T> DerefMut for InnerRefMut<'_, T> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BufferType {
     /// Used by kernels
-    Storage,
-    /// Used as an indirect buffer for indirect dispatch calls
-    Indirect,
-    /// Used for uniform data for kernels
-    Uniform,
+    Gpu,
     /// Used to upload data to GPU
     Upload,
     /// Used to download data from GPU
     Download,
+    /// Automatically converted between CPU/GPU depending on usage. Currently not implemented
+    Automatic,
+}
+impl BufferType {
+    pub fn can_be_on_cpu(&self) -> bool {
+        match self {
+            Self::Gpu => false,
+            Self::Upload | Self::Download | Self::Automatic => true,
+        }
+    }
+    pub fn can_be_on_gpu(&self) -> bool {
+        match self {
+            Self::Gpu | Self::Automatic => true,
+            Self::Upload | Self::Download => false,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug)]
 pub struct BufferDescriptor {
@@ -100,7 +112,7 @@ impl Default for BufferDescriptor {
     fn default() -> Self {
         Self {
             size: 0,
-            buffer_type: BufferType::Storage,
+            buffer_type: BufferType::Gpu,
             contents_align: 0,
             priority: 1.0,
         }
@@ -111,15 +123,12 @@ impl From<BufferDescriptor> for types::HalBufferDescriptor {
         types::HalBufferDescriptor {
             size: s.size,
             memory_type: match s.buffer_type {
-                BufferType::Storage => types::HalBufferType::Storage,
-                BufferType::Indirect | BufferType::Uniform => types::HalBufferType::Other,
+                BufferType::Gpu => types::HalBufferType::Storage,
                 BufferType::Upload => types::HalBufferType::Upload,
                 BufferType::Download => types::HalBufferType::Download,
+                BufferType::Automatic => types::HalBufferType::Storage,
             },
             visible_to_renderer: false,
-            indirect_capable: s.buffer_type == BufferType::Indirect,
-            uniform: s.buffer_type == BufferType::Uniform,
-            needs_flush: true,
             min_alignment: 16,
         }
     }
@@ -163,7 +172,7 @@ impl<B: hal::Backend> BufferSlice<B> {
             needs_mut,
         })
     }
-    fn acquire(&self, submission_id: Option<u64>) -> SupaSimResult<B, BufferUserId> {
+    fn acquire(&self, user: BufferUser) -> SupaSimResult<B, BufferUserId> {
         let s = self.buffer.inner()?;
         let instance = s.instance.clone();
 
@@ -174,7 +183,7 @@ impl<B: hal::Backend> BufferSlice<B> {
                 len: self.len,
                 needs_mut: self.needs_mut,
             },
-            submission_id,
+            user,
         )
     }
     fn release(&self, id: u64) -> SupaSimResult<B, ()> {
@@ -282,6 +291,8 @@ pub enum SupaSimError<B: hal::Backend> {
     BufferRegionNotValid,
     ValidateIndirectUnsupported,
     UserClosure(anyhow::Error),
+    /// Buffer attempted to be used from wrong side of cpu/gpu on non-unified memory system
+    BufferLocalityViolated,
 }
 trait MapSupasimError<T, B: hal::Backend> {
     fn map_supasim(self) -> Result<T, SupaSimError<B>>;
@@ -434,6 +445,13 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         let mut s = self.inner_mut()?;
         let inner =
             unsafe { s.inner.as_mut().unwrap().create_buffer(&(*desc).into()) }.map_supasim()?;
+        let buffer_type_is_cpu = match desc.buffer_type {
+            BufferType::Download | BufferType::Upload => true,
+            BufferType::Gpu => false,
+            BufferType::Automatic => unimplemented!(),
+        };
+        let cpu_available = s.inner_properties.is_unified_memory || buffer_type_is_cpu;
+        let gpu_available = s.inner_properties.is_unified_memory || !buffer_type_is_cpu;
         let b = Buffer::from_inner(BufferInner {
             _phantom: Default::default(),
             instance: self.clone(),
@@ -443,7 +461,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             _semaphores: Vec::new(),
             create_info: *desc,
             last_used: 0,
-            slice_tracker: SliceTracker::new(),
+            slice_tracker: SliceTracker::new(gpu_available, cpu_available),
         });
         b.inner_mut()?.id = s.buffers.insert(Some(b.downgrade()));
         Ok(b)
@@ -485,10 +503,17 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                     .upgrade()?;
                 let mut b_mut = b.inner_mut()?;
                 b_mut.last_used = s.submitted_semaphore_count;
+
                 for &range in ranges {
-                    let id = b_mut
-                        .slice_tracker
-                        .acquire(&mut *s, range, Some(b_mut.last_used))?;
+                    let id = b_mut.slice_tracker.acquire(
+                        &mut *s,
+                        range,
+                        if b_mut.slice_tracker.mutex.lock().unwrap().gpu_available {
+                            BufferUser::Gpu(b_mut.last_used)
+                        } else {
+                            BufferUser::Cross(b_mut.last_used)
+                        },
+                    )?;
                     used_buffer_ranges.push((id, b.downgrade()))
                 }
                 used_buffers.insert(buf_id);
@@ -601,7 +626,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         let mut ids = Vec::new();
         for b in buffers {
             b.validate()?;
-            ids.push(b.acquire(None)?.id);
+            ids.push(b.acquire(BufferUser::Cpu)?.id);
         }
         if properties.map_buffers {
             let mut instance = self.inner_mut()?;
@@ -972,6 +997,13 @@ api_type!(CommandRecorder, {
     commands: Vec<BufferCommand<B>>,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
+    /// Valid copies (automatic can replace any of these)
+    /// * Upload -> download
+    /// * Upload -> gpu
+    /// * Gpu -> download
+    /// * Gpu -> gpu
+    ///
+    /// So, basically anything that isn't starting from download or landing in upload
     pub fn copy_buffer(
         &self,
         src_buffer: Buffer<B>,
@@ -986,6 +1018,15 @@ impl<B: hal::Backend> CommandRecorder<B> {
             len,
             needs_mut: false,
         };
+        if matches!(
+            (
+                src_buffer.inner()?.create_info.buffer_type,
+                dst_buffer.inner()?.create_info.buffer_type,
+            ),
+            (BufferType::Download, _) | (_, BufferType::Upload)
+        ) {
+            return Err(SupaSimError::BufferLocalityViolated);
+        }
         let dst_slice = BufferSlice {
             buffer: dst_buffer.clone(),
             start: dst_offset,
@@ -1022,6 +1063,9 @@ impl<B: hal::Backend> CommandRecorder<B> {
         }
         for b in buffers {
             b.validate()?;
+            if !b.buffer.inner()?.create_info.buffer_type.can_be_on_gpu() {
+                return Err(SupaSimError::BufferLocalityViolated);
+            }
         }
         let mut s = self.inner_mut()?;
         s.commands.push(BufferCommand {
@@ -1075,7 +1119,18 @@ impl BufferRange {
             && (self.needs_mut || other.needs_mut)
     }
 }
-
+enum BufferBacking<B: hal::Backend> {
+    HostBacked(B::Buffer),
+    GpuBacked(B::Buffer),
+}
+impl<B: hal::Backend> BufferBacking<B> {
+    pub fn buffer_mut(&mut self) -> &mut B::Buffer {
+        match self {
+            Self::HostBacked(b) => b,
+            Self::GpuBacked(b) => b,
+        }
+    }
+}
 api_type!(Buffer, {
     instance: SupaSimInstance<B>,
     inner: Option<B::Buffer>,
@@ -1094,7 +1149,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut: true,
         };
         buffer_slice.validate_with_align(size_of::<T>() as u64)?;
-        let id = buffer_slice.acquire(None)?.id;
+        let id = buffer_slice.acquire(BufferUser::Cpu)?.id;
         let mut s = self.inner_mut()?;
         let _instance = s.instance.clone();
         let mut instance = _instance.inner_mut()?;
@@ -1119,7 +1174,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut: false,
         };
         slice.validate_with_align(size_of::<T>() as u64)?;
-        let id = slice.acquire(None)?;
+        let id = slice.acquire(BufferUser::Cpu)?;
         let mut s = self.inner_mut()?;
         let _instance = s.instance.clone();
         let mut instance = _instance.inner_mut()?;
@@ -1149,7 +1204,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut,
         };
         slice.validate()?;
-        let id = slice.acquire(None)?.id;
+        let id = slice.acquire(BufferUser::Cpu)?.id;
         let _instance = self.inner()?.instance.clone();
         let mut instance = _instance.inner_mut()?;
         let mut s = self.inner_mut()?;
@@ -1366,9 +1421,11 @@ pub type CpuCallback<B> = (
     Vec<Buffer<B>>,
 );
 struct SliceTrackerInner {
-    uses: HashMap<BufferUserId, Option<u64>>,
+    uses: HashMap<BufferUserId, BufferUser>,
     current_id: u64,
     cpu_locked: Option<u64>,
+    gpu_available: bool,
+    cpu_available: bool,
 }
 struct SliceTracker {
     condvar: Condvar,
@@ -1378,13 +1435,15 @@ struct SliceTracker {
     mutex: Mutex<SliceTrackerInner>,
 }
 impl SliceTracker {
-    pub fn new() -> Self {
+    pub fn new(gpu_available: bool, cpu_available: bool) -> Self {
         Self {
             condvar: Condvar::new(),
             mutex: Mutex::new(SliceTrackerInner {
                 uses: HashMap::new(),
                 current_id: 0,
                 cpu_locked: None,
+                gpu_available,
+                cpu_available,
             }),
         }
     }
@@ -1392,27 +1451,36 @@ impl SliceTracker {
         &self,
         instance: &mut SupaSimInstanceInner<B>,
         range: BufferRange,
-        submission_id: Option<u64>,
+        user: BufferUser,
     ) -> SupaSimResult<B, BufferUserId> {
         let mut lock = self.mutex.lock().unwrap();
+        if match user {
+            BufferUser::Cpu => !lock.cpu_available,
+            BufferUser::Cross(_) => !lock.cpu_available,
+            BufferUser::Gpu(_) => !lock.gpu_available,
+        } {
+            return Err(SupaSimError::BufferLocalityViolated);
+        }
         let mut cont = true;
         let mut gpu_submissions = Vec::new();
         while cont {
             let mut has_cpu = false;
             cont = false;
             gpu_submissions.clear();
-            if submission_id.is_none() && lock.cpu_locked.is_some() {
+            if user.submission_id().is_none() && lock.cpu_locked.is_some() {
                 cont = true;
                 gpu_submissions.push(lock.cpu_locked.unwrap());
             }
             for (&a, &submission) in &lock.uses {
                 if a.range.overlaps(&range) {
                     // If this is part of the same GPU submission, don't try to wait
-                    if submission == submission_id && submission.is_some() {
+                    if submission.submission_id() == user.submission_id()
+                        && submission.submission_id().is_some()
+                    {
                         continue;
                     }
                     cont = true;
-                    if let Some(sub) = submission {
+                    if let Some(sub) = submission.submission_id() {
                         gpu_submissions.push(sub);
                     } else {
                         has_cpu = true;
@@ -1435,7 +1503,7 @@ impl SliceTracker {
             id: lock.current_id,
         };
         lock.current_id += 1;
-        lock.uses.insert(id, submission_id);
+        lock.uses.insert(id, user);
         Ok(id)
     }
     pub fn release(&self, range: BufferUserId) {
@@ -1448,7 +1516,7 @@ impl SliceTracker {
         while cont {
             cont = false;
             for &submission in lock.uses.values() {
-                if submission.is_none() {
+                if submission.submission_id().is_none() {
                     cont = true;
                     break;
                 }
@@ -1465,13 +1533,22 @@ impl SliceTracker {
         self.condvar.notify_all();
     }
 }
-impl Default for SliceTracker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct BufferUserId {
     range: BufferRange,
     id: u64,
+}
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum BufferUser {
+    Gpu(u64),
+    Cpu,
+    Cross(u64),
+}
+impl BufferUser {
+    fn submission_id(&self) -> Option<u64> {
+        match self {
+            Self::Gpu(a) | Self::Cross(a) => Some(*a),
+            Self::Cpu => None,
+        }
+    }
 }
