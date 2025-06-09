@@ -1152,12 +1152,14 @@ impl BufferRange {
 enum BufferBacking<B: hal::Backend> {
     HostBacked(B::Buffer),
     GpuBacked(B::Buffer),
+    NoBacking,
 }
 impl<B: hal::Backend> BufferBacking<B> {
-    pub fn buffer_mut(&mut self) -> &mut B::Buffer {
+    pub fn buffer_mut(&mut self) -> Option<&mut B::Buffer> {
         match self {
-            Self::HostBacked(b) => b,
-            Self::GpuBacked(b) => b,
+            Self::HostBacked(b) => Some(b),
+            Self::GpuBacked(b) => Some(b),
+            Self::NoBacking => None,
         }
     }
 }

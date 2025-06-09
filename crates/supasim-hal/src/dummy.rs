@@ -55,6 +55,7 @@ impl BackendInstance<Dummy> for DummyResource {
             is_unified_memory: false,
             map_buffer_while_gpu_use: true,
             upload_download_buffers: true,
+            buffer_import_export: false,
         }
     }
 
@@ -124,6 +125,21 @@ impl BackendInstance<Dummy> for DummyResource {
         alloc_info: &types::HalBufferDescriptor,
     ) -> Result<<Dummy as Backend>::Buffer, <Dummy as Backend>::Error> {
         Ok(DummyResource)
+    }
+
+    unsafe fn export_buffer(
+        &mut self,
+        buffer: <Dummy as Backend>::Buffer,
+    ) -> Result<ExternalMemoryObject, <Dummy as Backend>::Error> {
+        unreachable!()
+    }
+
+    unsafe fn import_buffer(
+        &mut self,
+        obj: ExternalMemoryObject,
+        descriptor: &HalBufferDescriptor,
+    ) -> Result<<Dummy as Backend>::Buffer, <Dummy as Backend>::Error> {
+        unreachable!()
     }
 
     unsafe fn destroy_buffer(

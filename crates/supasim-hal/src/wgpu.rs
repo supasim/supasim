@@ -136,6 +136,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             map_buffers: true,
             map_buffer_while_gpu_use: false,
             upload_download_buffers: false,
+            buffer_import_export: false,
         }
     }
 
@@ -318,6 +319,23 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                 _ => None,
             },
         })
+    }
+
+    #[tracing::instrument]
+    unsafe fn import_buffer(
+        &mut self,
+        obj: ExternalMemoryObject,
+        descriptor: &HalBufferDescriptor,
+    ) -> Result<<Wgpu as Backend>::Buffer, <Wgpu as Backend>::Error> {
+        unimplemented!()
+    }
+
+    #[tracing::instrument]
+    unsafe fn export_buffer(
+        &mut self,
+        buffer: <Wgpu as Backend>::Buffer,
+    ) -> Result<ExternalMemoryObject, <Wgpu as Backend>::Error> {
+        unimplemented!()
     }
 
     #[tracing::instrument]

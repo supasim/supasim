@@ -164,6 +164,8 @@ pub struct HalInstanceProperties {
     pub map_buffer_while_gpu_use: bool,
     /// Whether it supports dual upload-download buffers
     pub upload_download_buffers: bool,
+    /// Whether it supports importing or exporting buffers
+    pub buffer_import_export: bool,
 }
 /// # Safety
 /// This is undefined behavior lol

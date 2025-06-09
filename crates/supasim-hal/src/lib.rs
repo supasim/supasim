@@ -104,6 +104,20 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
     ) -> Result<B::Buffer, B::Error>;
     /// # Safety
     /// * All bind groups using this buffer must have been updated or destroyed
+    /// * The buffer must not be mapped
+    unsafe fn export_buffer(&mut self, buffer: B::Buffer)
+    -> Result<ExternalMemoryObject, B::Error>;
+    /// # Safety
+    /// * The imported buffer has its ownership transferred
+    /// * It must live on the same physical device and in the same memory type
+    unsafe fn import_buffer(
+        &mut self,
+        obj: ExternalMemoryObject,
+        descriptor: &HalBufferDescriptor,
+    ) -> Result<B::Buffer, B::Error>;
+    /// # Safety
+    /// * All bind groups using this buffer must have been updated or destroyed
+    /// * The buffer must not be mapped
     unsafe fn destroy_buffer(&mut self, buffer: B::Buffer) -> Result<(), B::Error>;
     /// # Safety
     /// * All submitted command recorders using this buffer must have completed
@@ -272,4 +286,8 @@ pub enum BufferCommand<'a, B: Backend> {
         buffers: &'a [HalBufferSlice<'a, B>],
     },
     Dummy,
+}
+#[derive(Debug)]
+pub struct ExternalMemoryObject {
+    pub handle: isize,
 }
