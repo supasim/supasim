@@ -79,8 +79,8 @@ wgpu = { version = "25.0", default-features = false, features = [
   "webgpu",
 ] }
 
-hal = { package = "supasim-hal", path = "crates/supasim-hal", default-features = false }
-macros = { package = "supasim-macros", path = "crates/supasim-macros" }
-kernels = { package = "supasim-kernels", path = "crates/supasim-kernels" }
-types = { package = "supasim-types", path = "crates/supasim-types" }
-dev-utils = { package = "supasim-dev-utils", path = "crates/supasim-dev-utils" }
+hal = { package = "supasim-hal", path = "crates/supasim-hal", default-features = false, version = "0.0.1" }
+macros = { package = "supasim-macros", path = "crates/supasim-macros", version = "0.0.1" }
+kernels = { package = "supasim-kernels", path = "crates/supasim-kernels", version = "0.0.1" }
+types = { package = "supasim-types", path = "crates/supasim-types", version = "0.0.1" }
+dev-utils = { package = "supasim-dev-utils", path = "crates/supasim-dev-utils", version = "0.0.1" }
