@@ -24,7 +24,9 @@ repository.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 keywords.workspace = true
+categories.workspace = true
 license.workspace = true
+homepage.workspace = true
 
 [features]
 msl-stable-out = ["spirv-cross"]

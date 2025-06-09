@@ -24,7 +24,9 @@ repository.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 keywords.workspace = true
+categories.workspace = true
 license.workspace = true
+homepage.workspace = true
 readme = "../readme.md"
 
 [features]
@@ -40,12 +42,10 @@ bytemuck.workspace = true
 thunderdome.workspace = true
 paste.workspace = true
 
-macros.workspace = true
 kernels.workspace = true
 types.workspace = true
 hal = { workspace = true, default-features = false }
 
 [dev-dependencies]
-env_logger.workspace = true
 log.workspace = true
 dev-utils.workspace = true
