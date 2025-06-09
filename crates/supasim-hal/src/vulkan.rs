@@ -22,6 +22,7 @@ use crate::{
 };
 use ash::{
     Entry, khr,
+    prelude::VkResult,
     vk::{self, Handle},
 };
 use core::ffi;
@@ -36,10 +37,7 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use types::{
-    Dag, HalBufferType, HalInstanceProperties, KernelReflectionInfo, SyncOperations,
-    to_static_lifetime,
-};
+use types::{Dag, HalBufferType, HalInstanceProperties, KernelReflectionInfo, SyncOperations};
 
 use scopeguard::defer;
 
@@ -121,8 +119,6 @@ impl Vulkan {
         unsafe {
             let err = Cell::new(true);
             let entry = Entry::load()?;
-            let app_info =
-                vk::ApplicationInfo::default().api_version(vk::make_api_version(0, 1, 2, 0));
             let debug = if debug
                 && entry
                     .enumerate_instance_extension_properties(None)
@@ -178,23 +174,24 @@ impl Vulkan {
                 }
             }
             // Check vulkan version
-            {
-                match entry.try_enumerate_instance_version().unwrap() {
-                    Some(v) => {
-                        if v < vk::make_api_version(0, 1, 2, 0) {
-                            return Err(VulkanError::VulkanVersionTooLow(format!(
-                                "{}.{}.{}",
-                                vk::api_version_major(v),
-                                vk::api_version_minor(v),
-                                vk::api_version_patch(v)
-                            )));
-                        }
+            let instance_api_version = match entry.try_enumerate_instance_version().unwrap() {
+                Some(v) => {
+                    if v < vk::make_api_version(0, 1, 1, 0) {
+                        return Err(VulkanError::VulkanVersionTooLow(format!(
+                            "{}.{}.{}",
+                            vk::api_version_major(v),
+                            vk::api_version_minor(v),
+                            vk::api_version_patch(v)
+                        )));
                     }
-                    None => {
-                        return Err(VulkanError::VulkanVersionTooLow("1.0.0".to_owned()));
-                    }
+                    v
                 }
-            }
+                None => {
+                    return Err(VulkanError::VulkanVersionTooLow("1.0.0".to_owned()));
+                }
+            };
+            let app_info = vk::ApplicationInfo::default().api_version(instance_api_version);
+
             let instance = entry.create_instance(
                 &vk::InstanceCreateInfo::default()
                     .application_info(&app_info)
@@ -235,39 +232,126 @@ impl Vulkan {
                     }
                 }
             }
-            // TODO: add phyd filtering for extensions
-            let (phyd, queue_family_idx) = instance
-                .enumerate_physical_devices()?
-                .iter()
-                .find_map(|phyd| {
-                    let queue_families =
-                        instance.get_physical_device_queue_family_properties(*phyd);
-
-                    queue_families
+            let ext = [
+                (khr::synchronization2::NAME, vk::API_VERSION_1_3),
+                (khr::timeline_semaphore::NAME, vk::API_VERSION_1_2),
+            ];
+            let (phyd, queue_family_idx, api_version, extension_spirv_version) = {
+                let mut best_score = 0;
+                let mut pair = (vk::PhysicalDevice::null(), 0, 0, types::SpirvVersion::V1_0);
+                for phyd in instance.enumerate_physical_devices()? {
+                    let properties = instance.get_physical_device_properties(phyd);
+                    let api_version = properties.api_version.min(instance_api_version);
+                    let extensions = instance.enumerate_device_extension_properties(phyd)?;
+                    let extensions: Vec<&CStr> = extensions
                         .iter()
-                        .enumerate()
-                        .find_map(|(i, q)| {
-                            // Compute queues are guaranteed to support transfer even if not explicitly stated
-                            // TODO: prefer compute only queues(ignore universal queues)
-                            if q.queue_flags.contains(vk::QueueFlags::COMPUTE) {
-                                Some(i)
-                            } else {
-                                None
-                            }
-                        })
-                        .map(|i| (*phyd, i as u32))
+                        .map(|a| a.extension_name_as_c_str().unwrap())
+                        .collect();
+                    let mut extension_spirv_version = types::SpirvVersion::V1_0;
+                    for extension in ext {
+                        if extension.1 > api_version && !extensions.contains(&extension.0) {
+                            continue;
+                        }
+                        if extension.0 == khr::spirv_1_4::NAME {
+                            extension_spirv_version = types::SpirvVersion::V1_4;
+                        }
+                    }
+                    let queue_families = instance.get_physical_device_queue_family_properties(phyd);
+                    let mut best_queue = (0, 0);
+                    for (i, queue) in queue_families.into_iter().enumerate() {
+                        let flags = if queue.queue_flags.contains(vk::QueueFlags::TRANSFER) {
+                            queue.queue_flags ^ vk::QueueFlags::TRANSFER
+                        } else {
+                            queue.queue_flags
+                        };
+                        if !queue.queue_flags.contains(vk::QueueFlags::COMPUTE) {
+                            continue;
+                        }
+                        let score;
+                        if flags == vk::QueueFlags::COMPUTE {
+                            score = 3;
+                        } else if !flags.contains(vk::QueueFlags::GRAPHICS) {
+                            score = 2;
+                        } else {
+                            score = 1;
+                        }
+                        if score > best_queue.0 {
+                            best_queue = (score, i);
+                        }
+                    }
+                    if best_queue.0 == 0 {
+                        continue;
+                    }
+                    // In order of priority:
+                    // * Prefer discrete gpus
+                    // * Then prefer one with a more specific compute queue
+                    // * Then prefer the higher API version
+                    let score = match properties.device_type {
+                        vk::PhysicalDeviceType::DISCRETE_GPU => 3,
+                        vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
+                        vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
+                        vk::PhysicalDeviceType::CPU => 0,
+                        _ => continue,
+                    } * 16
+                        + best_queue.0 * 4
+                        + vk::api_version_minor(api_version).min(3);
+                    if score > best_score {
+                        best_score = score;
+                        pair = (
+                            phyd,
+                            best_queue.1 as u32,
+                            api_version,
+                            extension_spirv_version,
+                        );
+                    }
+                }
+                if best_score > 0 {
+                    pair
+                } else {
+                    return Err(VulkanError::NoSupportedDevice);
+                }
+            };
+            let api_supported_spirv_version = match api_version {
+                vk::API_VERSION_1_0 => types::SpirvVersion::V1_0,
+                vk::API_VERSION_1_1 => types::SpirvVersion::V1_3,
+                vk::API_VERSION_1_2 => types::SpirvVersion::V1_5,
+                vk::API_VERSION_1_3 => types::SpirvVersion::V1_6,
+                v => {
+                    if v > vk::API_VERSION_1_3 {
+                        types::SpirvVersion::V1_6
+                    } else {
+                        panic!("Unrecognized phyd api version!");
+                    }
+                }
+            };
+            let mut ext: Vec<_> = ext
+                .iter()
+                .filter_map(|(ext, api)| {
+                    if *api > api_version {
+                        Some(ext.as_ptr())
+                    } else {
+                        None
+                    }
                 })
-                .ok_or(VulkanError::NoSupportedDevice)?;
+                .collect();
+            let spirv_version = if api_supported_spirv_version > extension_spirv_version {
+                api_supported_spirv_version
+            } else {
+                ext.push(match extension_spirv_version {
+                    types::SpirvVersion::V1_4 => khr::spirv_1_4::NAME.as_ptr(),
+                    _ => unreachable!(),
+                });
+                extension_spirv_version
+            };
             let mut timeline_semaphore =
                 vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
             let mut sync2 =
-                vk::PhysicalDeviceSynchronization2FeaturesKHR::default().synchronization2(true);
+                vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
             // TODO: investigate multiple queues. currently we only use a general queue, but this could potentially be optimized by using special compute queues and special transfer queues
             let queue_priority = 1.0;
             let queue_create_info = vk::DeviceQueueCreateInfo::default()
                 .queue_priorities(std::slice::from_ref(&queue_priority))
                 .queue_family_index(queue_family_idx);
-            let ext = [khr::synchronization2::NAME.as_ptr()];
             let dev_create_info = vk::DeviceCreateInfo::default()
                 .queue_create_infos(std::slice::from_ref(&queue_create_info))
                 .enabled_extension_names(&ext)
@@ -289,6 +373,9 @@ impl Vulkan {
                 queue,
                 queue_family_idx,
                 debug_callback,
+                spirv_version,
+                api_version,
+                None,
             )?;
             err.set(false);
             Ok(s)
@@ -297,12 +384,15 @@ impl Vulkan {
     /// # Safety
     /// * Queue family must support `COMPUTE`
     /// * Queue must be of the given queue family, and belong to the given device
-    /// * Vulkan instance must have version 1.2 or higher, and must be created from the given entry
     /// * Phyd must be from the given vulkan instance
     /// * Device must be from the given physical device, and must support timeline semaphores and synchronization 2
     /// * The queue must not be used outside of this hal instance
     /// * All resources belonging to the vulkan instance must be destroyed before the hal instance
     /// * The instance and all resources will be destroyed when the hal instance is destroyed
+    /// * Instance must be created with API version at least 1.1
+    /// * The device must have a high enough API version or support these features:
+    ///   * Timeline semaphores
+    ///   * Synchronization2
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn from_existing(
         debug: bool,
@@ -313,6 +403,9 @@ impl Vulkan {
         queue: vk::Queue,
         queue_family_idx: u32,
         debug_callback: Option<vk::DebugUtilsMessengerEXT>,
+        spirv_version: types::SpirvVersion,
+        api_version: u32,
+        force_is_unified_memory: Option<bool>,
     ) -> Result<VulkanInstance, VulkanError> {
         unsafe {
             let alloc = Allocator::new(&AllocatorCreateDesc {
@@ -338,11 +431,33 @@ impl Vulkan {
                     .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
                 None,
             )?;
-            let sync_device = khr::synchronization2::Device::new(&instance, &device);
+            let sync2_device = if api_version < vk::API_VERSION_1_3 {
+                Some(khr::synchronization2::Device::new(&instance, &device))
+            } else {
+                None
+            };
+            let timeline_device = if api_version < vk::API_VERSION_1_2 {
+                Some(khr::timeline_semaphore::Device::new(&instance, &device))
+            } else {
+                None
+            };
+            let is_unified_memory = if let Some(u) = force_is_unified_memory {
+                u
+            } else {
+                let memory_props = instance.get_physical_device_memory_properties(phyd);
+                // The idea here is that implementations are required to provide a host visible and coherent memory type.
+                // Heaps and types are different, but implementations generally provide (pinned) system memory as a heap.
+                // If this heap isn't separate from the device heap, we know any system memory type is also device local.
+                // The spec recommends this for UMA systems: https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#memory-device
+                memory_props.memory_heaps.len() == 1
+                    && memory_props.memory_heaps_as_slice()[0]
+                        .flags
+                        .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
+            };
             let s = VulkanInstance {
                 entry,
                 instance,
-                phyd,
+                _phyd: phyd,
                 alloc: Mutex::new(alloc),
                 queue,
                 queue_family_idx,
@@ -351,8 +466,12 @@ impl Vulkan {
                 debug: debug_callback,
                 device: Arc::new(DeviceFunctions {
                     device,
-                    sync2_device: sync_device,
+                    sync2_device,
+                    timeline_device,
                 }),
+                spirv_version,
+                is_unified_memory,
+                _api_version: api_version,
             };
             Ok(s)
         }
@@ -413,7 +532,7 @@ impl crate::Error<Vulkan> for VulkanError {
 pub struct VulkanInstance {
     entry: ash::Entry,
     instance: ash::Instance,
-    phyd: vk::PhysicalDevice,
+    _phyd: vk::PhysicalDevice,
     alloc: Mutex<Allocator>,
     queue: vk::Queue,
     queue_family_idx: u32,
@@ -421,6 +540,9 @@ pub struct VulkanInstance {
     unused_command_buffers: Vec<vk::CommandBuffer>,
     debug: Option<vk::DebugUtilsMessengerEXT>,
     device: Arc<DeviceFunctions>,
+    spirv_version: types::SpirvVersion,
+    is_unified_memory: bool,
+    _api_version: u32,
 }
 impl Debug for VulkanInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -474,31 +596,16 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     }
     #[tracing::instrument]
     fn get_properties(&mut self) -> HalInstanceProperties {
-        let is_unified_memory = unsafe {
-            let memory_props = self
-                .instance
-                .get_physical_device_memory_properties(self.phyd);
-            // The idea here is that implementations are required to provide a host visible and coherent memory type.
-            // Heaps and types are different, but implementations generally provide (pinned) system memory as a heap.
-            // If this heap isn't separate from the device heap, we know any system memory type is also device local.
-            // The spec recommends this for UMA systems: https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#memory-device
-            memory_props.memory_heaps.len() == 1
-                && memory_props.memory_heaps_as_slice()[0]
-                    .flags
-                    .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
-        };
         HalInstanceProperties {
             sync_mode: types::SyncMode::VulkanStyle,
             pipeline_cache: true,
-            // TODO: detect spirv version
             kernel_lang: types::KernelTarget::Spirv {
-                version: types::SpirvVersion::V1_0,
+                version: self.spirv_version,
             },
             easily_update_bind_groups: false,
             semaphore_signal: true,
             map_buffers: true,
-            // TODO: add unified memory detection
-            is_unified_memory,
+            is_unified_memory: self.is_unified_memory,
             map_buffer_while_gpu_use: true,
         }
     }
@@ -835,23 +942,23 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     ) -> Result<(), <Vulkan as Backend>::Error> {
         let mut writes = Vec::with_capacity(resources.len());
         let mut buffer_infos = Vec::with_capacity(resources.len());
-        for (i, resource) in resources.iter().enumerate() {
-            let mut write = vk::WriteDescriptorSet::default()
-                .dst_set(bg.inner)
-                .descriptor_count(1)
-                .dst_binding(i as u32)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER);
+        for resource in resources {
             buffer_infos.push(
                 vk::DescriptorBufferInfo::default()
                     .buffer(resource.buffer.buffer)
                     .offset(resource.offset)
                     .range(resource.len),
             );
-            // TODO: fix (potentially) Undefined behavior
-            write = write.buffer_info(std::slice::from_ref(unsafe {
-                to_static_lifetime(&buffer_infos[buffer_infos.len() - 1])
-            }));
-            writes.push(write);
+        }
+        for (i, info) in buffer_infos.iter().enumerate() {
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(bg.inner)
+                    .descriptor_count(1)
+                    .dst_binding(i as u32)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(info)),
+            );
         }
         unsafe {
             self.device.update_descriptor_sets(&writes, &[]);
@@ -941,7 +1048,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
 
         unsafe {
             self.device
-                .queue_submit2(self.queue, &submits, vk::Fence::null())?;
+                .supa_queue_submit2(self.queue, &submits, vk::Fence::null())?;
         }
         Ok(())
     }
@@ -1199,6 +1306,7 @@ impl VulkanCommandRecorder {
                 _ => unreachable!(),
             }
         }
+
         if pre_flags.is_empty() || post_flags.is_empty() {
             return Ok(());
         }
@@ -1209,8 +1317,7 @@ impl VulkanCommandRecorder {
         unsafe {
             instance
                 .device
-                .sync2_device
-                .cmd_pipeline_barrier2(cb, &dependency_info)
+                .supa_cmd_pipeline_barrier2(cb, &dependency_info)
         };
         Ok(())
     }
@@ -1337,7 +1444,7 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
     #[tracing::instrument]
     unsafe fn wait(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            self.device.wait_semaphores(
+            self.device.supa_wait_semaphores(
                 &vk::SemaphoreWaitInfo::default()
                     .semaphores(std::slice::from_ref(&self.inner))
                     .values(&[self.current_value + 1]),
@@ -1349,14 +1456,14 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
     #[tracing::instrument]
     unsafe fn is_signalled(&mut self) -> Result<bool, <Vulkan as Backend>::Error> {
         Ok(
-            unsafe { self.device.get_semaphore_counter_value(self.inner)? }
+            unsafe { self.device.supa_get_semaphore_counter_value(self.inner)? }
                 == self.current_value + 1,
         )
     }
     #[tracing::instrument]
     unsafe fn signal(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            self.device.signal_semaphore(
+            self.device.supa_signal_semaphore(
                 &vk::SemaphoreSignalInfo::default()
                     .semaphore(self.inner)
                     .value(self.current_value + 1),
@@ -1371,7 +1478,8 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
 }
 pub struct DeviceFunctions {
     device: ash::Device,
-    sync2_device: khr::synchronization2::Device,
+    sync2_device: Option<khr::synchronization2::Device>,
+    timeline_device: Option<khr::timeline_semaphore::Device>,
 }
 impl Debug for DeviceFunctions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1382,5 +1490,62 @@ impl Deref for DeviceFunctions {
     type Target = ash::Device;
     fn deref(&self) -> &Self::Target {
         &self.device
+    }
+}
+impl DeviceFunctions {
+    unsafe fn supa_signal_semaphore(
+        &self,
+        signal_info: &vk::SemaphoreSignalInfo<'_>,
+    ) -> VkResult<()> {
+        if let Some(dev) = &self.timeline_device {
+            unsafe { dev.signal_semaphore(signal_info) }
+        } else {
+            unsafe { self.device.signal_semaphore(signal_info) }
+        }
+    }
+    unsafe fn supa_get_semaphore_counter_value(&self, semaphore: vk::Semaphore) -> VkResult<u64> {
+        if let Some(dev) = &self.timeline_device {
+            unsafe { dev.get_semaphore_counter_value(semaphore) }
+        } else {
+            unsafe { self.device.get_semaphore_counter_value(semaphore) }
+        }
+    }
+    unsafe fn supa_wait_semaphores(
+        &self,
+        wait_info: &vk::SemaphoreWaitInfo<'_>,
+        timeout: u64,
+    ) -> VkResult<()> {
+        if let Some(dev) = &self.timeline_device {
+            unsafe { dev.wait_semaphores(wait_info, timeout) }
+        } else {
+            unsafe { self.device.wait_semaphores(wait_info, timeout) }
+        }
+    }
+    unsafe fn supa_queue_submit2(
+        &self,
+        queue: vk::Queue,
+        submits: &[vk::SubmitInfo2<'_>],
+        fence: vk::Fence,
+    ) -> VkResult<()> {
+        if let Some(dev) = &self.sync2_device {
+            unsafe { dev.queue_submit2(queue, submits, fence) }
+        } else {
+            unsafe { self.queue_submit2(queue, submits, fence) }
+        }
+    }
+    unsafe fn supa_cmd_pipeline_barrier2(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        dependency_info: &vk::DependencyInfoKHR<'_>,
+    ) {
+        if let Some(dev) = &self.sync2_device {
+            unsafe {
+                dev.cmd_pipeline_barrier2(command_buffer, dependency_info);
+            }
+        } else {
+            unsafe {
+                self.cmd_pipeline_barrier2(command_buffer, dependency_info);
+            }
+        }
     }
 }

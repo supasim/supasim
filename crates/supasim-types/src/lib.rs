@@ -47,7 +47,7 @@ pub struct HalBufferDescriptor {
     pub min_alignment: usize,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum SpirvVersion {
     V1_0,
     V1_1,
