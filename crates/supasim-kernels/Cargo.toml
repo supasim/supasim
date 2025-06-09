@@ -42,7 +42,7 @@ naga = { version = "25.0", default-features = false, features = [
   "wgsl-out",
 ], optional = true }
 anyhow.workspace = true
-slang = { git = "https://github.com/supasim/slang-rs.git" }
+slang = { package = "supasim-slang", version = "0.0.1" }
 rand.workspace = true
 tempfile.workspace = true
 spirv-cross-sys = { package = "supasim-spirv-cross-sys", version = "0.0.1", optional = true }

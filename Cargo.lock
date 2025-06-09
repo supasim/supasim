@@ -1101,22 +1101,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
-name = "slang"
-version = "0.1.0"
-source = "git+https://github.com/supasim/slang-rs.git#0ba37fa9103f41830c26aeacd386ddc246c4946c"
-dependencies = [
- "slang-sys",
-]
-
-[[package]]
-name = "slang-sys"
-version = "0.1.0"
-source = "git+https://github.com/supasim/slang-rs.git#0ba37fa9103f41830c26aeacd386ddc246c4946c"
-dependencies = [
- "bindgen 0.71.1",
-]
-
-[[package]]
 name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1214,7 +1198,7 @@ dependencies = [
  "naga",
  "rand",
  "serde_json",
- "slang",
+ "supasim-slang",
  "supasim-spirv-cross-sys",
  "supasim-spirv-tools-sys",
  "supasim-types",
@@ -1224,6 +1208,24 @@ dependencies = [
 [[package]]
 name = "supasim-macros"
 version = "0.0.1"
+
+[[package]]
+name = "supasim-slang"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebbcf1ed34f7901fc1bc9e43d35d94db353c6fa90a42fb3e66915ea14a137de2"
+dependencies = [
+ "supasim-slang-sys",
+]
+
+[[package]]
+name = "supasim-slang-sys"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07f18d9e7c48bf7b1e14ef0bcd6a7be77fbf2c6a55b01573b6a50f090d1bb8dc"
+dependencies = [
+ "bindgen 0.71.1",
+]
 
 [[package]]
 name = "supasim-spirv-cross-sys"
