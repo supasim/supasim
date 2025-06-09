@@ -49,17 +49,6 @@ jobs:
 
       - name: Run `cargo fmt`
         run: cargo fmt --check
-
-  Check-Dependencies:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install nightly rust
-        run: rustup install nightly --profile minimal
-      - name: Install cargo-udeps
-        run: cargo install cargo-udeps --locked
-      - name: Run `cargo udeps`
-        run: cargo +nightly udeps --all-targets --workspace
   
   build-check-test:
     strategy:
@@ -69,12 +58,15 @@ jobs:
           - name: Ubuntu
             os: ubuntu-latest
             run-tests: true
+            check-deps: true
           - name: Windows
             os: windows-latest
             run-tests: true
+            check-deps: false
           - name: MacOS
             os: macos-latest
             run-tests: true
+            check-deps: false
     runs-on: ${{ matrix.os }}
     name: Check & Test (${{ matrix.name }})
     steps:
@@ -170,6 +162,13 @@ jobs:
     - name: Clippy(no features)
       shell: bash
       run: set -e && RUSTFLAGS="-Dwarnings" cargo clippy --verbose --all-targets --no-default-features
+
+    - name: Install and run `cargo udeps`
+      if: ${{ matrix.check-deps }}
+      run: |
+        rustup install nightly --profile minimal
+        cargo binstall cargo-udeps --locked
+        cargo +nightly udeps --all-targets --workspace
       
     - name: Run tests
       shell: bash
