@@ -175,20 +175,8 @@ impl Vulkan {
             }
             // Check vulkan version
             let instance_api_version = match entry.try_enumerate_instance_version().unwrap() {
-                Some(v) => {
-                    if v < vk::make_api_version(0, 1, 1, 0) {
-                        return Err(VulkanError::VulkanVersionTooLow(format!(
-                            "{}.{}.{}",
-                            vk::api_version_major(v),
-                            vk::api_version_minor(v),
-                            vk::api_version_patch(v)
-                        )));
-                    }
-                    v
-                }
-                None => {
-                    return Err(VulkanError::VulkanVersionTooLow("1.0.0".to_owned()));
-                }
+                Some(v) => v,
+                None => vk::API_VERSION_1_0,
             };
             let app_info = vk::ApplicationInfo::default().api_version(instance_api_version);
 
@@ -235,11 +223,15 @@ impl Vulkan {
             let ext = [
                 (khr::synchronization2::NAME, vk::API_VERSION_1_3),
                 (khr::timeline_semaphore::NAME, vk::API_VERSION_1_2),
+                (
+                    khr::get_physical_device_properties2::NAME,
+                    vk::API_VERSION_1_1,
+                ),
             ];
             let (phyd, queue_family_idx, api_version, extension_spirv_version) = {
                 let mut best_score = 0;
                 let mut pair = (vk::PhysicalDevice::null(), 0, 0, types::SpirvVersion::V1_0);
-                for phyd in instance.enumerate_physical_devices()? {
+                'outer: for phyd in instance.enumerate_physical_devices()? {
                     let properties = instance.get_physical_device_properties(phyd);
                     let api_version = properties.api_version.min(instance_api_version);
                     let extensions = instance.enumerate_device_extension_properties(phyd)?;
@@ -250,9 +242,10 @@ impl Vulkan {
                     let mut extension_spirv_version = types::SpirvVersion::V1_0;
                     for extension in ext {
                         if extension.1 > api_version && !extensions.contains(&extension.0) {
-                            continue;
+                            continue 'outer;
                         }
-                        if extension.0 == khr::spirv_1_4::NAME {
+                        if extension.0 == khr::spirv_1_4::NAME && api_version >= vk::API_VERSION_1_1
+                        {
                             extension_spirv_version = types::SpirvVersion::V1_4;
                         }
                     }
@@ -334,13 +327,16 @@ impl Vulkan {
                     }
                 })
                 .collect();
-            let spirv_version = if api_supported_spirv_version > extension_spirv_version {
+            let spirv_version = if api_supported_spirv_version >= extension_spirv_version {
                 api_supported_spirv_version
             } else {
-                ext.push(match extension_spirv_version {
-                    types::SpirvVersion::V1_4 => khr::spirv_1_4::NAME.as_ptr(),
+                match extension_spirv_version {
+                    types::SpirvVersion::V1_4 => {
+                        ext.push(khr::shader_float_controls::NAME.as_ptr());
+                        ext.push(khr::spirv_1_4::NAME.as_ptr());
+                    }
                     _ => unreachable!(),
-                });
+                };
                 extension_spirv_version
             };
             let mut timeline_semaphore =
