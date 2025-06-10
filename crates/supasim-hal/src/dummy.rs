@@ -253,16 +253,16 @@ impl CommandRecorder<Dummy> for DummyResource {
 impl KernelCache<Dummy> for DummyResource {}
 impl BindGroup<Dummy> for DummyResource {}
 impl Semaphore<Dummy> for DummyResource {
-    unsafe fn wait(&mut self) -> Result<(), <Dummy as Backend>::Error> {
+    unsafe fn wait(&self) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
     }
-    unsafe fn is_signalled(&mut self) -> Result<bool, <Dummy as Backend>::Error> {
+    unsafe fn is_signalled(&self) -> Result<bool, <Dummy as Backend>::Error> {
         Ok(false)
     }
-    unsafe fn signal(&mut self) -> Result<(), <Dummy as Backend>::Error> {
+    unsafe fn signal(&self) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
     }
-    unsafe fn reset(&mut self) -> Result<(), <Dummy as Backend>::Error> {
+    unsafe fn reset(&self) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
     }
 }

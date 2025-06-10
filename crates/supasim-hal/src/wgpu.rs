@@ -18,8 +18,8 @@
 END LICENSE */
 
 use crate::*;
-use std::cell::UnsafeCell;
 use std::fmt::Debug;
+use std::sync::Mutex;
 use std::{borrow::Cow, num::NonZero};
 pub use wgpu::Backends;
 use wgpu::RequestAdapterError;
@@ -268,9 +268,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         }));
         for info in infos {
             if let Some(signal) = info.signal_semaphore {
-                unsafe {
-                    *signal.inner.get() = Some(idx.clone());
-                }
+                *signal.inner.lock().unwrap() = Some(idx.clone());
             }
         }
         Ok(())
@@ -494,7 +492,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         &mut self,
     ) -> Result<<Wgpu as Backend>::Semaphore, <Wgpu as Backend>::Error> {
         Ok(WgpuSemaphore {
-            inner: UnsafeCell::new(None),
+            inner: Mutex::new(None),
             device: self.device.clone(),
         })
     }
@@ -627,7 +625,7 @@ pub struct WgpuKernelCache {
 }
 impl KernelCache<Wgpu> for WgpuKernelCache {}
 pub struct WgpuSemaphore {
-    inner: UnsafeCell<Option<wgpu::SubmissionIndex>>,
+    inner: Mutex<Option<wgpu::SubmissionIndex>>,
     device: wgpu::Device,
 }
 unsafe impl Send for WgpuSemaphore {}
@@ -639,17 +637,17 @@ impl Debug for WgpuSemaphore {
 }
 impl Semaphore<Wgpu> for WgpuSemaphore {
     #[tracing::instrument]
-    unsafe fn wait(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
-        if let Some(a) = self.inner.get_mut() {
+    unsafe fn wait(&self) -> Result<(), <Wgpu as Backend>::Error> {
+        if let Some(a) = (*self.inner.lock().unwrap()).clone() {
             self.device
                 .poll(wgpu::PollType::WaitForSubmissionIndex(a.clone()))?;
         }
-        *self.inner.get_mut() = None;
+        *self.inner.lock().unwrap() = None;
         Ok(())
     }
     #[tracing::instrument]
-    unsafe fn is_signalled(&mut self) -> Result<bool, <Wgpu as Backend>::Error> {
-        if self.inner.get_mut().is_some() {
+    unsafe fn is_signalled(&self) -> Result<bool, <Wgpu as Backend>::Error> {
+        if self.inner.lock().unwrap().is_some() {
             Ok(self
                 .device
                 .poll(wgpu::PollType::Poll)
@@ -659,11 +657,11 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
         }
     }
     #[tracing::instrument]
-    unsafe fn signal(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
+    unsafe fn signal(&self) -> Result<(), <Wgpu as Backend>::Error> {
         unreachable!()
     }
-    unsafe fn reset(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
-        *self.inner.get_mut() = None;
+    unsafe fn reset(&self) -> Result<(), <Wgpu as Backend>::Error> {
+        *self.inner.lock().unwrap() = None;
         Ok(())
     }
 }

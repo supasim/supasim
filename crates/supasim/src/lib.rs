@@ -32,9 +32,10 @@ mod tests;
 mod sync;
 
 use anyhow::anyhow;
-use hal::{BackendInstance as _, CommandRecorder as _, RecorderSubmitInfo, Semaphore};
+use hal::BackendInstance as _;
 use parking_lot::{Condvar, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::cell::UnsafeCell;
+use std::collections::{HashMap, HashSet};
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -50,7 +51,7 @@ pub use types::{
     HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel, SpirvVersion,
 };
 
-use crate::sync::{SyncThreadHandle, create_sync_thread};
+use crate::sync::{GpuSubmissionInfo, SyncThreadHandle, create_sync_thread};
 
 pub type UserBufferAccessClosure<'a, B> =
     Box<dyn FnOnce(&mut [MappedBuffer<'a, B>]) -> anyhow::Result<()>>;
@@ -178,7 +179,7 @@ impl<B: hal::Backend> BufferSlice<B> {
         let instance = s.instance.clone();
 
         s.slice_tracker.acquire(
-            &mut *instance.inner_mut()?,
+            &*instance.inner()?,
             BufferRange {
                 start: self.start,
                 len: self.len,
@@ -294,6 +295,7 @@ pub enum SupaSimError<B: hal::Backend> {
     /// Buffer attempted to be used from wrong side of cpu/gpu on non-unified memory system
     BufferLocalityViolated,
     KernelCompileError(#[from] kernels::KernelCompileError),
+    SyncThreadPanic(String),
 }
 trait MapSupasimError<T, B: hal::Backend> {
     fn map_supasim(self) -> Result<T, SupaSimError<B>>;
@@ -319,59 +321,72 @@ pub struct InstanceProperties {
     pub kernel_lang: KernelTarget,
     pub is_unified_memory: bool,
 }
-api_type!(SupaSimInstance, {
+struct InstanceState<B: hal::Backend> {
     /// The inner hal instance
     inner: Mutex<Option<B::Instance>>,
     /// The hal instance properties
     inner_properties: types::HalInstanceProperties,
     /// All created kernels
-    kernels: Arena<SavedKernel<B>>,
+    kernels: Mutex<Arena<SavedKernel<B>>>,
     /// All created kernel caches
-    kernel_caches: Arena<Option<KernelCacheWeak<B>>>,
+    kernel_caches: Mutex<Arena<Option<KernelCacheWeak<B>>>>,
     /// All created buffers
-    buffers: Arena<Option<BufferWeak<B>>>,
+    buffers: Mutex<Arena<Option<BufferWeak<B>>>>,
     /// All wait handles created
-    wait_handles: Arena<WaitHandleWeak<B>>,
-    /// Hal wait handles not currently associated with any submission
-    unused_semaphores: Vec<B::Semaphore>,
+    wait_handles: Mutex<Arena<WaitHandleWeak<B>>>,
     /// All created command recorders
-    command_recorders: Arena<Option<CommandRecorderWeak<B>>>,
-    /// All command recorders that have already been submitted and the associated usage data
-    submitted_command_recorders: VecDeque<SubmittedCommandRecorder<B>>,
-    /// The number of command recorder sets that have been submitted so far
-    submitted_semaphore_count: u64,
-    /// The index of the first command recorder in the queue
-    submitted_command_recorders_start: u64,
+    command_recorders: Mutex<Arena<Option<CommandRecorderWeak<B>>>>,
     /// Hal command recorders not currently in use
-    hal_command_recorders: Vec<B::CommandRecorder>,
+    hal_command_recorders: Mutex<Vec<B::CommandRecorder>>,
     /// User accessible kernel compiler state
     kernel_compiler: Mutex<kernels::GlobalState>,
     /// A handle to the thread used for syncing
-    sync_thread: Option<SyncThreadHandle<B>>,
+    sync_thread: UnsafeCell<Option<SyncThreadHandle<B>>>,
+    /// A weak reference to self
+    myself: UnsafeCell<Option<SupaSimInstanceWeak<B>>>,
+}
+impl<B: hal::Backend> InstanceState<B> {
+    pub fn sync_thread(&self) -> &SyncThreadHandle<B> {
+        unsafe { &*self.sync_thread.get() }.as_ref().unwrap()
+    }
+}
+api_type!(SupaSimInstance, {
+    _inner: Arc<InstanceState<B>>,
 },);
+impl<B: hal::Backend> Deref for SupaSimInstanceInner<B> {
+    type Target = InstanceState<B>;
+    fn deref(&self) -> &Self::Target {
+        &self._inner
+    }
+}
 impl<B: hal::Backend> SupaSimInstance<B> {
     pub fn from_hal(mut hal: B::Instance) -> Self {
         let inner_properties = hal.get_properties();
         let s = Self::from_inner(SupaSimInstanceInner {
             _phantom: Default::default(),
-            inner: Mutex::new(Some(hal)),
-            inner_properties,
-            kernels: Arena::default(),
-            kernel_caches: Arena::default(),
-            buffers: Arena::default(),
-            wait_handles: Arena::default(),
-            unused_semaphores: Vec::new(),
-            command_recorders: Arena::default(),
-            submitted_command_recorders: VecDeque::new(),
-            // These are 1 so that we can always wait for zero
-            submitted_semaphore_count: 1,
-            submitted_command_recorders_start: 1,
-            hal_command_recorders: Vec::new(),
-            kernel_compiler: Mutex::new(kernels::GlobalState::new_from_env().unwrap()),
-            sync_thread: None,
+            _inner: Arc::new(InstanceState {
+                inner: Mutex::new(Some(hal)),
+                inner_properties,
+                kernels: Mutex::new(Arena::default()),
+                kernel_caches: Mutex::new(Arena::default()),
+                buffers: Mutex::new(Arena::default()),
+                wait_handles: Mutex::new(Arena::default()),
+                command_recorders: Mutex::new(Arena::default()),
+                hal_command_recorders: Mutex::new(Vec::new()),
+                kernel_compiler: Mutex::new(kernels::GlobalState::new_from_env().unwrap()),
+                sync_thread: UnsafeCell::new(None),
+                myself: UnsafeCell::new(None),
+            }),
         });
-        let handle = create_sync_thread(s.clone());
-        s.inner_mut().unwrap().sync_thread = Some(handle);
+
+        let handle = create_sync_thread(s.clone()).unwrap();
+
+        unsafe {
+            let inner_mut = s.inner().unwrap();
+            *inner_mut.sync_thread.get() = Some(handle);
+            *inner_mut.myself.get() = Some(s.downgrade());
+        }
+
         s
     }
     pub fn properties(&self) -> SupaSimResult<B, InstanceProperties> {
@@ -388,7 +403,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         reflection_info: types::KernelReflectionInfo,
         cache: Option<&KernelCache<B>>,
     ) -> SupaSimResult<B, Kernel<B>> {
-        let mut s = self.inner_mut()?;
+        let s = self.inner()?;
         let mut cache_lock = if let Some(cache) = cache {
             Some(cache.inner_mut()?)
         } else {
@@ -415,7 +430,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             reflection_info,
             last_used: 0,
         });
-        k.inner_mut()?.id = s.kernels.insert(SavedKernel::Loaded(k.downgrade()));
+        k.inner_mut()?.id = s.kernels.lock().insert(SavedKernel::Loaded(k.downgrade()));
         Ok(k)
     }
     pub fn compile_slang_kernel(
@@ -444,7 +459,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         self.compile_raw_kernel(&binary, reflection_info, cache)
     }
     pub fn create_kernel_cache(&self, data: &[u8]) -> SupaSimResult<B, KernelCache<B>> {
-        let mut s = self.inner_mut()?;
+        let s = self.inner()?;
         let inner =
             unsafe { s.inner.lock().as_mut().unwrap().create_kernel_cache(data) }.map_supasim()?;
         let k = KernelCache::from_inner(KernelCacheInner {
@@ -454,11 +469,11 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
         });
-        k.inner_mut()?.id = s.kernel_caches.insert(Some(k.downgrade()));
+        k.inner_mut()?.id = s.kernel_caches.lock().insert(Some(k.downgrade()));
         Ok(k)
     }
     pub fn create_recorder(&self) -> SupaSimResult<B, CommandRecorder<B>> {
-        let mut s = self.inner_mut()?;
+        let s = self.inner()?;
         let r = CommandRecorder::from_inner(CommandRecorderInner {
             _phantom: Default::default(),
             instance: self.clone(),
@@ -468,11 +483,11 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             is_alive: true,
             writes_slice: Vec::new(),
         });
-        r.inner_mut()?.id = s.command_recorders.insert(Some(r.downgrade()));
+        r.inner_mut()?.id = s.command_recorders.lock().insert(Some(r.downgrade()));
         Ok(r)
     }
     pub fn create_buffer(&self, desc: &BufferDescriptor) -> SupaSimResult<B, Buffer<B>> {
-        let mut s = self.inner_mut()?;
+        let s = self.inner()?;
         let inner = unsafe {
             s.inner
                 .lock()
@@ -499,10 +514,10 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             last_used: 0,
             slice_tracker: SliceTracker::new(gpu_available, cpu_available),
         });
-        b.inner_mut()?.id = s.buffers.insert(Some(b.downgrade()));
+        b.inner_mut()?.id = s.buffers.lock().insert(Some(b.downgrade()));
         Ok(b)
     }
-    pub fn submit_commands(
+    /*pub fn submit_commands(
         &self,
         recorders: &mut [CommandRecorder<B>],
     ) -> SupaSimResult<B, WaitHandle<B>> {
@@ -520,7 +535,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                 recorder_inners.push(&mut **r);
             }
 
-            let mut recorder = if let Some(r) = s.hal_command_recorders.pop() {
+            let mut recorder = if let Some(r) = s.hal_command_recorders.lock().pop() {
                 r
             } else {
                 unsafe { s.inner.lock().as_mut().unwrap().create_recorder() }.map_supasim()?
@@ -533,13 +548,14 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             for (&buf_id, ranges) in &sync_info {
                 let b = s
                     .buffers
+                    .lock()
                     .get(buf_id)
                     .ok_or(SupaSimError::AlreadyDestroyed)?
                     .as_ref()
                     .unwrap()
                     .upgrade()?;
                 let mut b_mut = b.inner_mut()?;
-                b_mut.last_used = s.submitted_semaphore_count;
+                b_mut.last_used = s;
 
                 for &range in ranges {
                     let id = b_mut.slice_tracker.acquire(
@@ -582,7 +598,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                 }
             };
             let mut s = self.inner_mut()?;
-            let semaphore = if let Some(s) = s.unused_semaphores.pop() {
+            let semaphore = if let Some(s) = s.unused_semaphores.lock().pop() {
                 s
             } else {
                 unsafe {
@@ -609,7 +625,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             }
             let used_buffers: Vec<_> = used_buffers
                 .iter()
-                .map(|a| s.buffers.get(*a).unwrap().as_ref().unwrap().clone())
+                .map(|a| s.buffers.lock().get(*a).unwrap().as_ref().unwrap().clone())
                 .collect();
             if !s.inner_properties.map_buffer_while_gpu_use {
                 for b in &used_buffers {
@@ -643,11 +659,136 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             id: Index::DANGLING,
             is_alive: true,
         }))
+    }*/
+    pub fn submit_commands(
+        &self,
+        recorders: &mut [CommandRecorder<B>],
+    ) -> SupaSimResult<B, WaitHandle<B>> {
+        let submission_idx;
+        {
+            let s = self.inner()?;
+
+            let mut recorder_locks = Vec::new();
+            for r in recorders.iter_mut() {
+                recorder_locks.push(r.inner_mut()?);
+            }
+            let mut recorder_inners = Vec::new();
+            for r in &mut recorder_locks {
+                recorder_inners.push(&mut **r);
+            }
+
+            let mut recorder = if let Some(r) = s.hal_command_recorders.lock().pop() {
+                r
+            } else {
+                unsafe { s.inner.lock().as_mut().unwrap().create_recorder() }.map_supasim()?
+            };
+            let mut used_buffers = HashSet::new();
+            let mut used_buffer_ranges = Vec::new();
+            let mut used_kernels = Vec::new();
+            let (dag, sync_info, src_buffer) =
+                sync::assemble_dag(&mut recorder_inners, &mut used_kernels, &s)?;
+            for (&buf_id, ranges) in &sync_info {
+                let b = s
+                    .buffers
+                    .lock()
+                    .get(buf_id)
+                    .ok_or(SupaSimError::AlreadyDestroyed)?
+                    .as_ref()
+                    .unwrap()
+                    .upgrade()?;
+                let b_mut = b.inner()?;
+                for &range in ranges {
+                    let id = b_mut.slice_tracker.acquire(
+                        &s,
+                        range,
+                        if b_mut.slice_tracker.mutex.lock().gpu_available {
+                            BufferUser::Gpu(u64::MAX)
+                        } else {
+                            BufferUser::Cross(u64::MAX)
+                        },
+                    )?;
+                    used_buffer_ranges.push((id, b.downgrade()))
+                }
+                used_buffers.insert(buf_id);
+            }
+            let sync_mode = s.inner_properties.sync_mode;
+            drop(s);
+            let bind_groups = match sync_mode {
+                types::SyncMode::Dag => sync::record_dag(&dag, &mut recorder)?,
+                types::SyncMode::VulkanStyle => {
+                    let streams = sync::dag_to_command_streams(&dag, true)?;
+                    sync::record_command_streams(
+                        &streams,
+                        self.clone(),
+                        &mut recorder,
+                        &src_buffer,
+                    )?
+                }
+                types::SyncMode::Automatic => {
+                    let streams = sync::dag_to_command_streams(&dag, false)?;
+                    sync::record_command_streams(
+                        &streams,
+                        self.clone(),
+                        &mut recorder,
+                        &src_buffer,
+                    )?
+                }
+            };
+            let s = self.inner()?;
+            let used_buffers: Vec<_> = used_buffers
+                .iter()
+                .map(|a| s.buffers.lock().get(*a).unwrap().as_ref().unwrap().clone())
+                .collect();
+            submission_idx = s.sync_thread().submit_gpu(GpuSubmissionInfo {
+                command_recorder: Some(recorder),
+                bind_groups,
+                used_buffer_ranges: used_buffer_ranges.clone(),
+                used_buffers,
+            })?;
+            if let Some(src_buffer) = src_buffer {
+                s.sync_thread().append_finished_job(
+                    submission_idx,
+                    sync::SemaphoreFinishedJob::DestroyBuffer(src_buffer),
+                )?;
+            }
+
+            for kernel in &used_kernels {
+                kernel.upgrade()?.inner_mut()?.last_used = submission_idx;
+            }
+            for &buf_id in sync_info.keys() {
+                let b = s
+                    .buffers
+                    .lock()
+                    .get(buf_id)
+                    .ok_or(SupaSimError::AlreadyDestroyed)?
+                    .as_ref()
+                    .unwrap()
+                    .upgrade()?;
+                let mut b_mut = b.inner_mut()?;
+                b_mut.last_used = submission_idx;
+            }
+            for (id, b) in used_buffer_ranges {
+                b.upgrade()?
+                    .inner()?
+                    .slice_tracker
+                    .update_user_submission(id, submission_idx, &s);
+            }
+        }
+
+        for recorder in recorders {
+            recorder.destroy()?;
+        }
+        Ok(WaitHandle::from_inner(WaitHandleInner {
+            _phantom: Default::default(),
+            instance: self.clone(),
+            index: submission_idx,
+            id: Index::DANGLING,
+            is_alive: true,
+        }))
     }
     pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
-        let mut s = self.inner_mut()?;
-        let idx = s.submitted_semaphore_count - 1;
-        s.wait_for_submission(true, idx)?;
+        let s = self.inner()?;
+        s.sync_thread().wait_for_idle()?;
         Ok(())
     }
     /// Do work which is queued but not yet started for batching reasons. Currently a NOOP
@@ -724,7 +865,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                     unsafe {
                         data.set_len(b.len as usize);
                         _instance
-                            .inner_mut()?
+                            .inner()?
                             .inner
                             .lock()
                             .as_mut()
@@ -766,26 +907,22 @@ impl<B: hal::Backend> SupaSimInstance<B> {
 }
 impl<B: hal::Backend> Drop for SupaSimInstanceInner<B> {
     fn drop(&mut self) {
-        self.wait_for_submission(true, self.submitted_semaphore_count - 1)
-            .unwrap();
         // We unsafely pass a mutable reference to the sync thread, knowing that this thread will "join" it,
         // meaning that at no point is the mutable reference used by both at the same time.
-        let mut sync_thread = std::mem::take(&mut self.sync_thread).unwrap();
-        let self_ptr = self as *mut _;
-        let self_static = unsafe { &mut *self_ptr };
+        let mut sync_thread =
+            std::mem::take::<Option<SyncThreadHandle<B>>>(unsafe { &mut *self.sync_thread.get() })
+                .unwrap();
+        sync_thread.wait_for_idle().unwrap();
         sync_thread
             .sender
             .get_mut()
-            .0
-            .send(sync::SendSyncThreadEvent::WaitFinishAndShutdown(
-                self_static,
-            ))
+            .send(sync::SendSyncThreadEvent::WaitFinishAndShutdown)
             .unwrap();
         sync_thread.thread.join().unwrap();
         if sync_thread.shared_thread.0.lock().error.is_some() {
             println!("Instance attempting to shutdown gracefully despite sync thread error");
         }
-        for (_, cr) in std::mem::take(&mut self.command_recorders) {
+        for (_, cr) in std::mem::take(&mut *self.command_recorders.lock()) {
             if let Some(cr) = cr {
                 if let Ok(cr) = cr.upgrade() {
                     if let Ok(mut cr2) = cr.inner_mut() {
@@ -795,7 +932,7 @@ impl<B: hal::Backend> Drop for SupaSimInstanceInner<B> {
                 }
             }
         }
-        for (_, wh) in std::mem::take(&mut self.wait_handles) {
+        for (_, wh) in std::mem::take(&mut *self.wait_handles.lock()) {
             if let Ok(wh) = wh.upgrade() {
                 if let Ok(mut wh2) = wh.inner_mut() {
                     wh2.destroy(self);
@@ -803,7 +940,7 @@ impl<B: hal::Backend> Drop for SupaSimInstanceInner<B> {
                 let _ = wh.destroy();
             }
         }
-        for (_, kc) in std::mem::take(&mut self.kernel_caches) {
+        for (_, kc) in std::mem::take(&mut *self.kernel_caches.lock()) {
             if let Some(kc) = kc {
                 if let Ok(kc) = kc.upgrade() {
                     if let Ok(mut kc2) = kc.inner_mut() {
@@ -813,7 +950,7 @@ impl<B: hal::Backend> Drop for SupaSimInstanceInner<B> {
                 }
             }
         }
-        for (_, b) in std::mem::take(&mut self.buffers) {
+        for (_, b) in std::mem::take(&mut *self.buffers.lock()) {
             if let Some(b) = b {
                 if let Ok(b) = b.upgrade() {
                     if let Ok(mut b2) = b.inner_mut() {
@@ -823,7 +960,7 @@ impl<B: hal::Backend> Drop for SupaSimInstanceInner<B> {
                 }
             }
         }
-        for (_, k) in std::mem::take(&mut self.kernels) {
+        for (_, k) in std::mem::take(&mut *self.kernels.lock()) {
             if let SavedKernel::Loaded(k) = k {
                 if let Ok(k) = k.upgrade() {
                     if let Ok(mut k2) = k.inner_mut() {
@@ -841,106 +978,6 @@ impl<B: hal::Backend> Drop for SupaSimInstanceInner<B> {
         }
     }
 }
-impl<B: hal::Backend> SupaSimInstanceInner<B> {
-    /// Returns whether the operation has completed
-    pub fn wait_for_submission(&mut self, force_wait: bool, id: u64) -> SupaSimResult<B, bool> {
-        if id < self.submitted_command_recorders_start {
-            return Ok(true);
-        } else if id >= self.submitted_semaphore_count {
-            panic!();
-        }
-        while self.submitted_command_recorders_start <= id {
-            let thing = &mut self.submitted_command_recorders[0];
-            self.submitted_command_recorders_start += 1;
-            if force_wait {
-                unsafe { thing.used_semaphore.wait().map_supasim()? };
-            } else if !unsafe { thing.used_semaphore.is_signalled().map_supasim()? } {
-                return Ok(false);
-            }
-            //unsafe { self.inner.wait_for_idle().map_supasim()? };
-            let mut item = self.submitted_command_recorders.pop_front().unwrap();
-            for b in item.buffers_to_destroy {
-                unsafe {
-                    self.inner
-                        .lock()
-                        .as_mut()
-                        .unwrap()
-                        .destroy_buffer(b)
-                        .map_supasim()?
-                };
-            }
-            for b in item.used_buffer_ranges {
-                if let Ok(buffer) = b.1.upgrade() {
-                    if let Ok(b_inner) = buffer.inner() {
-                        b_inner.slice_tracker.release(b.0);
-                    }
-                }
-            }
-            if !self.inner_properties.map_buffer_while_gpu_use {
-                for b in item.used_buffers {
-                    if let Ok(buffer) = b.upgrade() {
-                        if let Ok(b_inner) = buffer.inner() {
-                            if b_inner.last_used == self.submitted_command_recorders_start - 1 {
-                                b_inner.slice_tracker.release_cpu();
-                            }
-                        }
-                    }
-                }
-            }
-            for (bg, kernel) in item.bind_groups {
-                // TODO: fix issue here if kernel is already destroyed
-                match self.kernels.get_mut(kernel).unwrap() {
-                    SavedKernel::Loaded(k) => {
-                        let kernel = k.upgrade()?;
-                        let mut k = kernel.inner_mut()?;
-                        unsafe {
-                            self.inner
-                                .lock()
-                                .as_mut()
-                                .unwrap()
-                                .destroy_bind_group(k.inner.as_mut().unwrap(), bg)
-                                .map_supasim()?;
-                        }
-                    }
-                    SavedKernel::WaitingForDestroy { inner } => unsafe {
-                        self.inner
-                            .lock()
-                            .as_mut()
-                            .unwrap()
-                            .destroy_bind_group(inner, bg)
-                            .map_supasim()?;
-                    },
-                }
-            }
-            for k in item.kernels_to_destroy {
-                match self.kernels.remove(k).unwrap() {
-                    SavedKernel::WaitingForDestroy { inner } => unsafe {
-                        self.inner
-                            .lock()
-                            .as_mut()
-                            .unwrap()
-                            .destroy_kernel(inner)
-                            .map_supasim()?;
-                    },
-                    SavedKernel::Loaded(_) => {
-                        unreachable!()
-                    }
-                }
-            }
-            for recorder in &mut item.command_recorders {
-                unsafe {
-                    recorder
-                        .clear(self.inner.lock().as_mut().unwrap())
-                        .map_supasim()?;
-                }
-            }
-            self.hal_command_recorders.extend(item.command_recorders);
-            unsafe { item.used_semaphore.reset().map_supasim()? };
-            self.unused_semaphores.push(item.used_semaphore);
-        }
-        Ok(true)
-    }
-}
 api_type!(Kernel, {
     instance: SupaSimInstance<B>,
     inner: Option<B::Kernel>,
@@ -954,35 +991,24 @@ impl<B: hal::Backend> std::fmt::Debug for Kernel<B> {
     }
 }
 impl<B: hal::Backend> KernelInner<B> {
-    pub fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
-        if instance.submitted_command_recorders_start <= self.last_used {
-            let start = instance.submitted_command_recorders_start;
-            instance.submitted_command_recorders[(self.last_used - start) as usize]
-                .kernels_to_destroy
-                .push(self.id);
-            let s = instance.kernels.get_mut(self.id).unwrap();
-            *s = SavedKernel::WaitingForDestroy {
-                inner: std::mem::take(&mut self.inner).unwrap(),
-            };
-        } else {
-            instance.kernels.remove(self.id);
-            let kernel = std::mem::take(&mut self.inner).unwrap();
-            let _ = unsafe {
-                instance
-                    .inner
-                    .lock()
-                    .as_mut()
-                    .unwrap()
-                    .destroy_kernel(kernel)
-            };
-        }
+    pub fn destroy(&mut self, instance: &InstanceState<B>) {
+        *instance.kernels.lock().get_mut(self.id).unwrap() = SavedKernel::WaitingForDestroy {
+            inner: std::mem::take(&mut self.inner).unwrap(),
+        };
+        instance
+            .sync_thread()
+            .append_finished_job(
+                self.last_used,
+                sync::SemaphoreFinishedJob::DestroyKernel(self.id),
+            )
+            .unwrap();
     }
 }
 impl<B: hal::Backend> Drop for KernelInner<B> {
     fn drop(&mut self) {
         if self.inner.is_some() {
-            if let Ok(mut instance) = self.instance.clone().inner_mut() {
-                self.destroy(&mut instance);
+            if let Ok(instance) = self.instance.clone().inner() {
+                self.destroy(&instance);
             }
         }
     }
@@ -1010,7 +1036,7 @@ impl<B: hal::Backend> KernelCache<B> {
         let instance = inner.instance.clone();
         let data = unsafe {
             instance
-                .inner_mut()?
+                .inner()?
                 .inner
                 .lock()
                 .as_mut()
@@ -1022,8 +1048,8 @@ impl<B: hal::Backend> KernelCache<B> {
     }
 }
 impl<B: hal::Backend> KernelCacheInner<B> {
-    fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
-        instance.kernel_caches.remove(self.id);
+    fn destroy(&mut self, instance: &InstanceState<B>) {
+        instance.kernel_caches.lock().remove(self.id);
         let _ = unsafe {
             instance
                 .inner
@@ -1037,8 +1063,8 @@ impl<B: hal::Backend> KernelCacheInner<B> {
 impl<B: hal::Backend> Drop for KernelCacheInner<B> {
     fn drop(&mut self) {
         if self.inner.is_some() {
-            if let Ok(mut instance) = self.instance.clone().inner_mut() {
-                self.destroy(&mut instance);
+            if let Ok(instance) = self.instance.clone().inner() {
+                self.destroy(&instance);
             }
         }
     }
@@ -1182,16 +1208,16 @@ impl<B: hal::Backend> CommandRecorder<B> {
     }
 }
 impl<B: hal::Backend> CommandRecorderInner<B> {
-    fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
-        instance.command_recorders.remove(self.id);
+    fn destroy(&mut self, instance: &InstanceState<B>) {
+        instance.command_recorders.lock().remove(self.id);
         self.is_alive = true;
     }
 }
 impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
     fn drop(&mut self) {
         if self.is_alive {
-            if let Ok(mut instance) = self.instance.clone().inner_mut() {
-                self.destroy(&mut instance);
+            if let Ok(instance) = self.instance.clone().inner() {
+                self.destroy(&instance);
             }
         }
     }
@@ -1377,31 +1403,23 @@ impl<B: hal::Backend> std::fmt::Debug for Buffer<B> {
     }
 }
 impl<B: hal::Backend> BufferInner<B> {
-    fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
-        instance.buffers.remove(self.id);
+    fn destroy(&mut self, instance: &InstanceState<B>) {
+        instance.buffers.lock().remove(self.id);
 
-        if instance.submitted_command_recorders_start <= self.last_used {
-            let start = instance.submitted_command_recorders_start;
-            instance.submitted_command_recorders[(self.last_used - start) as usize]
-                .buffers_to_destroy
-                .push(std::mem::take(&mut self.inner).unwrap());
-        } else {
-            let _ = unsafe {
-                instance
-                    .inner
-                    .lock()
-                    .as_mut()
-                    .unwrap()
-                    .destroy_buffer(std::mem::take(&mut self.inner).unwrap())
-            };
-        }
+        instance
+            .sync_thread()
+            .append_finished_job(
+                self.last_used,
+                sync::SemaphoreFinishedJob::DestroyBuffer(std::mem::take(&mut self.inner).unwrap()),
+            )
+            .unwrap();
     }
 }
 impl<B: hal::Backend> Drop for BufferInner<B> {
     fn drop(&mut self) {
         if self.inner.is_some() {
-            if let Ok(mut instance) = self.instance.clone().inner_mut() {
-                self.destroy(&mut instance);
+            if let Ok(instance) = self.instance.clone().inner() {
+                self.destroy(&instance);
             }
         }
     }
@@ -1497,33 +1515,33 @@ api_type!(WaitHandle, {
     is_alive: bool,
 },);
 impl<B: hal::Backend> WaitHandleInner<B> {
-    fn destroy(&mut self, instance: &mut SupaSimInstanceInner<B>) {
-        instance.wait_handles.remove(self.id);
+    fn destroy(&mut self, instance: &InstanceState<B>) {
+        instance.wait_handles.lock().remove(self.id);
         self.is_alive = false;
     }
 }
 impl<B: hal::Backend> Drop for WaitHandleInner<B> {
     fn drop(&mut self) {
         if self.is_alive {
-            if let Ok(mut instance) = self.instance.clone().inner_mut() {
-                self.destroy(&mut instance);
+            if let Ok(instance) = self.instance.clone().inner() {
+                self.destroy(&instance);
             }
         }
     }
 }
 impl<B: hal::Backend> WaitHandle<B> {
     pub fn wait(&self) -> SupaSimResult<B, ()> {
-        let s = self.inner_mut()?;
+        let s = self.inner()?;
         let _i = s.instance.clone();
-        let mut instance = _i.inner_mut()?;
-        instance.wait_for_submission(true, s.index)?;
+        let instance = _i.inner()?;
+        instance.sync_thread().wait_for(s.index, true)?;
         Ok(())
     }
     pub fn is_complete(&self) -> SupaSimResult<B, bool> {
-        let s = self.inner_mut()?;
+        let s = self.inner()?;
         let _i = s.instance.clone();
-        let mut instance = _i.inner_mut()?;
-        instance.wait_for_submission(false, s.index)
+        let instance = _i.inner()?;
+        instance.sync_thread().wait_for(s.index, false)
     }
 }
 #[allow(clippy::type_complexity)]
@@ -1560,7 +1578,7 @@ impl SliceTracker {
     }
     pub fn acquire<B: hal::Backend>(
         &self,
-        instance: &mut SupaSimInstanceInner<B>,
+        instance: &InstanceState<B>,
         range: BufferRange,
         user: BufferUser,
     ) -> SupaSimResult<B, BufferUserId> {
@@ -1602,9 +1620,14 @@ impl SliceTracker {
             if cont && has_cpu {
                 self.condvar.wait(&mut lock);
             } else if cont {
-                drop(lock);
-                instance.wait_for_submission(true, *gpu_submissions.iter().min().unwrap())?;
-                lock = self.mutex.lock();
+                let sub = *gpu_submissions.iter().min().unwrap();
+                if sub == u64::MAX {
+                    self.condvar.wait(&mut lock);
+                } else {
+                    drop(lock);
+                    instance.sync_thread().wait_for(sub, true)?;
+                    lock = self.mutex.lock();
+                }
             } else {
                 break;
             }
@@ -1616,6 +1639,27 @@ impl SliceTracker {
         lock.current_id += 1;
         lock.uses.insert(id, user);
         Ok(id)
+    }
+    pub fn update_user_submission<B: hal::Backend>(
+        &self,
+        user: BufferUserId,
+        submission_id: u64,
+        instance: &InstanceState<B>,
+    ) {
+        let mut lock = self.mutex.lock();
+        if instance
+            .sync_thread()
+            .wait_for(submission_id, false)
+            .unwrap()
+        {
+            lock.uses.remove(&user).unwrap();
+        } else {
+            lock.uses
+                .get_mut(&user)
+                .unwrap()
+                .set_submission_id(submission_id);
+        }
+        self.condvar.notify_all();
     }
     pub fn release(&self, range: BufferUserId) {
         self.mutex.lock().uses.remove(&range);
@@ -1660,6 +1704,13 @@ impl BufferUser {
         match self {
             Self::Gpu(a) | Self::Cross(a) => Some(*a),
             Self::Cpu => None,
+        }
+    }
+    fn set_submission_id(&mut self, id: u64) {
+        match self {
+            Self::Gpu(v) => *v = id,
+            Self::Cross(v) => *v = id,
+            Self::Cpu => panic!(),
         }
     }
 }

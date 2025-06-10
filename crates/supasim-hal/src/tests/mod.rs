@@ -61,7 +61,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
         } else {
             None
         };
-        let mut fun_semaphore = instance.create_semaphore()?;
+        let fun_semaphore = instance.create_semaphore()?;
         let kernel_compiler = kernels::GlobalState::new_from_env().unwrap();
         let mut add_code = Vec::new();
         let mut double_code = Vec::new();

@@ -230,18 +230,18 @@ pub trait KernelCache<B: Backend<KernelCache = Self>>: Send + Sync {}
 pub trait Semaphore<B: Backend<Semaphore = Self>>: Send + Sync {
     /// # Safety
     /// * The semaphore must be signalled by some already submitted command recorder
-    unsafe fn wait(&mut self) -> Result<(), B::Error>;
+    unsafe fn wait(&self) -> Result<(), B::Error>;
     /// # Safety
     /// Currently no safety requirements. This is subject to change
-    unsafe fn is_signalled(&mut self) -> Result<bool, B::Error>;
+    unsafe fn is_signalled(&self) -> Result<bool, B::Error>;
     /// # Safety
     /// * The semaphore must not be waited on by any CPU side wait command
-    unsafe fn signal(&mut self) -> Result<(), B::Error>;
+    unsafe fn signal(&self) -> Result<(), B::Error>;
     /// Note that in most implementations this won't actually result in any underlying API changes.
     /// # Safety
     /// * The semaphore must not be waited on by any CPU or GPU side wait command
-    /// * The semaphore must signalled by any CPU or GPU side signal command
-    unsafe fn reset(&mut self) -> Result<(), B::Error>;
+    /// * The semaphore must not be signalled by any CPU or GPU side signal command
+    unsafe fn reset(&self) -> Result<(), B::Error>;
 }
 #[derive(Debug)]
 pub struct RecorderSubmitInfo<'a, B: Backend> {

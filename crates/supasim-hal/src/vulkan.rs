@@ -1066,7 +1066,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 wait_semaphores.push(
                     vk::SemaphoreSubmitInfoKHR::default()
                         .semaphore(sem.inner)
-                        .value(sem.current_value + 1)
+                        .value(*sem.current_value.lock().unwrap() + 1)
                         .stage_mask(vk::PipelineStageFlags2KHR::ALL_COMMANDS_KHR),
                 );
             }
@@ -1074,7 +1074,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 signal_semaphores.push(
                     vk::SemaphoreSubmitInfoKHR::default()
                         .semaphore(s.inner)
-                        .value(s.current_value + 1)
+                        .value(*s.current_value.lock().unwrap() + 1)
                         .stage_mask(vk::PipelineStageFlags2KHR::ALL_COMMANDS_KHR),
                 );
             }
@@ -1174,7 +1174,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .push_next(&mut next);
             Ok(VulkanSemaphore {
                 inner: self.device.create_semaphore(&create_info, None)?,
-                current_value: 0,
+                current_value: Mutex::new(0),
                 device: self.device.clone(),
             })
         }
@@ -1496,42 +1496,42 @@ impl KernelCache<Vulkan> for VulkanPipelineCache {}
 #[derive(Debug)]
 pub struct VulkanSemaphore {
     inner: vk::Semaphore,
-    current_value: u64,
+    current_value: Mutex<u64>,
     device: Arc<DeviceFunctions>,
 }
 impl Semaphore<Vulkan> for VulkanSemaphore {
     #[tracing::instrument]
-    unsafe fn wait(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn wait(&self) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             self.device.supa_wait_semaphores(
                 &vk::SemaphoreWaitInfo::default()
                     .semaphores(std::slice::from_ref(&self.inner))
-                    .values(&[self.current_value + 1]),
+                    .values(&[*self.current_value.lock().unwrap() + 1]),
                 u64::MAX,
             )?;
         }
         Ok(())
     }
     #[tracing::instrument]
-    unsafe fn is_signalled(&mut self) -> Result<bool, <Vulkan as Backend>::Error> {
+    unsafe fn is_signalled(&self) -> Result<bool, <Vulkan as Backend>::Error> {
         Ok(
             unsafe { self.device.supa_get_semaphore_counter_value(self.inner)? }
-                == self.current_value + 1,
+                == *self.current_value.lock().unwrap() + 1,
         )
     }
     #[tracing::instrument]
-    unsafe fn signal(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn signal(&self) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             self.device.supa_signal_semaphore(
                 &vk::SemaphoreSignalInfo::default()
                     .semaphore(self.inner)
-                    .value(self.current_value + 1),
+                    .value(*self.current_value.lock().unwrap() + 1),
             )?;
         }
         Ok(())
     }
-    unsafe fn reset(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
-        self.current_value += 1;
+    unsafe fn reset(&self) -> Result<(), <Vulkan as Backend>::Error> {
+        *self.current_value.lock().unwrap() += 1;
         Ok(())
     }
 }

@@ -21,6 +21,7 @@ use parking_lot::{Condvar, Mutex};
 use std::collections::{HashMap, hash_map::Entry};
 use std::marker::PhantomData;
 use std::ops::Deref;
+use std::panic::UnwindSafe;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
@@ -28,9 +29,9 @@ use thunderdome::Index;
 use types::{Dag, NodeIndex, SyncOperations, Walker};
 
 use crate::{
-    BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner, KernelWeak,
-    MapSupasimError, SupaSimError, SupaSimInstance, SupaSimInstanceInner, SupaSimInstanceWeak,
-    SupaSimResult,
+    BufferCommand, BufferCommandInner, BufferRange, BufferSlice, BufferUserId, BufferWeak,
+    CommandRecorderInner, InstanceState, KernelWeak, MapSupasimError, SavedKernel, SupaSimError,
+    SupaSimInstance, SupaSimResult,
 };
 use anyhow::anyhow;
 
@@ -92,7 +93,7 @@ pub struct StreamingCommands {
 pub fn assemble_dag<B: hal::Backend>(
     crs: &mut [&mut CommandRecorderInner<B>],
     used_kernels: &mut Vec<KernelWeak<B>>,
-    instance: &mut SupaSimInstanceInner<B>,
+    instance: &InstanceState<B>,
 ) -> SupaSimResult<
     B,
     (
@@ -365,6 +366,7 @@ pub fn record_command_streams<B: hal::Backend>(
     for bg in &streams.bind_groups {
         let _k = instance
             .kernels
+            .lock()
             .get(bg.kernel_idx)
             .ok_or(SupaSimError::AlreadyDestroyed)?
             .loaded_ref()
@@ -375,6 +377,7 @@ pub fn record_command_streams<B: hal::Backend>(
             resources_a.push(
                 instance
                     .buffers
+                    .lock()
                     .get(res.0)
                     .ok_or(SupaSimError::AlreadyDestroyed)?
                     .as_ref()
@@ -419,6 +422,7 @@ pub fn record_command_streams<B: hal::Backend>(
                     buffer_refs.push(
                         instance
                             .buffers
+                            .lock()
                             .get(*src_buffer)
                             .ok_or(SupaSimError::AlreadyDestroyed)?
                             .as_ref()
@@ -428,6 +432,7 @@ pub fn record_command_streams<B: hal::Backend>(
                     buffer_refs.push(
                         instance
                             .buffers
+                            .lock()
                             .get(*dst_buffer)
                             .ok_or(SupaSimError::AlreadyDestroyed)?
                             .as_ref()
@@ -439,6 +444,7 @@ pub fn record_command_streams<B: hal::Backend>(
                     kernel_refs.push(
                         instance
                             .kernels
+                            .lock()
                             .get(*kernel)
                             .ok_or(SupaSimError::AlreadyDestroyed)?
                             .loaded_ref()
@@ -449,6 +455,7 @@ pub fn record_command_streams<B: hal::Backend>(
                     buffer_refs.push(
                         instance
                             .buffers
+                            .lock()
                             .get(*resource)
                             .ok_or(SupaSimError::AlreadyDestroyed)?
                             .as_ref()
@@ -459,6 +466,7 @@ pub fn record_command_streams<B: hal::Backend>(
                 HalCommandBuilder::CopyFromTemp { dst_buffer, .. } => buffer_refs.push(
                     instance
                         .buffers
+                        .lock()
                         .get(*dst_buffer)
                         .ok_or(SupaSimError::AlreadyDestroyed)?
                         .as_ref()
@@ -566,24 +574,40 @@ pub fn record_command_streams<B: hal::Backend>(
     Ok(bindgroups)
 }
 pub struct GpuSubmissionInfo<B: hal::Backend> {
-    command_recorder: Option<B::CommandRecorder>,
+    pub command_recorder: Option<B::CommandRecorder>,
+    pub bind_groups: Vec<(B::BindGroup, Index)>,
+    pub used_buffer_ranges: Vec<(BufferUserId, BufferWeak<B>)>,
+    pub used_buffers: Vec<BufferWeak<B>>,
 }
 /// A job for the CPU to run when some GPU work has completed or immediately, without ideally blocking for long. This won't necessarily run before other submissions
 pub enum SemaphoreFinishedJob<B: hal::Backend> {
     DestroyBuffer(B::Buffer),
+    DestroyKernel(Index),
 }
 impl<B: hal::Backend> SemaphoreFinishedJob<B> {
-    pub fn run(self, instance: &SupaSimInstance<B>) -> SupaSimResult<B, ()> {
+    pub fn run(self, instance: &InstanceState<B>) -> SupaSimResult<B, ()> {
         match self {
             Self::DestroyBuffer(b) => unsafe {
                 instance
-                    .inner()?
                     .inner
                     .lock()
                     .as_mut()
                     .unwrap()
                     .destroy_buffer(b)
                     .map_supasim()?
+            },
+            Self::DestroyKernel(k) => unsafe {
+                let k = instance.kernels.lock().remove(k).unwrap();
+                match k {
+                    SavedKernel::WaitingForDestroy { inner } => instance
+                        .inner
+                        .lock()
+                        .as_mut()
+                        .unwrap()
+                        .destroy_kernel(inner)
+                        .map_supasim()?,
+                    _ => unreachable!(),
+                }
             },
         }
         Ok(())
@@ -596,7 +620,7 @@ pub enum CpuSubmission<B: hal::Backend> {
     Dummy(PhantomData<B>),
 }
 impl<B: hal::Backend> CpuSubmission<B> {
-    pub fn run(self, _instance: &SupaSimInstance<B>) -> SupaSimResult<B, ()> {
+    pub fn run(self, _instance: &InstanceState<B>) -> SupaSimResult<B, ()> {
         match self {
             Self::CreateGpuBuffer { .. } => todo!(),
             Self::DestroyGpuBuffer { .. } => todo!(),
@@ -610,57 +634,113 @@ pub enum SendSyncThreadEvent<B: hal::Backend> {
     /// GPU work to be done when all prior work is completed
     AddSubmission(GpuSubmissionInfo<B>),
     /// CPU work to be completed when a submission is done or immediately if it is already complete
-    AddFinishedJob(usize, SemaphoreFinishedJob<B>),
+    AddFinishedJob(u64, SemaphoreFinishedJob<B>),
     /// CPU work to be completed between submissions
     CpuWork(CpuSubmission<B>),
     /// Any currently queued work will begin immediately instead of waiting for more
     SubmitBatchNow,
-    WaitFinishAndShutdown(&'static mut SupaSimInstanceInner<B>),
+    WaitFinishAndShutdown,
 }
 pub struct SyncThreadSharedData<B: hal::Backend> {
-    pub next_job: usize,
+    pub next_job: u64,
     pub error: Option<SupaSimError<B>>,
+    pub next_submission_idx: u64,
 }
 pub type SyncThreadShared<B> = Arc<(Mutex<SyncThreadSharedData<B>>, Condvar)>;
 struct SyncThreadData<B: hal::Backend> {
     shared: SyncThreadShared<B>,
     receiver: Receiver<SendSyncThreadEvent<B>>,
-    instance: SupaSimInstanceWeak<B>,
+    instance: Arc<InstanceState<B>>,
 }
+impl<B: hal::Backend> UnwindSafe for SyncThreadData<B> {}
 pub struct SyncThreadHandle<B: hal::Backend> {
-    /// The number is for the number already submitted
-    pub sender: Mutex<(Sender<SendSyncThreadEvent<B>>, usize)>,
+    pub sender: Mutex<Sender<SendSyncThreadEvent<B>>>,
     pub shared_thread: SyncThreadShared<B>,
     pub thread: std::thread::JoinHandle<()>,
 }
-pub fn create_sync_thread<B: hal::Backend>(instance: SupaSimInstance<B>) -> SyncThreadHandle<B> {
+impl<B: hal::Backend> SyncThreadHandle<B> {
+    pub fn submit_gpu(&self, submission: GpuSubmissionInfo<B>) -> SupaSimResult<B, u64> {
+        self.sender
+            .lock()
+            .send(SendSyncThreadEvent::AddSubmission(submission))
+            .unwrap();
+        let mut lock = self.shared_thread.0.lock();
+        let id = lock.next_submission_idx;
+        lock.next_submission_idx += 1;
+        drop(lock);
+        Ok(id)
+    }
+    pub fn append_finished_job(
+        &self,
+        idx: u64,
+        job: SemaphoreFinishedJob<B>,
+    ) -> SupaSimResult<B, ()> {
+        self.sender
+            .lock()
+            .send(SendSyncThreadEvent::AddFinishedJob(idx, job))
+            .unwrap();
+        Ok(())
+    }
+    pub fn wait_for(&self, idx: u64, force_wait: bool) -> SupaSimResult<B, bool> {
+        if force_wait {
+            println!("Waiting for {idx}");
+            let mut lock = self.shared_thread.0.lock();
+            while lock.next_job <= idx {
+                self.shared_thread.1.wait(&mut lock);
+            }
+            println!("Finished waiting for {idx}");
+            Ok(true)
+        } else {
+            Ok(self.shared_thread.0.lock().next_job > idx)
+        }
+    }
+    pub fn wait_for_idle(&self) -> SupaSimResult<B, ()> {
+        let mut lock = self.shared_thread.0.lock();
+        while lock.next_job < lock.next_submission_idx {
+            self.shared_thread.1.wait(&mut lock);
+        }
+        Ok(())
+    }
+}
+pub fn create_sync_thread<B: hal::Backend>(
+    instance: SupaSimInstance<B>,
+) -> SupaSimResult<B, SyncThreadHandle<B>> {
     let shared_thread = SyncThreadSharedData::<B> {
         next_job: 1,
         error: None,
+        next_submission_idx: 1,
     };
     let shared = Arc::new((Mutex::new(shared_thread), Condvar::new()));
+    let shared_copy = shared.clone();
     let (sender, receiver) = channel::<SendSyncThreadEvent<B>>();
-    let data = SyncThreadData {
-        shared: shared.clone(),
-        receiver,
-        instance: instance.downgrade(),
-    };
-    let thread = std::thread::spawn(|| {
-        let mut data = data;
-        if let Err(e) = sync_thread_main(&mut data) {
-            let mut lock = data.shared.0.lock();
-            lock.error = Some(e);
-            data.shared.1.notify_all();
-            let reference = lock.error.as_ref().unwrap() as *const _;
+    let thread = std::thread::spawn(move || {
+        let shared = shared_copy;
+        let data = SyncThreadData {
+            shared: shared.clone(),
+            receiver,
+            instance: instance.inner().unwrap()._inner.clone(),
+        };
+
+        if let Err(e) = std::panic::catch_unwind(|| {
+            let mut data = data;
+            sync_thread_main(&mut data).unwrap()
+        }) {
+            let mut lock = shared.0.lock();
+            let mut error = String::from("Unknown panic");
+            if e.is::<String>() {
+                error = *e.downcast::<String>().unwrap();
+            }
+            lock.error = Some(SupaSimError::SyncThreadPanic(error.clone()));
+            shared.1.notify_all();
             drop(lock);
-            panic!("Sync thread encountered error: {}", unsafe { &*reference });
+            panic!("Sync thread encountered error: {error}");
         }
     });
-    SyncThreadHandle {
-        sender: Mutex::new((sender, 1)),
+    Ok(SyncThreadHandle {
+        sender: Mutex::new(sender),
         shared_thread: shared,
         thread,
-    }
+    })
 }
 enum Work<B: hal::Backend> {
     GpuSubmission(GpuSubmissionInfo<B>),
@@ -680,22 +760,20 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
     let mut jobs = Vec::new();
     let mut next_submission_idx = 1;
     let mut _num_submitted_so_far = 1;
-    let semaphore_signal = logic
-        .instance
-        .upgrade()?
-        .inner()?
-        .inner_properties
-        .semaphore_signal;
+    let (semaphore_signal, map_buffer_while_gpu_use) = {
+        (
+            logic.instance.inner_properties.semaphore_signal,
+            logic.instance.inner_properties.map_buffer_while_gpu_use,
+        )
+    };
     let mut semaphores = Vec::new();
-    let mut acquire_semaphore = || -> SupaSimResult<B, B::Semaphore> {
-        Ok(if let Some(s) = semaphores.pop() {
+    let acquire_semaphore = |sems: &mut Vec<B::Semaphore>| -> SupaSimResult<B, B::Semaphore> {
+        Ok(if let Some(s) = sems.pop() {
             s
         } else {
             unsafe {
                 logic
                     .instance
-                    .upgrade()?
-                    .inner()?
                     .inner
                     .lock()
                     .as_mut()
@@ -712,14 +790,13 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
         // Initial stuff - any non GPU work can be completed immediately
         loop {
             match logic.receiver.recv().unwrap() {
-                SendSyncThreadEvent::AddFinishedJob(_, job) => {
-                    job.run(&logic.instance.upgrade()?)?
-                }
-                SendSyncThreadEvent::CpuWork(job) => job.run(&logic.instance.upgrade()?)?,
-                SendSyncThreadEvent::WaitFinishAndShutdown(instance) => {
+                SendSyncThreadEvent::AddFinishedJob(_, job) => job.run(&logic.instance)?,
+                SendSyncThreadEvent::CpuWork(job) => job.run(&logic.instance)?,
+                SendSyncThreadEvent::WaitFinishAndShutdown => {
                     for semaphore in semaphores {
                         unsafe {
-                            instance
+                            logic
+                                .instance
                                 .inner
                                 .lock()
                                 .as_mut()
@@ -755,10 +832,11 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
             }
             .min(MAX_SUBMISSION_WINDOW - (now - first_submission_time));
             match logic.receiver.recv_timeout(max_wait) {
-                Ok(SendSyncThreadEvent::WaitFinishAndShutdown(instance)) => {
+                Ok(SendSyncThreadEvent::WaitFinishAndShutdown) => {
                     for semaphore in semaphores {
                         unsafe {
-                            instance
+                            logic
+                                .instance
                                 .inner
                                 .lock()
                                 .as_mut()
@@ -781,7 +859,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                 Ok(SendSyncThreadEvent::AddFinishedJob(idx, job)) => {
                     last_was_submission = false;
                     if idx < next_submission_idx {
-                        job.run(&logic.instance.upgrade()?)?;
+                        job.run(&logic.instance)?;
                     } else {
                         jobs.push((idx, job));
                     }
@@ -801,8 +879,15 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
             }
         }
         // Reverse sort so we can pop off the end
-        jobs.sort_unstable_by_key(|a| usize::MAX - a.0);
-        let mut semaphores: Vec<B::Semaphore> = Vec::new();
+        jobs.sort_unstable_by_key(|a| u64::MAX - a.0);
+        while let Some(job) = jobs.last() {
+            if job.0 < next_submission_idx {
+                let job = jobs.pop().unwrap();
+                job.1.run(&logic.instance)?;
+            } else {
+                break;
+            }
+        }
         let mut recorders = Vec::new();
         // Setup the submits and collect all needed semaphores
         {
@@ -814,9 +899,9 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                         prev_was_cpu = true;
                     }
                     Work::GpuSubmission(g) => {
-                        used_semaphores.push(acquire_semaphore()?);
+                        used_semaphores.push(acquire_semaphore(&mut semaphores)?);
                         if prev_was_cpu {
-                            used_semaphores.push(acquire_semaphore()?);
+                            used_semaphores.push(acquire_semaphore(&mut semaphores)?);
                         }
                         prev_was_cpu = false;
                         recorders.push(std::mem::take(&mut g.command_recorder).unwrap());
@@ -855,8 +940,6 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
         unsafe {
             logic
                 .instance
-                .upgrade()?
-                .inner()?
                 .inner
                 .lock()
                 .as_mut()
@@ -871,37 +954,97 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
             for s in temp_submission_vec {
                 match s {
                     Work::CpuWork(w) => {
-                        w.run(&logic.instance.upgrade()?)?;
+                        w.run(&logic.instance)?;
+                        next_submission_idx += 1;
+                        logic.shared.0.lock().next_job = next_submission_idx;
+                        logic.shared.1.notify_all();
                     }
-                    Work::GpuSubmission(_) => {
-                        if submits[submit_idx].wait_semaphore.is_some() {
+                    Work::GpuSubmission(item) => {
+                        if let Some(s) = submits[submit_idx].wait_semaphore {
                             unsafe {
-                                semaphores[semaphore_idx].signal().map_supasim()?;
+                                s.signal().map_supasim()?;
                             }
                             semaphore_idx += 1;
                         }
                         unsafe {
-                            semaphores[semaphore_idx].wait().map_supasim()?;
+                            used_semaphores[semaphore_idx].wait().map_supasim()?;
                         }
                         semaphore_idx += 1;
                         submit_idx += 1;
+
+                        println!("Finished {next_submission_idx}");
+                        next_submission_idx += 1;
+                        let mut lock = logic.shared.0.lock();
+                        lock.next_job = next_submission_idx;
+                        logic.shared.1.notify_all();
+                        drop(lock);
+
+                        for b in item.used_buffer_ranges {
+                            if let Ok(buffer) = b.1.upgrade() {
+                                if let Ok(b_inner) = buffer.inner() {
+                                    b_inner.slice_tracker.release(b.0);
+                                }
+                            }
+                        }
+                        if !map_buffer_while_gpu_use {
+                            for b in item.used_buffers {
+                                if let Ok(buffer) = b.upgrade() {
+                                    if let Ok(b_inner) = buffer.inner() {
+                                        if b_inner.last_used == next_submission_idx {
+                                            b_inner.slice_tracker.release_cpu();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        for (bg, kernel) in item.bind_groups {
+                            // TODO: fix issue here if kernel is already destroyed
+                            match logic.instance.kernels.lock().get_mut(kernel).unwrap() {
+                                SavedKernel::Loaded(k) => {
+                                    let kernel = k.upgrade()?;
+                                    let mut k = kernel.inner_mut()?;
+                                    unsafe {
+                                        logic
+                                            .instance
+                                            .inner
+                                            .lock()
+                                            .as_mut()
+                                            .unwrap()
+                                            .destroy_bind_group(k.inner.as_mut().unwrap(), bg)
+                                            .map_supasim()?;
+                                    }
+                                }
+                                SavedKernel::WaitingForDestroy { inner } => unsafe {
+                                    logic
+                                        .instance
+                                        .inner
+                                        .lock()
+                                        .as_mut()
+                                        .unwrap()
+                                        .destroy_bind_group(inner, bg)
+                                        .map_supasim()?;
+                                },
+                            }
+                        }
                     }
                 }
-                next_submission_idx += 1;
                 while let Some(last) = jobs.last() {
                     if last.0 < next_submission_idx {
-                        jobs.pop().unwrap().1.run(&logic.instance.upgrade()?)?;
+                        jobs.pop().unwrap().1.run(&logic.instance)?;
                     } else {
                         break;
                     }
                 }
-                logic.shared.0.lock().next_job = next_submission_idx;
-                logic.shared.1.notify_all();
             }
         }
         if let Some(final_cpu) = final_cpu {
-            final_cpu.run(&logic.instance.upgrade()?)?;
+            final_cpu.run(&logic.instance)?;
         }
         semaphores.append(&mut used_semaphores);
+        logic
+            .instance
+            .hal_command_recorders
+            .lock()
+            .append(&mut recorders);
     }
 }
