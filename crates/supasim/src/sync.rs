@@ -594,7 +594,7 @@ impl<B: hal::Backend> SemaphoreFinishedJob<B> {
                     .as_mut()
                     .unwrap()
                     .destroy_buffer(b)
-                    .map_supasim()?
+                    .map_supasim()?;
             },
             Self::DestroyKernel(k) => unsafe {
                 let k = instance.kernels.lock().remove(k).unwrap();
@@ -683,12 +683,10 @@ impl<B: hal::Backend> SyncThreadHandle<B> {
     }
     pub fn wait_for(&self, idx: u64, force_wait: bool) -> SupaSimResult<B, bool> {
         if force_wait {
-            println!("Waiting for {idx}");
             let mut lock = self.shared_thread.0.lock();
             while lock.next_job <= idx {
                 self.shared_thread.1.wait(&mut lock);
             }
-            println!("Finished waiting for {idx}");
             Ok(true)
         } else {
             Ok(self.shared_thread.0.lock().next_job > idx)
@@ -720,6 +718,7 @@ pub fn create_sync_thread<B: hal::Backend>(
             receiver,
             instance: instance.inner().unwrap()._inner.clone(),
         };
+        drop(instance);
 
         if let Err(e) = std::panic::catch_unwind(|| {
             let mut data = data;
@@ -972,7 +971,6 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                         semaphore_idx += 1;
                         submit_idx += 1;
 
-                        println!("Finished {next_submission_idx}");
                         next_submission_idx += 1;
                         let mut lock = logic.shared.0.lock();
                         lock.next_job = next_submission_idx;

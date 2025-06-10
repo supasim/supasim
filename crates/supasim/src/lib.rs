@@ -350,6 +350,14 @@ impl<B: hal::Backend> InstanceState<B> {
         unsafe { &*self.sync_thread.get() }.as_ref().unwrap()
     }
 }
+impl<B: hal::Backend> Drop for InstanceState<B> {
+    fn drop(&mut self) {
+        let instance = std::mem::take(&mut *self.inner.lock()).unwrap();
+        unsafe {
+            instance.destroy().unwrap();
+        }
+    }
+}
 api_type!(SupaSimInstance, {
     _inner: Arc<InstanceState<B>>,
 },);
@@ -517,149 +525,6 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         b.inner_mut()?.id = s.buffers.lock().insert(Some(b.downgrade()));
         Ok(b)
     }
-    /*pub fn submit_commands(
-        &self,
-        recorders: &mut [CommandRecorder<B>],
-    ) -> SupaSimResult<B, WaitHandle<B>> {
-        // This code is terrible
-        // I sincerely apologize to anyone trying to read(my future self)
-
-        let mut s = self.inner_mut()?;
-        {
-            let mut recorder_locks = Vec::new();
-            for r in recorders.iter_mut() {
-                recorder_locks.push(r.inner_mut()?);
-            }
-            let mut recorder_inners = Vec::new();
-            for r in &mut recorder_locks {
-                recorder_inners.push(&mut **r);
-            }
-
-            let mut recorder = if let Some(r) = s.hal_command_recorders.lock().pop() {
-                r
-            } else {
-                unsafe { s.inner.lock().as_mut().unwrap().create_recorder() }.map_supasim()?
-            };
-            let mut used_buffers = HashSet::new();
-            let mut used_buffer_ranges = Vec::new();
-            let mut used_kernels = Vec::new();
-            let (dag, sync_info, src_buffer) =
-                sync::assemble_dag(&mut recorder_inners, &mut used_kernels, &mut *s)?;
-            for (&buf_id, ranges) in &sync_info {
-                let b = s
-                    .buffers
-                    .lock()
-                    .get(buf_id)
-                    .ok_or(SupaSimError::AlreadyDestroyed)?
-                    .as_ref()
-                    .unwrap()
-                    .upgrade()?;
-                let mut b_mut = b.inner_mut()?;
-                b_mut.last_used = s;
-
-                for &range in ranges {
-                    let id = b_mut.slice_tracker.acquire(
-                        &mut *s,
-                        range,
-                        if b_mut.slice_tracker.mutex.lock().gpu_available {
-                            BufferUser::Gpu(b_mut.last_used)
-                        } else {
-                            BufferUser::Cross(b_mut.last_used)
-                        },
-                    )?;
-                    used_buffer_ranges.push((id, b.downgrade()))
-                }
-                used_buffers.insert(buf_id);
-            }
-            for kernel in &used_kernels {
-                kernel.upgrade()?.inner_mut()?.last_used = s.submitted_semaphore_count;
-            }
-            let sync_mode = s.inner_properties.sync_mode;
-            drop(s);
-            let bind_groups = match sync_mode {
-                types::SyncMode::Dag => sync::record_dag(&dag, &mut recorder)?,
-                types::SyncMode::VulkanStyle => {
-                    let streams = sync::dag_to_command_streams(&dag, true)?;
-                    sync::record_command_streams(
-                        &streams,
-                        self.clone(),
-                        &mut recorder,
-                        &src_buffer,
-                    )?
-                }
-                types::SyncMode::Automatic => {
-                    let streams = sync::dag_to_command_streams(&dag, false)?;
-                    sync::record_command_streams(
-                        &streams,
-                        self.clone(),
-                        &mut recorder,
-                        &src_buffer,
-                    )?
-                }
-            };
-            let mut s = self.inner_mut()?;
-            let semaphore = if let Some(s) = s.unused_semaphores.lock().pop() {
-                s
-            } else {
-                unsafe {
-                    s.inner
-                        .lock()
-                        .as_mut()
-                        .unwrap()
-                        .create_semaphore()
-                        .map_supasim()?
-                }
-            };
-            let mut submit_info = RecorderSubmitInfo {
-                command_recorder: &mut recorder,
-                wait_semaphore: None,
-                signal_semaphore: Some(&semaphore),
-            };
-            unsafe {
-                s.inner
-                    .lock()
-                    .as_mut()
-                    .unwrap()
-                    .submit_recorders(std::slice::from_mut(&mut submit_info))
-                    .map_supasim()?;
-            }
-            let used_buffers: Vec<_> = used_buffers
-                .iter()
-                .map(|a| s.buffers.lock().get(*a).unwrap().as_ref().unwrap().clone())
-                .collect();
-            if !s.inner_properties.map_buffer_while_gpu_use {
-                for b in &used_buffers {
-                    b.upgrade()?
-                        .inner()?
-                        .slice_tracker
-                        .acquire_cpu(s.submitted_semaphore_count)?;
-                }
-            }
-            s.submitted_command_recorders
-                .push_back(SubmittedCommandRecorder {
-                    command_recorders: vec![recorder],
-                    buffers_to_destroy: src_buffer.into_iter().collect(),
-                    bind_groups,
-                    used_semaphore: semaphore,
-                    kernels_to_destroy: Vec::new(),
-                    used_buffer_ranges,
-                    used_buffers,
-                });
-        }
-        for recorder in recorders {
-            recorder.destroy()?;
-        }
-        let mut s = self.inner_mut()?;
-        let index = s.submitted_semaphore_count;
-        s.submitted_semaphore_count += 1;
-        Ok(WaitHandle::from_inner(WaitHandleInner {
-            _phantom: Default::default(),
-            instance: self.clone(),
-            index,
-            id: Index::DANGLING,
-            is_alive: true,
-        }))
-    }*/
     pub fn submit_commands(
         &self,
         recorders: &mut [CommandRecorder<B>],
