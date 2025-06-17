@@ -665,6 +665,9 @@ impl<B: hal::Backend> SyncThreadHandle<B> {
             .send(SendSyncThreadEvent::AddSubmission(submission))
             .unwrap();
         let mut lock = self.shared_thread.0.lock();
+        if let Some(SupaSimError::SyncThreadPanic(e)) = &lock.error {
+            return Err(SupaSimError::SyncThreadPanic(e.clone()));
+        }
         let id = lock.next_submission_idx;
         lock.next_submission_idx += 1;
         drop(lock);
@@ -685,6 +688,9 @@ impl<B: hal::Backend> SyncThreadHandle<B> {
         if force_wait {
             let mut lock = self.shared_thread.0.lock();
             while lock.next_job <= idx {
+                if let Some(SupaSimError::SyncThreadPanic(e)) = &lock.error {
+                    return Err(SupaSimError::SyncThreadPanic(e.clone()));
+                }
                 self.shared_thread.1.wait(&mut lock);
             }
             Ok(true)
@@ -695,6 +701,9 @@ impl<B: hal::Backend> SyncThreadHandle<B> {
     pub fn wait_for_idle(&self) -> SupaSimResult<B, ()> {
         let mut lock = self.shared_thread.0.lock();
         while lock.next_job < lock.next_submission_idx {
+            if let Some(SupaSimError::SyncThreadPanic(e)) = &lock.error {
+                return Err(SupaSimError::SyncThreadPanic(e.clone()));
+            }
             self.shared_thread.1.wait(&mut lock);
         }
         Ok(())
