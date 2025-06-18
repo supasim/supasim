@@ -701,7 +701,7 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 [[package]]
 name = "naga"
 version = "25.0.0"
-source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#6735a2844f3a4bc9ebb91dec331a87c1e77f5ea5"
+source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#b46f40ee41a901ec5685c68cd86182cd5c5eda6f"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -1531,7 +1531,7 @@ dependencies = [
 [[package]]
 name = "wgpu"
 version = "25.0.0"
-source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#6735a2844f3a4bc9ebb91dec331a87c1e77f5ea5"
+source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#b46f40ee41a901ec5685c68cd86182cd5c5eda6f"
 dependencies = [
  "arrayvec",
  "bitflags",
@@ -1558,7 +1558,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "25.0.0"
-source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#6735a2844f3a4bc9ebb91dec331a87c1e77f5ea5"
+source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#b46f40ee41a901ec5685c68cd86182cd5c5eda6f"
 dependencies = [
  "arrayvec",
  "bit-set",
@@ -1588,7 +1588,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-apple"
 version = "25.0.0"
-source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#6735a2844f3a4bc9ebb91dec331a87c1e77f5ea5"
+source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#b46f40ee41a901ec5685c68cd86182cd5c5eda6f"
 dependencies = [
  "wgpu-hal",
 ]
@@ -1596,7 +1596,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-windows-linux-android"
 version = "25.0.0"
-source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#6735a2844f3a4bc9ebb91dec331a87c1e77f5ea5"
+source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#b46f40ee41a901ec5685c68cd86182cd5c5eda6f"
 dependencies = [
  "wgpu-hal",
 ]
@@ -1604,7 +1604,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "25.0.0"
-source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#6735a2844f3a4bc9ebb91dec331a87c1e77f5ea5"
+source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#b46f40ee41a901ec5685c68cd86182cd5c5eda6f"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -1642,7 +1642,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "25.0.0"
-source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#6735a2844f3a4bc9ebb91dec331a87c1e77f5ea5"
+source = "git+https://github.com/SupaMaggie70Incorporated/wgpu.git?branch=external_memory_fd_implementation#b46f40ee41a901ec5685c68cd86182cd5c5eda6f"
 dependencies = [
  "bitflags",
  "bytemuck",

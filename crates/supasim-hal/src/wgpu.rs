@@ -143,7 +143,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             map_buffers: true,
             map_buffer_while_gpu_use: false,
             upload_download_buffers: false,
-            external_memory: false,
+            export_memory: false,
         }
     }
 
@@ -338,24 +338,8 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                 HalBufferType::Upload => Some(true),
                 _ => None,
             },
+            create_info: *alloc_info,
         })
-    }
-
-    #[tracing::instrument]
-    unsafe fn import_buffer(
-        &mut self,
-        obj: ExternalMemoryObject,
-        descriptor: &HalBufferDescriptor,
-    ) -> Result<<Wgpu as Backend>::Buffer, <Wgpu as Backend>::Error> {
-        unimplemented!()
-    }
-
-    #[tracing::instrument]
-    unsafe fn export_buffer(
-        &mut self,
-        buffer: <Wgpu as Backend>::Buffer,
-    ) -> Result<ExternalMemoryObject, <Wgpu as Backend>::Error> {
-        unimplemented!()
     }
 
     #[tracing::instrument]
@@ -554,12 +538,13 @@ pub struct WgpuBuffer {
     slice: Option<wgpu::BufferSlice<'static>>,
     mapped_slice: Option<wgpu::BufferViewMut<'static>>,
     map_mut: Option<bool>,
+    create_info: HalBufferDescriptor,
 }
 unsafe impl Send for WgpuBuffer {}
 unsafe impl Sync for WgpuBuffer {}
 impl Buffer<Wgpu> for WgpuBuffer {
     unsafe fn share_to_device(
-        &self,
+        &mut self,
         instance: &mut <Wgpu as Backend>::Instance,
         external_device: &dyn Any,
     ) -> Result<Box<dyn Any>, <Wgpu as Backend>::Error> {
@@ -568,7 +553,17 @@ impl Buffer<Wgpu> for WgpuBuffer {
             if info.device == instance.device {
                 return Ok(self.inner.clone());
             }
+            let memory_obj = unsafe { self.export(instance)? };
+            return Ok(Box::new(unsafe {
+                info.import_external_memory(memory_obj, self.create_info)
+            }));
         }
+        Err(WgpuError::ExternalMemoryExport)
+    }
+    unsafe fn export(
+        &mut self,
+        _instance: &mut <Wgpu as Backend>::Instance,
+    ) -> Result<ExternalMemoryObject, <Wgpu as Backend>::Error> {
         Err(WgpuError::ExternalMemoryExport)
     }
 }

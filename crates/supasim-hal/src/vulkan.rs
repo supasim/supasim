@@ -37,10 +37,7 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use types::{
-    Dag, HalBufferDescriptor, HalBufferType, HalInstanceProperties, KernelReflectionInfo,
-    SyncOperations,
-};
+use types::{Dag, HalBufferType, HalInstanceProperties, KernelReflectionInfo, SyncOperations};
 
 use scopeguard::defer;
 
@@ -663,7 +660,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             is_unified_memory: self.is_unified_memory,
             map_buffer_while_gpu_use: true,
             upload_download_buffers: true,
-            external_memory: true,
+            export_memory: true,
         }
     }
     #[tracing::instrument]
@@ -857,23 +854,6 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 create_info: *alloc_info,
             })
         }
-    }
-
-    #[tracing::instrument]
-    unsafe fn export_buffer(
-        &mut self,
-        buffer: <Vulkan as Backend>::Buffer,
-    ) -> Result<crate::ExternalMemoryObject, <Vulkan as Backend>::Error> {
-        todo!()
-    }
-
-    #[tracing::instrument]
-    unsafe fn import_buffer(
-        &mut self,
-        obj: crate::ExternalMemoryObject,
-        descriptor: &HalBufferDescriptor,
-    ) -> Result<<Vulkan as Backend>::Buffer, <Vulkan as Backend>::Error> {
-        todo!()
     }
 
     #[tracing::instrument]
@@ -1228,10 +1208,23 @@ pub struct VulkanBuffer {
 }
 impl Buffer<Vulkan> for VulkanBuffer {
     unsafe fn share_to_device(
-        &self,
-        _instance: &mut <Vulkan as Backend>::Instance,
-        _external_device: &dyn std::any::Any,
+        &mut self,
+        instance: &mut <Vulkan as Backend>::Instance,
+        external_device: &dyn std::any::Any,
     ) -> Result<Box<dyn std::any::Any>, <Vulkan as Backend>::Error> {
+        #[cfg(feature = "external_wgpu")]
+        if let Some(info) = external_device.downcast_ref::<crate::WgpuDeviceInfo>() {
+            let memory_obj = unsafe { self.export(instance)? };
+            return Ok(Box::new(unsafe {
+                info.import_external_memory(memory_obj, self.create_info)
+            }));
+        }
+        Err(VulkanError::ExternalMemoryExport)
+    }
+    unsafe fn export(
+        &mut self,
+        _instance: &mut <Vulkan as Backend>::Instance,
+    ) -> Result<crate::ExternalMemoryObject, <Vulkan as Backend>::Error> {
         Err(VulkanError::ExternalMemoryExport)
     }
 }

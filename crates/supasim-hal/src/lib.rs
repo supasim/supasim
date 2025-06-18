@@ -117,19 +117,6 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
     /// # Safety
     /// * All bind groups using this buffer must have been updated or destroyed
     /// * The buffer must not be mapped
-    unsafe fn export_buffer(&mut self, buffer: B::Buffer)
-    -> Result<ExternalMemoryObject, B::Error>;
-    /// # Safety
-    /// * The imported buffer has its ownership transferred
-    /// * It must live on the same physical device and in the same memory type
-    unsafe fn import_buffer(
-        &mut self,
-        obj: ExternalMemoryObject,
-        descriptor: &HalBufferDescriptor,
-    ) -> Result<B::Buffer, B::Error>;
-    /// # Safety
-    /// * All bind groups using this buffer must have been updated or destroyed
-    /// * The buffer must not be mapped
     unsafe fn destroy_buffer(&mut self, buffer: B::Buffer) -> Result<(), B::Error>;
     /// # Safety
     /// * All submitted command recorders using this buffer must have completed
@@ -238,9 +225,18 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
 pub trait Kernel<B: Backend<Kernel = Self>>: Send + Sync {}
 pub trait Buffer<B: Backend<Buffer = Self>>: Send + Sync {
     /// # Safety
+    /// * Synchronization must be managed by the user
+    /// * The buffer must be of type `Storage`
+    unsafe fn export(
+        &mut self,
+        instance: &mut B::Instance,
+    ) -> Result<ExternalMemoryObject, B::Error>;
+    /// # Safety
     /// * The instance must have had can_share_memory_to_device called on the same external device, and it must have returned true
+    /// * Synchronization must be managed by the user
+    /// * The buffer must be of type `Storage`
     unsafe fn share_to_device(
-        &self,
+        &mut self,
         instance: &mut B::Instance,
         external_device: &dyn Any,
     ) -> Result<Box<dyn Any>, B::Error>;

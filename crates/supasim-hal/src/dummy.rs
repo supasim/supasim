@@ -55,7 +55,7 @@ impl BackendInstance<Dummy> for DummyResource {
             is_unified_memory: false,
             map_buffer_while_gpu_use: true,
             upload_download_buffers: true,
-            external_memory: false,
+            export_memory: false,
         }
     }
 
@@ -132,21 +132,6 @@ impl BackendInstance<Dummy> for DummyResource {
         alloc_info: &types::HalBufferDescriptor,
     ) -> Result<<Dummy as Backend>::Buffer, <Dummy as Backend>::Error> {
         Ok(DummyResource)
-    }
-
-    unsafe fn export_buffer(
-        &mut self,
-        buffer: <Dummy as Backend>::Buffer,
-    ) -> Result<ExternalMemoryObject, <Dummy as Backend>::Error> {
-        unreachable!()
-    }
-
-    unsafe fn import_buffer(
-        &mut self,
-        obj: ExternalMemoryObject,
-        descriptor: &HalBufferDescriptor,
-    ) -> Result<<Dummy as Backend>::Buffer, <Dummy as Backend>::Error> {
-        unreachable!()
     }
 
     unsafe fn destroy_buffer(
@@ -236,10 +221,16 @@ impl BackendInstance<Dummy> for DummyResource {
 impl Kernel<Dummy> for DummyResource {}
 impl Buffer<Dummy> for DummyResource {
     unsafe fn share_to_device(
-        &self,
+        &mut self,
         instance: &mut <Dummy as Backend>::Instance,
         external_device: &dyn Any,
     ) -> Result<Box<dyn Any>, <Dummy as Backend>::Error> {
+        Err(DummyResource)
+    }
+    unsafe fn export(
+        &mut self,
+        instance: &mut <Dummy as Backend>::Instance,
+    ) -> Result<ExternalMemoryObject, <Dummy as Backend>::Error> {
         Err(DummyResource)
     }
 }
