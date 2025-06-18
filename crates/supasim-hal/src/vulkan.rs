@@ -559,6 +559,8 @@ pub enum VulkanError {
         "A command recorder was submitted that would've required signalled semaphores for a complex DAG structure"
     )]
     SemaphoreSignalInDag,
+    #[error("A buffer export was attempted under invalid conditions")]
+    ExternalMemoryExport,
 }
 impl crate::Error<Vulkan> for VulkanError {
     fn is_out_of_device_memory(&self) -> bool {
@@ -661,8 +663,15 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             is_unified_memory: self.is_unified_memory,
             map_buffer_while_gpu_use: true,
             upload_download_buffers: true,
-            buffer_import_export: true,
+            external_memory: true,
         }
+    }
+    #[tracing::instrument]
+    unsafe fn can_share_memory_to_device(
+        &mut self,
+        _device: &dyn std::any::Any,
+    ) -> Result<bool, <Vulkan as Backend>::Error> {
+        Ok(false)
     }
     #[tracing::instrument(skip(binary))]
     unsafe fn compile_kernel(
@@ -782,11 +791,10 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     ) -> Result<<Vulkan as Backend>::Buffer, <Vulkan as Backend>::Error> {
         unsafe {
             let err = Cell::new(true);
-            let queue_family_indices = [self.queue_family_idx]; // This would need to change to support external renderers
             let create_info = vk::BufferCreateInfo::default()
                 .size(alloc_info.size)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .queue_family_indices(&queue_family_indices)
+                .queue_family_indices(std::slice::from_ref(&self.queue_family_idx))
                 .usage({
                     use vk::BufferUsageFlags as F;
                     match alloc_info.memory_type {
@@ -1218,7 +1226,15 @@ pub struct VulkanBuffer {
     pub allocation: Allocation,
     pub create_info: types::HalBufferDescriptor,
 }
-impl Buffer<Vulkan> for VulkanBuffer {}
+impl Buffer<Vulkan> for VulkanBuffer {
+    unsafe fn share_to_device(
+        &self,
+        _instance: &mut <Vulkan as Backend>::Instance,
+        _external_device: &dyn std::any::Any,
+    ) -> Result<Box<dyn std::any::Any>, <Vulkan as Backend>::Error> {
+        Err(VulkanError::ExternalMemoryExport)
+    }
+}
 #[derive(Debug)]
 pub struct VulkanCommandRecorder {
     inner: vk::CommandBuffer,

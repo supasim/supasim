@@ -30,11 +30,12 @@ license.workspace = true
 homepage.workspace = true
 
 [features]
-default = ["vulkan", "wgpu"]
+default = ["vulkan", "wgpu", "external_wgpu"]
 cuda = [
   # "cust"
 ] # Potential cuda libraries: cust, cudarc
-wgpu = ["dep:wgpu", "pollster"]
+wgpu = ["dep:wgpu", "pollster", "external_wgpu"]
+external_wgpu = ["dep:wgpu", "ash"]
 vulkan = ["ash", "gpu-allocator"]
 
 [dependencies]

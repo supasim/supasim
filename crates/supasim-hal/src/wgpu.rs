@@ -117,6 +117,13 @@ pub struct WgpuInstance {
     queue: wgpu::Queue,
     unified_memory: bool,
 }
+impl WgpuInstance {
+    /// # Safety
+    /// * Currently unspecified safety requirements
+    pub unsafe fn get_device_queue(&self) -> (wgpu::Device, wgpu::Queue) {
+        (self.device.clone(), self.queue.clone())
+    }
+}
 impl BackendInstance<Wgpu> for WgpuInstance {
     #[tracing::instrument]
     fn get_properties(&mut self) -> HalInstanceProperties {
@@ -136,8 +143,23 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             map_buffers: true,
             map_buffer_while_gpu_use: false,
             upload_download_buffers: false,
-            buffer_import_export: false,
+            external_memory: false,
         }
+    }
+
+    #[tracing::instrument]
+    unsafe fn can_share_memory_to_device(
+        &mut self,
+        device: &dyn Any,
+    ) -> Result<bool, <Wgpu as Backend>::Error> {
+        #[cfg(feature = "external_wgpu")]
+        if let Some(info) = device.downcast_ref::<crate::WgpuDeviceInfo>() {
+            if info.device == self.device {
+                return Ok(true);
+            }
+            return Ok(info.supports_external_memory());
+        }
+        Ok(false)
     }
 
     #[tracing::instrument]
@@ -535,7 +557,21 @@ pub struct WgpuBuffer {
 }
 unsafe impl Send for WgpuBuffer {}
 unsafe impl Sync for WgpuBuffer {}
-impl Buffer<Wgpu> for WgpuBuffer {}
+impl Buffer<Wgpu> for WgpuBuffer {
+    unsafe fn share_to_device(
+        &self,
+        instance: &mut <Wgpu as Backend>::Instance,
+        external_device: &dyn Any,
+    ) -> Result<Box<dyn Any>, <Wgpu as Backend>::Error> {
+        #[cfg(feature = "external_wgpu")]
+        if let Some(info) = external_device.downcast_ref::<crate::WgpuDeviceInfo>() {
+            if info.device == instance.device {
+                return Ok(self.inner.clone());
+            }
+        }
+        Err(WgpuError::ExternalMemoryExport)
+    }
+}
 #[derive(Debug)]
 pub enum WgpuCommandRecorder {
     Unrecorded(wgpu::CommandEncoder),
@@ -675,6 +711,8 @@ pub enum WgpuError {
     RequestDevice(#[from] wgpu::RequestDeviceError),
     #[error("Error polling: {0}")]
     PollError(#[from] wgpu::PollError),
+    #[error("A buffer export was attempted under invalid conditions")]
+    ExternalMemoryExport,
 }
 impl Error<Wgpu> for WgpuError {
     fn is_out_of_device_memory(&self) -> bool {

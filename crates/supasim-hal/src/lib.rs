@@ -17,6 +17,8 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
 pub mod dummy;
+#[cfg(feature = "external_wgpu")]
+pub mod external_wgpu;
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
 #[cfg(feature = "wgpu")]
@@ -25,7 +27,11 @@ pub mod wgpu;
 #[cfg(test)]
 mod tests;
 
+use std::any::Any;
+
 pub use dummy::Dummy;
+#[cfg(feature = "external_wgpu")]
+pub use external_wgpu::WgpuDeviceInfo;
 #[cfg(feature = "vulkan")]
 pub use vulkan::Vulkan;
 #[cfg(feature = "wgpu")]
@@ -49,6 +55,12 @@ pub trait Backend: Sized + std::fmt::Debug + Clone + Send + Sync + 'static {
 }
 pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
     fn get_properties(&mut self) -> HalInstanceProperties;
+    /// Get whether or not memory can be shared to a certain device. Usually, this device would be a wgpu device. Note that using this
+    /// with wgpu devices will require the wgpu feature, even if the backend isn't used.
+    ///
+    /// # Safety
+    /// * Unknown safety requirements lol
+    unsafe fn can_share_memory_to_device(&mut self, device: &dyn Any) -> Result<bool, B::Error>;
     /// # Safety
     /// * The kernel code must be valid
     /// * The reflection info must match exactly with the shader
@@ -224,7 +236,15 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
     unsafe fn clear(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
 pub trait Kernel<B: Backend<Kernel = Self>>: Send + Sync {}
-pub trait Buffer<B: Backend<Buffer = Self>>: Send + Sync {}
+pub trait Buffer<B: Backend<Buffer = Self>>: Send + Sync {
+    /// # Safety
+    /// * The instance must have had can_share_memory_to_device called on the same external device, and it must have returned true
+    unsafe fn share_to_device(
+        &self,
+        instance: &mut B::Instance,
+        external_device: &dyn Any,
+    ) -> Result<Box<dyn Any>, B::Error>;
+}
 pub trait BindGroup<B: Backend<BindGroup = Self>>: Send + Sync {}
 pub trait KernelCache<B: Backend<KernelCache = Self>>: Send + Sync {}
 pub trait Semaphore<B: Backend<Semaphore = Self>>: Send + Sync {
@@ -290,4 +310,5 @@ pub enum BufferCommand<'a, B: Backend> {
 #[derive(Debug)]
 pub struct ExternalMemoryObject {
     pub handle: isize,
+    pub offset: u64,
 }

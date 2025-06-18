@@ -165,7 +165,7 @@ pub struct HalInstanceProperties {
     /// Whether it supports dual upload-download buffers
     pub upload_download_buffers: bool,
     /// Whether it supports importing or exporting buffers
-    pub buffer_import_export: bool,
+    pub external_memory: bool,
 }
 /// # Safety
 /// This is undefined behavior lol
