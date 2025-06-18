@@ -8,7 +8,8 @@
 //! * Currently, only Vulkan support is being used.
 
 use types::HalBufferType;
-const EXTERNAL_MEMORY_EXTENSION: &std::ffi::CStr = const {
+#[cfg(not(target_vendor = "apple"))]
+const EXTERNAL_MEMORY_VULKAN_EXTENSION: &std::ffi::CStr = const {
     if cfg!(windows) {
         c"VK_KHR_external_memory_win32"
     } else if cfg!(unix) {
@@ -28,11 +29,12 @@ impl WgpuDeviceInfo {
     pub fn supports_external_memory(&self) -> bool {
         unsafe {
             match self.backend {
+                #[cfg(not(target_vendor = "apple"))]
                 wgpu::Backend::Vulkan => {
                     self.device.as_hal::<wgpu::hal::vulkan::Api, _, _>(|dev| {
                         dev.unwrap()
                             .enabled_device_extensions()
-                            .contains(&EXTERNAL_MEMORY_EXTENSION)
+                            .contains(&EXTERNAL_MEMORY_VULKAN_EXTENSION)
                     })
                 }
                 // TODO: add support for dx12, metal external memory
@@ -51,6 +53,7 @@ impl WgpuDeviceInfo {
         // There's lots of nesting here, deal with it
         unsafe {
             match self.backend {
+                #[cfg(not(target_vendor = "apple"))]
                 wgpu::Backend::Vulkan => {
                     self.device.as_hal::<wgpu::hal::vulkan::Api, _, _>(|dev| {
                         use ash::vk;
