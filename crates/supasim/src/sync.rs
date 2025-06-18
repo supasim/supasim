@@ -311,7 +311,7 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                     } => {
                         let bg_index = bind_groups.len() as u32;
                         let bg = BindGroupDesc {
-                            kernel_idx: kernel.inner()?.id,
+                            kernel_idx: kernel.inner()?.inner.lock().id,
                             items: cmd
                                 .buffers
                                 .iter()
@@ -329,7 +329,7 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                         };
                         bind_groups.push(bg);
                         HalCommandBuilder::DispatchKernel {
-                            kernel: kernel.inner()?.id,
+                            kernel: kernel.inner()?.inner.lock().id,
                             bg: bg_index,
                             push_constants: Vec::new(),
                             workgroup_dims: *workgroup_dims,
@@ -368,10 +368,10 @@ pub fn record_command_streams<B: hal::Backend>(
             .kernels
             .lock()
             .get(bg.kernel_idx)
-            .ok_or(SupaSimError::AlreadyDestroyed)?
+            .ok_or(SupaSimError::AlreadyDestroyed("Kernel".to_owned()))?
             .loaded_ref()
             .upgrade()?;
-        let mut kernel = _k.inner_mut()?;
+        let kernel = _k.inner()?;
         let mut resources_a = Vec::new();
         for res in &bg.items {
             resources_a.push(
@@ -379,9 +379,9 @@ pub fn record_command_streams<B: hal::Backend>(
                     .buffers
                     .lock()
                     .get(res.0)
-                    .ok_or(SupaSimError::AlreadyDestroyed)?
+                    .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                     .as_ref()
-                    .ok_or(SupaSimError::AlreadyDestroyed)?
+                    .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                     .upgrade()?,
             );
         }
@@ -404,10 +404,10 @@ pub fn record_command_streams<B: hal::Backend>(
                 .lock()
                 .as_mut()
                 .unwrap()
-                .create_bind_group(kernel.inner.as_mut().unwrap(), &resources)
+                .create_bind_group(kernel.inner.lock().inner.as_mut().unwrap(), &resources)
                 .map_supasim()?
         };
-        bindgroups.push((bg, kernel.id));
+        bindgroups.push((bg, kernel.inner.lock().id));
     }
     for stream in &streams.streams {
         let mut buffer_refs = Vec::new();
@@ -424,7 +424,7 @@ pub fn record_command_streams<B: hal::Backend>(
                             .buffers
                             .lock()
                             .get(*src_buffer)
-                            .ok_or(SupaSimError::AlreadyDestroyed)?
+                            .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                             .as_ref()
                             .unwrap()
                             .upgrade()?,
@@ -434,7 +434,7 @@ pub fn record_command_streams<B: hal::Backend>(
                             .buffers
                             .lock()
                             .get(*dst_buffer)
-                            .ok_or(SupaSimError::AlreadyDestroyed)?
+                            .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                             .as_ref()
                             .unwrap()
                             .upgrade()?,
@@ -446,9 +446,12 @@ pub fn record_command_streams<B: hal::Backend>(
                             .kernels
                             .lock()
                             .get(*kernel)
-                            .ok_or(SupaSimError::AlreadyDestroyed)?
+                            .ok_or(SupaSimError::AlreadyDestroyed("Kernel".to_owned()))?
                             .loaded_ref()
-                            .upgrade()?,
+                            .upgrade()?
+                            .inner()?
+                            .inner
+                            .clone(),
                     );
                 }
                 HalCommandBuilder::MemoryBarrier { resource, .. } => {
@@ -457,7 +460,7 @@ pub fn record_command_streams<B: hal::Backend>(
                             .buffers
                             .lock()
                             .get(*resource)
-                            .ok_or(SupaSimError::AlreadyDestroyed)?
+                            .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                             .as_ref()
                             .unwrap()
                             .upgrade()?,
@@ -468,7 +471,7 @@ pub fn record_command_streams<B: hal::Backend>(
                         .buffers
                         .lock()
                         .get(*dst_buffer)
-                        .ok_or(SupaSimError::AlreadyDestroyed)?
+                        .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                         .as_ref()
                         .unwrap()
                         .upgrade()?,
@@ -482,7 +485,7 @@ pub fn record_command_streams<B: hal::Backend>(
         }
         let mut kernel_locks = Vec::new();
         for kernel_ref in &kernel_refs {
-            kernel_locks.push(kernel_ref.inner()?);
+            kernel_locks.push(kernel_ref.lock());
         }
         let mut hal_commands = Vec::new();
         {
@@ -498,11 +501,7 @@ pub fn record_command_streams<B: hal::Backend>(
                 buffer
             };
             let mut get_kernel = || {
-                let kernel = kernel_locks[current_kernel_index]
-                    .deref()
-                    .inner
-                    .as_ref()
-                    .unwrap();
+                let kernel = kernel_locks[current_kernel_index].inner.as_ref().unwrap();
                 current_kernel_index += 1;
                 kernel
             };
@@ -1005,11 +1004,12 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                             }
                         }
                         for (bg, kernel) in item.bind_groups {
-                            // TODO: fix issue here if kernel is already destroyed
+                            // TODO: fix issue here if kernel is already destroyed or is destroyed during this
                             match logic.instance.kernels.lock().get_mut(kernel).unwrap() {
                                 SavedKernel::Loaded(k) => {
                                     let kernel = k.upgrade()?;
-                                    let mut k = kernel.inner_mut()?;
+                                    let _k = kernel.inner_mut()?;
+                                    let mut k = _k.inner.lock();
                                     unsafe {
                                         logic
                                             .instance

@@ -50,12 +50,14 @@ impl WgpuDeviceInfo {
         handle: crate::ExternalMemoryObject,
         alloc_info: types::HalBufferDescriptor,
     ) -> Option<wgpu::Buffer> {
+        // Wgpu has weird requirements for buffer imports, and host memory seems useless to copy
+        assert!(alloc_info.memory_type == HalBufferType::Storage);
         // There's lots of nesting here, deal with it
         unsafe {
             match self.backend {
                 #[cfg(not(target_vendor = "apple"))]
                 wgpu::Backend::Vulkan => {
-                    self.device.as_hal::<wgpu::hal::vulkan::Api, _, _>(|dev| {
+                    /*self.device.as_hal::<wgpu::hal::vulkan::Api, _, _>(|dev| {
                         use ash::vk;
                         let hal_dev = dev.unwrap();
                         let dev = hal_dev.raw_device();
@@ -86,19 +88,8 @@ impl WgpuDeviceInfo {
                                 None,
                             )
                             .unwrap();
-
-                        let mut dedicated_reqs = vk::MemoryDedicatedRequirementsKHR::default();
-                        let mut requirements =
-                            vk::MemoryRequirements2::default().push_next(&mut dedicated_reqs);
-                        dev.get_buffer_memory_requirements2(
-                            &vk::BufferMemoryRequirementsInfo2::default().buffer(buffer),
-                            &mut requirements,
-                        );
-
-                        // TODO: investigate further whether dedicated allocation info is required. I know it is for
-                        // D3D12 resource handles and for many DMA buffer things
-                        let dedicated_alloc =
-                            vk::MemoryDedicatedAllocateInfoKHR::default().buffer(buffer);
+                        // TODO: currently this doesn't check for dedicated allocation requirements.
+                        // That's because I can't guarantee wgpu has enabled the right extensions
                         #[cfg(unix)]
                         let mut import_info = vk::ImportMemoryFdInfoKHR::default()
                             .fd(handle.handle as std::ffi::c_int)
@@ -107,18 +98,48 @@ impl WgpuDeviceInfo {
                         let mut import_info = vk::ImportMemoryWin32HandleInfoKHR::default()
                             .handle(handle.handle)
                             .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KHR);
-                        if dedicated_reqs.requires_dedicated_allocation == vk::TRUE {
-                            import_info.p_next =
-                                &dedicated_alloc as *const _ as *const std::ffi::c_void;
-                        }
                         let allocate_info =
                             vk::MemoryAllocateInfo::default().push_next(&mut import_info);
                         let device_memory = dev.allocate_memory(&allocate_info, None).unwrap();
                         dev.bind_buffer_memory(buffer, device_memory, handle.offset)
                             .unwrap();
-                        // Then convert this into a wgpu hal buffer
-                        todo!()
-                    })
+                        // TODO: revise this, as wgpu requires we keep track of the buffer memory ourselves
+                        // Currently, we simply forget about the device memory backing the buffer.
+                        let hal_buffer = wgpu::hal::vulkan::Device::buffer_from_raw(buffer);
+                        let buffer = self
+                            .device
+                            .create_buffer_from_hal::<wgpu::hal::vulkan::Api>(
+                                hal_buffer,
+                                &wgpu::BufferDescriptor {
+                                    label: None,
+                                    size: alloc_info.size,
+                                    usage: wgpu::BufferUsages::STORAGE
+                                        | wgpu::BufferUsages::COPY_SRC
+                                        | wgpu::BufferUsages::COPY_DST,
+                                    mapped_at_creation: false,
+                                },
+                            );
+                        Some(buffer)
+                    })*/
+                    if self
+                        .features
+                        .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_FD)
+                    {
+                        Some(self.device.create_buffer_external_memory_fd(
+                            handle.handle as i32,
+                            handle.offset,
+                            &wgpu::BufferDescriptor {
+                                label: None,
+                                size: alloc_info.size,
+                                usage: wgpu::BufferUsages::STORAGE
+                                    | wgpu::BufferUsages::COPY_SRC
+                                    | wgpu::BufferUsages::COPY_DST,
+                                mapped_at_creation: false,
+                            },
+                        ))
+                    } else {
+                        None
+                    }
                 }
                 _ => None,
             }

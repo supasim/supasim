@@ -258,7 +258,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
 
     #[tracing::instrument]
     unsafe fn wait_for_idle(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
-        self.device.poll(wgpu::MaintainBase::Wait)?;
+        self.device.poll(wgpu::PollType::Wait).unwrap();
         Ok(())
     }
 
@@ -436,7 +436,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                 // In theory map_async will go through after doing this kind of blocking wait.
                 // This might change in the future, making wgpu a volatile backend.
                 // Also, this is dumb as shit.
-                self.device.poll(wgpu::PollType::Wait)?;
+                self.device.poll(wgpu::PollType::Wait).unwrap();
                 // Now that we know that the slice will "live forever", we can get its mapped range which
                 // will likewise "live forever". I told you I knew what I was doing, borrow checker!
                 buffer.mapped_slice = Some(buffer.slice.as_mut().unwrap().get_mapped_range_mut());
@@ -676,7 +676,8 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
     unsafe fn wait(&self) -> Result<(), <Wgpu as Backend>::Error> {
         if let Some(a) = (*self.inner.lock().unwrap()).clone() {
             self.device
-                .poll(wgpu::PollType::WaitForSubmissionIndex(a.clone()))?;
+                .poll(wgpu::PollType::WaitForSubmissionIndex(a.clone()))
+                .map_err(|_| WgpuError::PollTimeout)?;
         }
         *self.inner.lock().unwrap() = None;
         Ok(())
@@ -709,8 +710,8 @@ pub enum WgpuError {
     NoSuitableAdapters(#[from] RequestAdapterError),
     #[error("Error requesting wgpu device: {0}")]
     RequestDevice(#[from] wgpu::RequestDeviceError),
-    #[error("Error polling: {0}")]
-    PollError(#[from] wgpu::PollError),
+    #[error("Timeout when polling")]
+    PollTimeout,
     #[error("A buffer export was attempted under invalid conditions")]
     ExternalMemoryExport,
 }
@@ -722,6 +723,6 @@ impl Error<Wgpu> for WgpuError {
         false
     }
     fn is_timeout(&self) -> bool {
-        matches!(self, Self::PollError(wgpu::PollError::Timeout))
+        matches!(self, Self::PollTimeout)
     }
 }
