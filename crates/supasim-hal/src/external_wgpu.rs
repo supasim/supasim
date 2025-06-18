@@ -43,6 +43,7 @@ impl WgpuDeviceInfo {
     }
     /// # Safety
     /// * No current requirements are specified. Don't do anything stupid :)
+    #[allow(unused_variables)]
     pub unsafe fn import_external_memory(
         &self,
         handle: crate::ExternalMemoryObject,
