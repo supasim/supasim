@@ -34,6 +34,7 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(hal: Backend::Instance) -> Resul
                 buffer_type: BufferType::Upload,
                 contents_align: 4,
                 priority: 0.0,
+                can_export: false,
             })
             .unwrap();
         let gpu_buffer = instance
@@ -42,6 +43,7 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(hal: Backend::Instance) -> Resul
                 buffer_type: BufferType::Gpu,
                 contents_align: 4,
                 priority: 0.0,
+                can_export: false,
             })
             .unwrap();
         let download_buffer = instance
@@ -50,6 +52,7 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(hal: Backend::Instance) -> Resul
                 buffer_type: BufferType::Download,
                 contents_align: 4,
                 priority: 0.0,
+                can_export: false,
             })
             .unwrap();
         upload_buffer.write::<u32>(0, &[1, 2, 3, 4]).unwrap();

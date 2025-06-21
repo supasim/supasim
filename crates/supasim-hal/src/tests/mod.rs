@@ -36,6 +36,7 @@ unsafe fn create_storage_buf<B: Backend>(
             size,
             memory_type: types::HalBufferType::Storage,
             min_alignment: 16,
+            can_export: false,
         })?;
         Ok(buf)
     }
@@ -108,11 +109,13 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             size: 16,
             memory_type: types::HalBufferType::Upload,
             min_alignment: 16,
+            can_export: false,
         })?;
         let mut download_buffer = instance.create_buffer(&HalBufferDescriptor {
             size: 16,
             memory_type: types::HalBufferType::Download,
             min_alignment: 16,
+            can_export: false,
         })?;
         let sb1 = create_storage_buf::<B>(&mut instance, 16)?;
         let sb2 = create_storage_buf::<B>(&mut instance, 16)?;

@@ -179,6 +179,7 @@ pub fn assemble_dag<B: hal::Backend>(
                     size: src_buffer_len,
                     memory_type: types::HalBufferType::Upload,
                     min_alignment: 16,
+                    can_export: false,
                 })
                 .map_supasim()?
         };

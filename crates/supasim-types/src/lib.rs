@@ -38,6 +38,7 @@ pub struct HalBufferDescriptor {
     pub size: u64,
     pub memory_type: HalBufferType,
     pub min_alignment: usize,
+    pub can_export: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]

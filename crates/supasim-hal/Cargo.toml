@@ -50,7 +50,9 @@ tracing.workspace = true
 
 # Vulkan dependencies
 ash = { version = "0.38", optional = true, features = ["debug"] }
-gpu-allocator = { version = "0.27", optional = true, features = ["vulkan"] }
+gpu-allocator = { git = "https://github.com/supasim/gpu-allocator.git", branch = "external-memory-vulkan", optional = true, features = [
+  "vulkan",
+] }
 
 # WGPU dependencies
 wgpu = { workspace = true, optional = true }

@@ -35,6 +35,7 @@ default = ["vulkan", "wgpu"]
 cuda = ["hal/cuda"]
 wgpu = ["hal/wgpu"]
 vulkan = ["hal/vulkan"]
+external_wgpu = ["hal/external_wgpu"]
 
 [dependencies]
 anyhow.workspace = true

@@ -41,6 +41,14 @@ use types::{Dag, HalBufferType, HalInstanceProperties, KernelReflectionInfo, Syn
 
 use scopeguard::defer;
 
+const HANDLE_TYPE: vk::ExternalMemoryHandleTypeFlags = if cfg!(unix) {
+    vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD_KHR
+} else if cfg!(windows) {
+    vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KHR
+} else {
+    vk::ExternalMemoryHandleTypeFlags::empty()
+};
+
 /// # Overview
 /// The default backend for platforms on which it is supported.
 ///
@@ -460,6 +468,7 @@ impl Vulkan {
                 },
                 buffer_device_address: false,
                 allocation_sizes: AllocationSizes::default(),
+                external_memory: supports_external_memory,
             })?;
             let pool = device.create_command_pool(
                 &vk::CommandPoolCreateInfo::default()
@@ -515,12 +524,12 @@ impl Vulkan {
                     sync2_device,
                     timeline_device,
                     _external_win32_device: external_win32_device,
-                    _external_fd_device: external_fd_device,
+                    external_fd_device,
                 }),
                 spirv_version,
                 is_unified_memory,
                 _api_version: api_version,
-                _supports_external_memory: supports_external_memory,
+                supports_external_memory,
             };
             Ok(s)
         }
@@ -594,7 +603,7 @@ pub struct VulkanInstance {
     spirv_version: types::SpirvVersion,
     is_unified_memory: bool,
     _api_version: u32,
-    _supports_external_memory: bool,
+    supports_external_memory: bool,
 }
 impl Debug for VulkanInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -666,8 +675,12 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     #[tracing::instrument]
     unsafe fn can_share_memory_to_device(
         &mut self,
-        _device: &dyn std::any::Any,
+        device: &dyn std::any::Any,
     ) -> Result<bool, <Vulkan as Backend>::Error> {
+        #[cfg(feature = "external_wgpu")]
+        if let Some(info) = device.downcast_ref::<crate::WgpuDeviceInfo>() {
+            return Ok(self.supports_external_memory && info.supports_external_memory());
+        }
         Ok(false)
     }
     #[tracing::instrument(skip(binary))]
@@ -814,7 +827,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 .get_buffer_memory_requirements(buffer)
                 .alignment(alloc_info.min_alignment as u64);
             use types::HalBufferType::*;
-            let mut allocation = self
+            let allocation = self
                 .alloc
                 .lock()
                 .map_err(|e| VulkanError::LockError(e.to_string()))?
@@ -829,18 +842,15 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     },
                     linear: true,
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
+                    external_use: alloc_info.can_export,
                 })?;
-            defer! {}
             if let Err(e) =
                 self.device
                     .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
             {
-                self.alloc
-                    .lock()
-                    .unwrap()
-                    .free(std::mem::take(&mut allocation))
-                    .unwrap();
-                return Err(e.into());
+                let error = e.into();
+                self.alloc.lock().unwrap().free(allocation)?;
+                return Err(error);
             }
             err.set(false);
             if alloc_info.memory_type == HalBufferType::Upload
@@ -863,10 +873,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             self.device.destroy_buffer(buffer.buffer, None);
-            self.alloc
-                .lock()
-                .map_err(|e| VulkanError::LockError(e.to_string()))?
-                .free(buffer.allocation)?;
+            self.alloc.lock().unwrap().free(buffer.allocation)?;
             Ok(())
         }
     }
@@ -1199,7 +1206,6 @@ pub struct VulkanKernel {
     pub descriptor_pools: Vec<DescriptorPoolData>,
 }
 impl Kernel<Vulkan> for VulkanKernel {}
-
 #[derive(Debug)]
 pub struct VulkanBuffer {
     pub buffer: vk::Buffer,
@@ -1223,8 +1229,26 @@ impl Buffer<Vulkan> for VulkanBuffer {
     }
     unsafe fn export(
         &mut self,
-        _instance: &mut <Vulkan as Backend>::Instance,
+        instance: &mut <Vulkan as Backend>::Instance,
     ) -> Result<crate::ExternalMemoryObject, <Vulkan as Backend>::Error> {
+        if cfg!(unix) {
+            unsafe {
+                let fd = instance
+                    .device
+                    .external_fd_device
+                    .as_ref()
+                    .unwrap()
+                    .get_memory_fd(
+                        &vk::MemoryGetFdInfoKHR::default()
+                            .handle_type(HANDLE_TYPE)
+                            .memory(self.allocation.memory()),
+                    )?;
+                return Ok(crate::ExternalMemoryObject {
+                    handle: fd as isize,
+                    offset: 0,
+                });
+            }
+        }
         Err(VulkanError::ExternalMemoryExport)
     }
 }
@@ -1549,7 +1573,7 @@ pub struct DeviceFunctions {
     sync2_device: Option<khr::synchronization2::Device>,
     timeline_device: Option<khr::timeline_semaphore::Device>,
     _external_win32_device: Option<khr::external_memory_win32::Device>,
-    _external_fd_device: Option<khr::external_memory_fd::Device>,
+    external_fd_device: Option<khr::external_memory_fd::Device>,
 }
 impl Debug for DeviceFunctions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

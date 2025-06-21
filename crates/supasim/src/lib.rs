@@ -110,6 +110,8 @@ pub struct BufferDescriptor {
     pub contents_align: u64,
     /// Currently unused. In the future this may be used to prefer keeping some buffers in memory when device runs out of memory and swapping becomes necessary
     pub priority: f32,
+    /// Whether the memory can be exported
+    pub can_export: bool,
 }
 impl Default for BufferDescriptor {
     fn default() -> Self {
@@ -118,6 +120,7 @@ impl Default for BufferDescriptor {
             buffer_type: BufferType::Gpu,
             contents_align: 0,
             priority: 1.0,
+            can_export: false,
         }
     }
 }
@@ -132,6 +135,7 @@ impl From<BufferDescriptor> for types::HalBufferDescriptor {
                 BufferType::Automatic => types::HalBufferType::Storage,
             },
             min_alignment: 16,
+            can_export: false,
         }
     }
 }
@@ -1267,6 +1271,13 @@ impl<B: hal::Backend> Buffer<B> {
             out
         }
     }
+    /// # Safety
+    /// * The exported buffer must be destroyed before `external_wgpu` buffer is destroyed
+    /// * Synchronization must be guaranteed by the user.
+    #[cfg(feature = "external_wgpu")]
+    pub unsafe fn export(&self, _device: WgpuDeviceInfo) -> hal::wgpu::wgpu::Buffer {
+        todo!()
+    }
 }
 impl<B: hal::Backend> std::fmt::Debug for Buffer<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1585,3 +1596,6 @@ impl BufferUser {
         }
     }
 }
+
+#[cfg(feature = "external_wgpu")]
+pub use hal::WgpuDeviceInfo;
