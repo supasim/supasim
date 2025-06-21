@@ -37,6 +37,9 @@ pub use vulkan::Vulkan;
 #[cfg(feature = "wgpu")]
 pub use wgpu::Wgpu;
 
+#[cfg(any(feature = "external_wgpu", feature = "wgpu"))]
+pub use ::wgpu as wgpu_dep;
+
 use types::*;
 
 /// Backend traits should not have their own destructors, as higher level operations may replace them with uninitialized memory by destructor time.
