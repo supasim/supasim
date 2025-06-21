@@ -56,7 +56,7 @@ gpu-allocator = { git = "https://github.com/supasim/gpu-allocator.git", branch =
 
 # WGPU dependencies
 wgpu = { workspace = true, optional = true }
-pollster = { version = "0.4", optional = true }
+pollster = { workspace = true, optional = true }
 
 # Cuda dependencies
 # cust = { version = "0.3", optional = true }

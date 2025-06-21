@@ -325,6 +325,7 @@ pub struct InstanceProperties {
     pub supports_pipeline_cache: bool,
     pub kernel_lang: KernelTarget,
     pub is_unified_memory: bool,
+    pub export_buffers: bool,
 }
 struct InstanceState<B: hal::Backend> {
     /// The inner hal instance
@@ -408,6 +409,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             supports_pipeline_cache: v.pipeline_cache,
             kernel_lang: v.kernel_lang,
             is_unified_memory: v.is_unified_memory,
+            export_buffers: v.export_memory,
         })
     }
     pub fn compile_raw_kernel(
@@ -1280,8 +1282,11 @@ impl<B: hal::Backend> Buffer<B> {
     /// # Safety
     /// * The exported buffer must be destroyed before `external_wgpu` buffer is destroyed
     /// * Synchronization must be guaranteed by the user.
-    #[cfg(feature = "external_wgpu")]
-    pub unsafe fn export(&self, device: WgpuDeviceInfo) -> SupaSimResult<B, hal::wgpu_dep::Buffer> {
+    #[cfg(feature = "wgpu")]
+    pub unsafe fn export_to_wgpu(
+        &self,
+        device: WgpuDeviceInfo,
+    ) -> SupaSimResult<B, hal::wgpu_dep::Buffer> {
         if !self.inner()?.create_info.can_export {
             return Err(SupaSimError::BufferExportError(
                 "Attempted to export buffer not made for exporting".to_string(),
@@ -1300,7 +1305,6 @@ impl<B: hal::Backend> Buffer<B> {
                     .map_supasim()?
                 {
                     use hal::Buffer;
-
                     let res = buffer_inner
                         .inner
                         .as_mut()
@@ -1637,5 +1641,7 @@ impl BufferUser {
     }
 }
 
-#[cfg(feature = "external_wgpu")]
+#[cfg(feature = "wgpu")]
 pub use hal::WgpuDeviceInfo;
+#[cfg(feature = "wgpu")]
+pub use hal::wgpu_dep as wgpu;

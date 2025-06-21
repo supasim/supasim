@@ -1191,6 +1191,7 @@ dependencies = [
  "log",
  "parking_lot",
  "paste",
+ "pollster",
  "supasim-dev-utils",
  "supasim-hal",
  "supasim-kernels",

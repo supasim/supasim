@@ -33,9 +33,9 @@ readme = "../../readme.md"
 [features]
 default = ["vulkan", "wgpu"]
 cuda = ["hal/cuda"]
-wgpu = ["hal/wgpu"]
+# The wgpu feature flag will enable both reexporting wgpu and the wgpu backend in hal
+wgpu = ["hal/wgpu", "hal/external_wgpu"]
 vulkan = ["hal/vulkan"]
-external_wgpu = ["hal/external_wgpu"]
 
 [dependencies]
 anyhow.workspace = true
@@ -52,3 +52,4 @@ hal = { workspace = true, default-features = false }
 [dev-dependencies]
 log.workspace = true
 dev-utils.workspace = true
+pollster.workspace = true
