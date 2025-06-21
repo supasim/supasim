@@ -1,30 +1,43 @@
 // Courtesy of ChatGPTs
 
-@group(0) @binding(0)
-var<storage, read> values: array<u32>;
+const WORKGROUP_SIZE_X: u32 = 16;
 
-@group(0) @binding(1)
-var output_tex: texture_storage_2d<rgba8unorm, write>;
-
-@group(0) @binding(2)
-var<uniform> config: Uniforms;
-
-struct Uniforms {
+struct OutputSize {
     width: u32,
     height: u32,
-    max_value: u32,
-};
+}
 
-@compute @workgroup_size(16, 16)
-fn render(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.x >= config.width || id.y >= config.height) {
+@group(0) @binding(0)
+var<uniform> size: OutputSize;
+
+@group(0) @binding(1)
+var<uniform> max_value: u32;
+
+@group(1) @binding(0)
+var<storage, read> buffer: array<u32>;
+
+// Storage texture for output
+// Note: WGSL currently does not support dynamic texture formats via pipeline constants.
+// You must create separate pipelines for different formats.
+@group(2) @binding(0)
+var output_image: texture_storage_2d<rgba8unorm, write>;
+
+@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_X)
+fn render(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let x = global_id.x;
+    let y = global_id.y;
+
+    if (x >= size.width || y >= size.height) {
         return;
     }
 
-    let index = id.y * config.width + id.x;
-    let raw = values[index];
-    let normalized = f32(raw) / f32(config.max_value);
-    let color = vec4<f32>(normalized, normalized, normalized, 1.0); // grayscale
+    let index = y * size.width + x;
+    let value = buffer[index];
 
-    textureStore(output_tex, vec2<i32>(id.xy), color);
+    // Normalize value to [0.0, 1.0]
+    let scaled = f32(value) / f32(max_value);
+
+    // Output grayscale color
+    let color = vec4f(scaled, scaled, scaled, 1.0);
+    textureStore(output_image, vec2u(x, y), color);
 }

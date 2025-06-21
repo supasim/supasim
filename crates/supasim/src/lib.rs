@@ -1374,7 +1374,7 @@ impl<B: hal::Backend> Buffer<B> {
         BufferSlice {
             buffer: self.clone(),
             start,
-            len: start - end,
+            len: end - start,
             needs_mut,
         }
     }

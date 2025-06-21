@@ -484,6 +484,16 @@ pub fn record_command_streams<B: hal::Backend>(
                         .unwrap()
                         .upgrade()?,
                 ),
+                HalCommandBuilder::ZeroBuffer { buffer, .. } => buffer_refs.push(
+                    instance
+                        .buffers
+                        .lock()
+                        .get(*buffer)
+                        .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
+                        .as_ref()
+                        .unwrap()
+                        .upgrade()?,
+                ),
                 _ => (),
             }
         }

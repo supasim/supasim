@@ -2,44 +2,51 @@
 
 const WORKGROUP_SIZE: u32 = 256;
 
+struct OutputSize {
+    width: u32,
+    height: u32,
+}
+
 @group(0) @binding(0)
-var<storage, read> input: array<u32>;
+var<uniform> size: OutputSize;
 
 @group(0) @binding(1)
-var<storage, read_write> output: array<u32>;
+var<storage, read_write> output: atomic<u32>;
+
+@group(1) @binding(0)
+var<storage, read> buffer: array<u32>;
+
+var<workgroup> local_max: array<u32, WORKGROUP_SIZE>;
 
 @compute @workgroup_size(WORKGROUP_SIZE)
-fn max(@builtin(global_invocation_id) global_id: vec3<u32>,
-        @builtin(local_invocation_id) local_id: vec3<u32>,
-        @builtin(workgroup_id) workgroup_id: vec3<u32>) {
-    let gid = global_id.x;
-    let lid = local_id.x;
-    let group = workgroup_id.x;
+fn find_max(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>,
+) {
+    let idx = global_id.x;
+    let total_size = size.width * size.height;
+    
+    // Store each thread's value into workgroup memory
+    if (idx < total_size) { local_max[local_id.x] = buffer[idx]; } else { local_max[local_id.x] = 0u; }
 
-    // Shared memory for reduction
-    var<workgroup> shared_max: array<u32, WORKGROUP_SIZE>;
-
-    // Load data into shared memory
-    if (gid < arrayLength(&input)) {
-        shared_max[lid] = input[gid];
-    } else {
-        shared_max[lid] = 0u; // Identity for max
-    }
     workgroupBarrier();
 
-    // Reduction within workgroup
+    // Parallel reduction to find the max in the workgroup
     var stride = WORKGROUP_SIZE / 2u;
     loop {
-        if (lid < stride) {
-            shared_max[lid] = max(shared_max[lid], shared_max[lid + stride]);
+        if (local_id.x < stride) {
+            local_max[local_id.x] = max(local_max[local_id.x], local_max[local_id.x + stride]);
         }
         workgroupBarrier();
-        if (stride == 1u) { break; }
+
+        if (stride == 1u) {
+            break;
+        }
         stride = stride / 2u;
     }
 
-    // Write result of this workgroup to output
-    if (lid == 0u) {
-        output[group] = shared_max[0];
+    // Only one thread writes the result of this workgroup
+    if (local_id.x == 0u) {
+        atomicMax(&output, local_max[0]);
     }
 }
