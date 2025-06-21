@@ -31,7 +31,7 @@ use std::any::Any;
 
 pub use dummy::Dummy;
 #[cfg(feature = "external_wgpu")]
-pub use external_wgpu::WgpuDeviceInfo;
+pub use external_wgpu::WgpuDeviceExportInfo;
 #[cfg(feature = "vulkan")]
 pub use vulkan::Vulkan;
 #[cfg(feature = "wgpu")]
@@ -303,6 +303,9 @@ pub enum BufferCommand<'a, B: Backend> {
         bg: &'a B::BindGroup,
         kernel: &'a B::Kernel,
         buffers: &'a [HalBufferSlice<'a, B>],
+    },
+    ZeroMemory {
+        buffer: HalBufferSlice<'a, B>,
     },
     Dummy,
 }

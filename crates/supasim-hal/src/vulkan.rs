@@ -678,7 +678,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         device: &dyn std::any::Any,
     ) -> Result<bool, <Vulkan as Backend>::Error> {
         #[cfg(feature = "external_wgpu")]
-        if let Some(info) = device.downcast_ref::<crate::WgpuDeviceInfo>() {
+        if let Some(info) = device.downcast_ref::<crate::WgpuDeviceExportInfo>() {
             return Ok(self.supports_external_memory && info.supports_external_memory());
         }
         Ok(false)
@@ -1219,7 +1219,7 @@ impl Buffer<Vulkan> for VulkanBuffer {
         external_device: &dyn std::any::Any,
     ) -> Result<Box<dyn std::any::Any>, <Vulkan as Backend>::Error> {
         #[cfg(feature = "external_wgpu")]
-        if let Some(info) = external_device.downcast_ref::<crate::WgpuDeviceInfo>() {
+        if let Some(info) = external_device.downcast_ref::<crate::WgpuDeviceExportInfo>() {
             let memory_obj = unsafe { self.export(instance)? };
             return Ok(Box::new(unsafe {
                 info.import_external_memory(memory_obj, self.create_info)
@@ -1349,6 +1349,23 @@ impl VulkanCommandRecorder {
         }
         Ok(())
     }
+    #[tracing::instrument]
+    fn zero_memory(
+        &mut self,
+        instance: &mut <Vulkan as Backend>::Instance,
+        buffer: &VulkanBuffer,
+        offset: u64,
+        size: u64,
+        cb: vk::CommandBuffer,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        // TODO: handle case where size isn't multiple of 4
+        unsafe {
+            instance
+                .device
+                .cmd_fill_buffer(cb, buffer.buffer, offset, size, 0);
+        }
+        Ok(())
+    }
     fn stage_mask_khr(sync_ops: SyncOperations) -> vk::PipelineStageFlags2KHR {
         match sync_ops {
             SyncOperations::Transfer => vk::PipelineStageFlags2KHR::TRANSFER,
@@ -1436,6 +1453,9 @@ impl VulkanCommandRecorder {
                 *len,
                 cb,
             )?,
+            BufferCommand::ZeroMemory { buffer } => {
+                self.zero_memory(instance, buffer.buffer, buffer.offset, buffer.len, cb)?;
+            }
             BufferCommand::DispatchKernel {
                 kernel,
                 bind_group,
@@ -1449,6 +1469,7 @@ impl VulkanCommandRecorder {
                 *workgroup_dims,
                 cb,
             )?,
+
             BufferCommand::PipelineBarrier { .. } => {
                 unreachable!()
             }

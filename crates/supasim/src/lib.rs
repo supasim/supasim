@@ -36,6 +36,7 @@ use hal::BackendInstance as _;
 use parking_lot::{Condvar, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
+use std::ops::Bound;
 use std::{
     marker::PhantomData,
     ops::{Deref, DerefMut},
@@ -975,6 +976,7 @@ struct BufferCommand<B: hal::Backend> {
 #[derive(Debug)]
 enum BufferCommandInner<B: hal::Backend> {
     CopyBufferToBuffer,
+    ZeroBuffer,
     CopyFromTemp {
         src_offset: u64,
     },
@@ -1047,6 +1049,24 @@ impl<B: hal::Backend> CommandRecorder<B> {
             lock.commands.push(BufferCommand {
                 inner: BufferCommandInner::CopyBufferToBuffer,
                 buffers: vec![src_slice, dst_slice],
+            });
+        }
+        Ok(())
+    }
+    pub fn zero_memory(&self, buffer: &Buffer<B>, offset: u64, size: u64) -> SupaSimResult<B, ()> {
+        self.check_destroyed()?;
+        let slice = BufferSlice {
+            buffer: buffer.clone(),
+            start: offset,
+            len: size,
+            needs_mut: true,
+        };
+        slice.validate()?;
+        {
+            let mut lock = self.inner_mut()?;
+            lock.commands.push(BufferCommand {
+                inner: BufferCommandInner::ZeroBuffer,
+                buffers: vec![slice],
             });
         }
         Ok(())
@@ -1303,7 +1323,7 @@ impl<B: hal::Backend> Buffer<B> {
     #[cfg(feature = "wgpu")]
     pub unsafe fn export_to_wgpu(
         &self,
-        device: WgpuDeviceInfo,
+        device: WgpuDeviceExportInfo,
     ) -> SupaSimResult<B, hal::wgpu_dep::Buffer> {
         if !self.inner()?.create_info.can_export {
             return Err(SupaSimError::BufferExportError(
@@ -1338,6 +1358,24 @@ impl<B: hal::Backend> Buffer<B> {
                     ))
                 }
             }
+        }
+    }
+    pub fn slice(&self, range: impl std::ops::RangeBounds<u64>, needs_mut: bool) -> BufferSlice<B> {
+        let start = match range.start_bound() {
+            Bound::Included(v) => *v,
+            Bound::Excluded(v) => *v + 1,
+            Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(v) => *v + 1,
+            Bound::Excluded(v) => *v,
+            Bound::Unbounded => self.inner().unwrap().create_info.size,
+        };
+        BufferSlice {
+            buffer: self.clone(),
+            start,
+            len: start - end,
+            needs_mut,
         }
     }
 }
@@ -1660,6 +1698,6 @@ impl BufferUser {
 }
 
 #[cfg(feature = "wgpu")]
-pub use hal::WgpuDeviceInfo;
+pub use hal::WgpuDeviceExportInfo;
 #[cfg(feature = "wgpu")]
 pub use hal::wgpu_dep as wgpu;

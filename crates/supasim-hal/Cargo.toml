@@ -35,7 +35,7 @@ cuda = [
   # "cust"
 ] # Potential cuda libraries: cust, cudarc
 wgpu = ["dep:wgpu", "pollster", "external_wgpu"]
-external_wgpu = ["dep:wgpu", "ash"]
+external_wgpu = ["dep:wgpu", "ash", "wgpu/wgsl"]
 vulkan = ["ash", "gpu-allocator"]
 
 [dependencies]

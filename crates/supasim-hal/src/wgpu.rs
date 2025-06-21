@@ -153,7 +153,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         device: &dyn Any,
     ) -> Result<bool, <Wgpu as Backend>::Error> {
         #[cfg(feature = "external_wgpu")]
-        if let Some(info) = device.downcast_ref::<crate::WgpuDeviceInfo>() {
+        if let Some(info) = device.downcast_ref::<crate::WgpuDeviceExportInfo>() {
             if info.device == self.device {
                 return Ok(true);
             }
@@ -549,7 +549,7 @@ impl Buffer<Wgpu> for WgpuBuffer {
         external_device: &dyn Any,
     ) -> Result<Box<dyn Any>, <Wgpu as Backend>::Error> {
         #[cfg(feature = "external_wgpu")]
-        if let Some(info) = external_device.downcast_ref::<crate::WgpuDeviceInfo>() {
+        if let Some(info) = external_device.downcast_ref::<crate::WgpuDeviceExportInfo>() {
             if info.device == instance.device {
                 return Ok(self.inner.clone());
             }
@@ -599,6 +599,9 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                         *dst_offset,
                         *len,
                     );
+                }
+                BufferCommand::ZeroMemory { buffer } => {
+                    r.clear_buffer(&buffer.buffer.inner, buffer.offset, Some(buffer.len));
                 }
                 BufferCommand::DispatchKernel {
                     kernel,

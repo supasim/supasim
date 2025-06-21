@@ -38,12 +38,13 @@ const EXTERNAL_MEMORY_VULKAN_EXTENSION: &std::ffi::CStr = const {
 };
 
 #[derive(Clone, Debug)]
-pub struct WgpuDeviceInfo {
+pub struct WgpuDeviceExportInfo {
     pub device: wgpu::Device,
     pub features: wgpu::Features,
     pub backend: wgpu::Backend,
+    pub usages: wgpu::BufferUsages,
 }
-impl WgpuDeviceInfo {
+impl WgpuDeviceExportInfo {
     pub fn supports_external_memory(&self) -> bool {
         match self.backend {
             #[cfg(not(target_vendor = "apple"))]
@@ -148,9 +149,7 @@ impl WgpuDeviceInfo {
                             &wgpu::BufferDescriptor {
                                 label: None,
                                 size: alloc_info.size,
-                                usage: wgpu::BufferUsages::STORAGE
-                                    | wgpu::BufferUsages::COPY_SRC
-                                    | wgpu::BufferUsages::COPY_DST,
+                                usage: self.usages,
                                 mapped_at_creation: false,
                             },
                         )

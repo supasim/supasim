@@ -3744,6 +3744,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "env_logger",
  "log",
  "parking_lot 0.12.4",
  "paste",
@@ -3754,6 +3755,7 @@ dependencies = [
  "supasim-types",
  "thiserror 2.0.12",
  "thunderdome",
+ "winit",
 ]
 
 [[package]]

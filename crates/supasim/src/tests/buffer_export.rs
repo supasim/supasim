@@ -62,10 +62,13 @@ pub fn buffer_export<Backend: hal::Backend>(hal: Backend::Instance) -> Result<()
         ..Default::default()
     }))
     .unwrap();
-    let device_info = crate::WgpuDeviceInfo {
+    let device_info = crate::WgpuDeviceExportInfo {
         device: device.clone(),
         features: required_features,
         backend: adapter.get_info().backend,
+        usages: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
     };
 
     let supasim_buffer = instance

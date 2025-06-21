@@ -53,3 +53,10 @@ hal = { workspace = true, default-features = false }
 log.workspace = true
 dev-utils.workspace = true
 pollster.workspace = true
+winit = "0.30"
+env_logger.workspace = true
+
+[[example]]
+name = "buddhabrot"
+path = "examples/buddhabrot.rs"
+required-features = ["wgpu", "vulkan"]

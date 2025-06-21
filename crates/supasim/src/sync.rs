@@ -51,6 +51,11 @@ pub enum HalCommandBuilder {
         dst_offset: u64,
         len: u64,
     },
+    ZeroBuffer {
+        buffer: Index,
+        offset: u64,
+        size: u64,
+    },
     DispatchKernel {
         kernel: Index,
         bg: u32,
@@ -344,6 +349,11 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                             len: cmd.buffers[0].len,
                         }
                     }
+                    BufferCommandInner::ZeroBuffer => HalCommandBuilder::ZeroBuffer {
+                        buffer: cmd.buffers[0].buffer.inner()?.id,
+                        offset: cmd.buffers[0].start,
+                        size: cmd.buffers[0].len,
+                    },
                     BufferCommandInner::CommandRecorderEnd => HalCommandBuilder::Dummy,
                 };
                 stream.commands.push(hal);
@@ -517,6 +527,15 @@ pub fn record_command_streams<B: hal::Backend>(
                         dst_offset: *dst_offset,
                         len: *len,
                     },
+                    HalCommandBuilder::ZeroBuffer { offset, size, .. } => {
+                        hal::BufferCommand::ZeroMemory {
+                            buffer: HalBufferSlice {
+                                buffer: get_buffer(),
+                                offset: *offset,
+                                len: *size,
+                            },
+                        }
+                    }
                     HalCommandBuilder::DispatchKernel {
                         bg,
                         push_constants,

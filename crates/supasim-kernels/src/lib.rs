@@ -554,7 +554,6 @@ impl GlobalState {
         Ok(KernelReflectionInfo {
             workgroup_size,
             num_buffers: 0,
-            push_constant_len: 0,
         })
     }
 }
