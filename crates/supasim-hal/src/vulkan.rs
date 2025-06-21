@@ -1223,6 +1223,7 @@ impl Buffer<Vulkan> for VulkanBuffer {
             let memory_obj = unsafe { self.export(instance)? };
             return Ok(Box::new(unsafe {
                 info.import_external_memory(memory_obj, self.create_info)
+                    .unwrap()
             }));
         }
         Err(VulkanError::ExternalMemoryExport)

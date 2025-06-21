@@ -15,6 +15,7 @@ pub fn buffer_export<Backend: hal::Backend>(hal: Backend::Instance) -> Result<()
     // Create the instance
     let instance: SupaSimInstance<Backend> = SupaSimInstance::from_hal(hal);
     if !instance.properties().unwrap().export_buffers {
+        println!("Skipping test as instance doesn't have export memory property");
         return Ok(());
     }
     let wgpu_instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -33,7 +34,10 @@ pub fn buffer_export<Backend: hal::Backend>(hal: Backend::Instance) -> Result<()
         .find(|a| a.features().contains(required_features))
     {
         Some(adapter) => adapter,
-        None => return Ok(()),
+        None => {
+            println!("Skipping test as wgpu device doesn't have export memory property");
+            return Ok(());
+        }
     };
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         required_features,

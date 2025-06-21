@@ -79,6 +79,7 @@ wgpu = { git = "https://github.com/SupaMaggie70Incorporated/wgpu.git", branch = 
   "metal",
   "vulkan",
   "webgpu",
+  "std",
 ] }
 
 hal = { package = "supasim-hal", path = "crates/supasim-hal", default-features = false, version = "0.0.1" }
