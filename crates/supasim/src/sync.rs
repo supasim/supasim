@@ -312,7 +312,7 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                     } => {
                         let bg_index = bind_groups.len() as u32;
                         let bg = BindGroupDesc {
-                            kernel_idx: kernel.inner()?.inner.lock().id,
+                            kernel_idx: kernel.inner()?.id,
                             items: cmd
                                 .buffers
                                 .iter()
@@ -330,7 +330,7 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                         };
                         bind_groups.push(bg);
                         HalCommandBuilder::DispatchKernel {
-                            kernel: kernel.inner()?.inner.lock().id,
+                            kernel: kernel.inner()?.id,
                             bg: bg_index,
                             push_constants: Vec::new(),
                             workgroup_dims: *workgroup_dims,
@@ -372,7 +372,7 @@ pub fn record_command_streams<B: hal::Backend>(
             .ok_or(SupaSimError::AlreadyDestroyed("Kernel".to_owned()))?
             .loaded_ref()
             .upgrade()?;
-        let kernel = _k.inner()?;
+        let mut kernel = _k.inner_mut()?;
         let mut resources_a = Vec::new();
         for res in &bg.items {
             resources_a.push(
@@ -405,10 +405,10 @@ pub fn record_command_streams<B: hal::Backend>(
                 .lock()
                 .as_mut()
                 .unwrap()
-                .create_bind_group(kernel.inner.lock().inner.as_mut().unwrap(), &resources)
+                .create_bind_group(kernel.inner.as_mut().unwrap(), &resources)
                 .map_supasim()?
         };
-        bindgroups.push((bg, kernel.inner.lock().id));
+        bindgroups.push((bg, kernel.id));
     }
     for stream in &streams.streams {
         let mut buffer_refs = Vec::new();
@@ -449,10 +449,7 @@ pub fn record_command_streams<B: hal::Backend>(
                             .get(*kernel)
                             .ok_or(SupaSimError::AlreadyDestroyed("Kernel".to_owned()))?
                             .loaded_ref()
-                            .upgrade()?
-                            .inner()?
-                            .inner
-                            .clone(),
+                            .upgrade()?,
                     );
                 }
                 HalCommandBuilder::MemoryBarrier { resource, .. } => {
@@ -486,7 +483,7 @@ pub fn record_command_streams<B: hal::Backend>(
         }
         let mut kernel_locks = Vec::new();
         for kernel_ref in &kernel_refs {
-            kernel_locks.push(kernel_ref.lock());
+            kernel_locks.push(kernel_ref.inner()?);
         }
         let mut hal_commands = Vec::new();
         {
@@ -1009,8 +1006,8 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                             match logic.instance.kernels.lock().get_mut(kernel).unwrap() {
                                 SavedKernel::Loaded(k) => {
                                     let kernel = k.upgrade()?;
-                                    let _k = kernel.inner_mut()?;
-                                    let mut k = _k.inner.lock();
+                                    let mut _k = kernel.inner_mut()?;
+                                    let k = _k.inner.as_mut().unwrap();
                                     unsafe {
                                         logic
                                             .instance
@@ -1018,7 +1015,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                                             .lock()
                                             .as_mut()
                                             .unwrap()
-                                            .destroy_bind_group(k.inner.as_mut().unwrap(), bg)
+                                            .destroy_bind_group(k, bg)
                                             .map_supasim()?;
                                     }
                                 }
