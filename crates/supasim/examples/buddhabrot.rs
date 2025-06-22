@@ -1,5 +1,6 @@
 //! Lots of this code is just stolen from https://sotrh.github.io/learn-wgpu/ lol
 
+use hal::WgpuDeviceExportInfo;
 use rand::random;
 use std::sync::Arc;
 use supasim::{SupaSimInstance, wgpu};
@@ -11,7 +12,7 @@ use winit::{
     window::Window,
 };
 
-pub type Backend = supasim::hal::Wgpu;
+pub type Backend = supasim::hal::Vulkan;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -98,9 +99,7 @@ impl AppState {
             desired_maximum_frame_latency: 2,
         };
 
-        let instance = SupaSimInstance::from_hal(
-            Backend::create_instance(true, wgpu::Backends::VULKAN, None).unwrap(),
-        );
+        let instance = SupaSimInstance::from_hal(Backend::create_instance(true).unwrap());
 
         let global_state = kernels::GlobalState::new_from_env().unwrap();
         let mut spirv = Vec::new();
@@ -380,7 +379,7 @@ impl AppState {
                 can_export: true,
             })
             .unwrap();
-        /*let shared_buffer = unsafe {
+        let shared_buffer = unsafe {
             supasim_buffer
                 .export_to_wgpu(WgpuDeviceExportInfo {
                     device: device.clone(),
@@ -391,15 +390,7 @@ impl AppState {
                         | wgpu::BufferUsages::COPY_SRC,
                 })
                 .unwrap()
-        };*/
-        let shared_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            usage: wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::COPY_SRC,
-            label: None,
-            size,
-            mapped_at_creation: false,
-        });
+        };
         let buffer_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: buffer_bind_group_layout,
@@ -530,6 +521,12 @@ impl AppState {
         let output_view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        let download_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: self.config.width as u64 * self.config.height as u64 * 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
 
         let mut encoder = self
             .device
@@ -575,9 +572,27 @@ impl AppState {
             render_pass.set_bind_group(1, Some(&self.buffer_bind_group), &[]);
             render_pass.draw(0..6, 0..1);
         }
+        encoder.copy_buffer_to_buffer(
+            &self.shared_buffer,
+            0,
+            &download_buffer,
+            0,
+            self.config.width as u64 * self.config.height as u64 * 4,
+        );
 
         self.queue.submit([encoder.finish()]);
+        download_buffer.map_async(wgpu::MapMode::Read, .., |_| ());
         output.present();
+        self.device.poll(wgpu::PollType::Wait).unwrap();
+        let view = download_buffer.get_mapped_range(..);
+        let view_as_u32 = bytemuck::cast_slice::<u8, u32>(&view);
+        let mut count = 0;
+        for &val in view_as_u32 {
+            if val > 0 {
+                count += 1;
+            }
+        }
+        println!("Count wgpu: {count}");
         true
     }
 }
