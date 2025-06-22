@@ -1193,10 +1193,10 @@ api_type!(Buffer, {
     slice_tracker: SliceTracker,
 },);
 impl<B: hal::Backend> Buffer<B> {
-    pub fn write<T: bytemuck::Pod>(&self, offset: usize, data: &[T]) -> SupaSimResult<B, ()> {
+    pub fn write<T: bytemuck::Pod>(&self, offset: u64, data: &[T]) -> SupaSimResult<B, ()> {
         let buffer_slice = BufferSlice {
             buffer: self.clone(),
-            start: offset as u64,
+            start: offset,
             len: data.len() as u64,
             needs_mut: true,
         };
@@ -1212,17 +1212,17 @@ impl<B: hal::Backend> Buffer<B> {
                 .lock()
                 .as_mut()
                 .unwrap()
-                .write_buffer(s.inner.as_mut().unwrap(), offset as u64, slice)
+                .write_buffer(s.inner.as_mut().unwrap(), offset, slice)
                 .map_supasim()?;
         }
         drop(s);
         buffer_slice.release(id)?;
         Ok(())
     }
-    pub fn read<T: bytemuck::Pod>(&self, offset: usize, out: &mut [T]) -> SupaSimResult<B, ()> {
+    pub fn read<T: bytemuck::Pod>(&self, offset: u64, out: &mut [T]) -> SupaSimResult<B, ()> {
         let slice = BufferSlice {
             buffer: self.clone(),
-            start: offset as u64,
+            start: offset,
             len: out.len() as u64,
             needs_mut: false,
         };
@@ -1238,7 +1238,7 @@ impl<B: hal::Backend> Buffer<B> {
                 .lock()
                 .as_mut()
                 .unwrap()
-                .read_buffer(s.inner.as_mut().unwrap(), offset as u64, slice)
+                .read_buffer(s.inner.as_mut().unwrap(), offset, slice)
                 .map_supasim()?;
         }
         drop(s);
@@ -1247,14 +1247,14 @@ impl<B: hal::Backend> Buffer<B> {
     }
     pub fn access(
         &self,
-        offset: usize,
-        len: usize,
+        offset: u64,
+        len: u64,
         needs_mut: bool,
     ) -> SupaSimResult<B, MappedBuffer<B>> {
         let slice = BufferSlice {
             buffer: self.clone(),
-            start: offset as u64,
-            len: len as u64,
+            start: offset,
+            len,
             needs_mut,
         };
         slice.validate()?;
@@ -1272,40 +1272,40 @@ impl<B: hal::Backend> Buffer<B> {
                     .unwrap()
                     .map_buffer(s.inner.as_mut().unwrap())
                     .map_supasim()?
-                    .add(offset)
+                    .add(offset as usize)
             };
             drop(instance);
             Ok(MappedBuffer {
                 instance: _instance,
                 inner: mapped_ptr,
-                len: len as u64,
+                len,
                 has_mut: needs_mut,
                 buffer: slice.buffer,
                 buffer_align,
-                in_buffer_offset: offset as u64,
+                in_buffer_offset: offset,
                 was_used_mut: false,
                 vec_capacity: None,
                 user_id: id,
                 _p: Default::default(),
             })
         } else {
-            let mut data = Vec::with_capacity(len);
+            let mut data = Vec::with_capacity(len as usize);
             unsafe {
                 instance
                     .inner
                     .lock()
                     .as_mut()
                     .unwrap()
-                    .read_buffer(s.inner.as_mut().unwrap(), offset as u64, &mut data)
+                    .read_buffer(s.inner.as_mut().unwrap(), offset, &mut data)
                     .map_supasim()?;
             }
             drop(instance);
             let out = Ok(MappedBuffer {
                 instance: _instance,
                 inner: data.as_mut_ptr(),
-                len: len as u64,
+                len,
                 buffer_align,
-                in_buffer_offset: offset as u64,
+                in_buffer_offset: offset,
                 has_mut: needs_mut,
                 was_used_mut: false,
                 buffer: slice.buffer,
@@ -1429,7 +1429,7 @@ impl<B: hal::Backend> MappedBuffer<'_, B> {
         // Length of the slice is a multiple of the length of the type
         if (self.len % size_of::<T>() as u64) == 0
         // Length of the type is a multiple of the buffer alignment
-        && (size_of::<T>() as u64 % self.buffer_align) == 0
+        && (((size_of::<T>() as u64 % self.buffer_align) == 0) || ((self.buffer_align % size_of::<T>() as u64) == 0))
             // The offset is reasonable given the size of T
             && (self.in_buffer_offset % size_of::<T>() as u64) == 0
         {
@@ -1447,7 +1447,7 @@ impl<B: hal::Backend> MappedBuffer<'_, B> {
         // Length of the slice is a multiple of the length of the type
         if (self.len % size_of::<T>() as u64) == 0
         // Length of the type is a multiple of the buffer alignment
-        && (size_of::<T>() as u64 % self.buffer_align) == 0
+        && (((size_of::<T>() as u64 % self.buffer_align) == 0) || ((self.buffer_align % size_of::<T>() as u64) == 0))
             // The offset is reasonable given the size of T
             && (self.in_buffer_offset % size_of::<T>() as u64) == 0
         {

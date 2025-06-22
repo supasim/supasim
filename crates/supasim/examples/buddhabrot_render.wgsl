@@ -1,6 +1,4 @@
-// Courtesy of ChatGPTs
-
-const WORKGROUP_SIZE_X: u32 = 16;
+// Courtesy of ChatGPT
 
 struct OutputSize {
     width: u32,
@@ -16,28 +14,29 @@ var<uniform> max_value: u32;
 @group(1) @binding(0)
 var<storage, read> buffer: array<u32>;
 
-// Storage texture for output
-// Note: WGSL currently does not support dynamic texture formats via pipeline constants.
-// You must create separate pipelines for different formats.
-@group(2) @binding(0)
-var output_image: texture_storage_2d<rgba8unorm, write>;
+// Vertex positions for a full-screen quad made of two triangles (CCW winding)
+var<private> full_screen_triangle_vertices: array<vec2<f32>, 6> = array<vec2<f32>, 6>(
+    vec2<f32>(-1.0, -1.0), // bottom-left
+    vec2<f32>(-1.0,  1.0), // top-left
+    vec2<f32>( 1.0,  1.0), // top-right
 
-@compute @workgroup_size(WORKGROUP_SIZE_X, WORKGROUP_SIZE_X)
-fn render(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let x = global_id.x;
-    let y = global_id.y;
+    vec2<f32>(-1.0, -1.0), // bottom-left
+    vec2<f32>( 1.0,  1.0), // top-right
+    vec2<f32>( 1.0, -1.0)  // bottom-right
+);
 
-    if (x >= size.width || y >= size.height) {
-        return;
-    }
+@vertex
+fn render_vs(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4<f32> {
+    let pos = full_screen_triangle_vertices[in_vertex_index];
+    return vec4<f32>(pos, 0.0, 1.0);
+}
 
+@fragment
+fn render_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+    let x = u32(position.x);
+    let y = u32(position.y);
     let index = y * size.width + x;
     let value = buffer[index];
-
-    // Normalize value to [0.0, 1.0]
     let scaled = f32(value) / f32(max_value);
-
-    // Output grayscale color
-    let color = vec4f(scaled, scaled, scaled, 1.0);
-    textureStore(output_image, vec2u(x, y), color);
+    return vec4<f32>(0.0, 0.0, scaled, 1.0);
 }

@@ -55,6 +55,7 @@ dev-utils.workspace = true
 pollster.workspace = true
 winit = "0.30"
 env_logger.workspace = true
+rand.workspace = true
 
 [[example]]
 name = "buddhabrot"

@@ -3749,6 +3749,7 @@ dependencies = [
  "parking_lot 0.12.4",
  "paste",
  "pollster",
+ "rand 0.9.1",
  "supasim-dev-utils",
  "supasim-hal",
  "supasim-kernels",

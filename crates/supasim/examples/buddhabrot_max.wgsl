@@ -24,6 +24,9 @@ fn find_max(
     @builtin(local_invocation_id) local_id: vec3<u32>,
 ) {
     let idx = global_id.x;
+    if (idx == 0u) {
+        output = 1u;
+    }
     let total_size = size.width * size.height;
     
     // Store each thread's value into workgroup memory

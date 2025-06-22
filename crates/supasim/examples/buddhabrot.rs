@@ -1,6 +1,7 @@
 //! Lots of this code is just stolen from https://sotrh.github.io/learn-wgpu/ lol
 
 use hal::WgpuDeviceExportInfo;
+use rand::random;
 use std::sync::Arc;
 use supasim::{SupaSimInstance, wgpu};
 
@@ -12,6 +13,14 @@ use winit::{
 };
 
 pub type Backend = supasim::hal::Vulkan;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct BuddhabrotInputOptions {
+    width: u32,
+    height: u32,
+    random_seed: u64,
+}
 
 pub struct AppState {
     surface: wgpu::Surface<'static>,
@@ -33,13 +42,9 @@ pub struct AppState {
     max_uniform_bind_group: wgpu::BindGroup,
     buffer_bind_group: wgpu::BindGroup,
     buffer_bind_group_layout: wgpu::BindGroupLayout,
-    render_texture_bind_group: wgpu::BindGroup,
-    render_texture_bind_group_layout: wgpu::BindGroupLayout,
-    render_texture: wgpu::Texture,
-    render_texture_view: wgpu::TextureView,
 
     max_pipeline: wgpu::ComputePipeline,
-    render_pipeline: wgpu::ComputePipeline,
+    render_pipeline: wgpu::RenderPipeline,
 }
 impl AppState {
     pub async fn new(window: Arc<Window>) -> Self {
@@ -94,8 +99,6 @@ impl AppState {
             desired_maximum_frame_latency: 2,
         };
 
-        println!("Format: {:?}", surface_format);
-
         let instance = SupaSimInstance::from_hal(Backend::create_instance(true).unwrap());
 
         let global_state = kernels::GlobalState::new_from_env().unwrap();
@@ -105,7 +108,7 @@ impl AppState {
                 target: instance.properties().unwrap().kernel_lang,
                 source: kernels::KernelSource::Memory(include_bytes!("buddhabrot.slang")),
                 dest: kernels::KernelDest::Memory(&mut spirv),
-                entry: "main",
+                entry: "Main",
                 include: None,
                 fp_mode: kernels::KernelFpMode::Precise,
                 opt_level: kernels::OptimizationLevel::Standard,
@@ -143,7 +146,7 @@ impl AppState {
                 label: None,
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
+                    visibility: wgpu::ShaderStages::all(),
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
@@ -205,7 +208,7 @@ impl AppState {
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
+                        visibility: wgpu::ShaderStages::all(),
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -215,7 +218,7 @@ impl AppState {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
+                        visibility: wgpu::ShaderStages::all(),
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -225,21 +228,11 @@ impl AppState {
                     },
                 ],
             });
-        let render_texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: None,
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                }],
-            });
-        let render_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        let render_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(include_str!("buddhabrot_render.wgsl").into()),
+        });
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -247,18 +240,32 @@ impl AppState {
                     bind_group_layouts: &[
                         &render_uniform_bind_group_layout,
                         &buffer_bind_group_layout,
-                        &render_texture_bind_group_layout,
                     ],
                     push_constant_ranges: &[],
                 }),
             ),
-            module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: None,
-                source: wgpu::ShaderSource::Wgsl(include_str!("buddhabrot_render.wgsl").into()),
+            vertex: wgpu::VertexState {
+                module: &render_shader,
+                entry_point: Some("render_vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &render_shader,
+                entry_point: Some("render_fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
             }),
-            entry_point: Some("render"),
+            multiview: None,
             cache: None,
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
         });
 
         let max_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -306,26 +313,18 @@ impl AppState {
             ],
         });
 
-        let (
-            supasim_buffer,
-            shared_buffer,
-            buffer_bind_group,
-            render_texture,
-            render_texture_view,
-            render_texture_bind_group,
-        ) = Self::create_buffer(
+        let (supasim_buffer, shared_buffer, buffer_bind_group) = Self::create_buffer(
             &device,
             required_features,
             config.width,
             config.height,
             &instance,
             &buffer_bind_group_layout,
-            &render_texture_bind_group_layout,
         );
 
         let supasim_width_height_buffer = instance
             .create_buffer(&supasim::BufferDescriptor {
-                size: 8,
+                size: 16,
                 buffer_type: supasim::BufferType::Gpu,
                 contents_align: 4,
                 priority: 1.0,
@@ -337,7 +336,6 @@ impl AppState {
         // Buffer bind group - just one buffer, the main imported buffer
         // Max uniform bind group - width/height, max value
         // Render uniform bind group - width/height, max value
-        // Render texture bind group - the texture to render to
 
         Self {
             surface,
@@ -361,10 +359,6 @@ impl AppState {
             render_uniform_bind_group,
             max_uniform_bind_group,
             buffer_bind_group_layout,
-            render_texture_bind_group_layout,
-            render_texture,
-            render_texture_view,
-            render_texture_bind_group,
         }
     }
     pub fn create_buffer(
@@ -374,15 +368,7 @@ impl AppState {
         height: u32,
         instance: &SupaSimInstance<Backend>,
         buffer_bind_group_layout: &wgpu::BindGroupLayout,
-        texture_bind_group_layout: &wgpu::BindGroupLayout,
-    ) -> (
-        supasim::Buffer<Backend>,
-        wgpu::Buffer,
-        wgpu::BindGroup,
-        wgpu::Texture,
-        wgpu::TextureView,
-        wgpu::BindGroup,
-    ) {
+    ) -> (supasim::Buffer<Backend>, wgpu::Buffer, wgpu::BindGroup) {
         let supasim_buffer = instance
             .create_buffer(&supasim::BufferDescriptor {
                 size: width as u64 * height as u64 * 4,
@@ -416,47 +402,7 @@ impl AppState {
                 }),
             }],
         });
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::STORAGE_BINDING,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor {
-            label: None,
-            format: Some(wgpu::TextureFormat::Rgba8Unorm),
-            dimension: None,
-            usage: None,
-            aspect: wgpu::TextureAspect::All,
-            base_mip_level: 0,
-            mip_level_count: None,
-            base_array_layer: 0,
-            array_layer_count: None,
-        });
-        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: texture_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&view),
-            }],
-        });
-        (
-            supasim_buffer,
-            shared_buffer,
-            buffer_bind_group,
-            texture,
-            view,
-            texture_bind_group,
-        )
+        (supasim_buffer, shared_buffer, buffer_bind_group)
     }
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
@@ -465,28 +411,17 @@ impl AppState {
             self.surface.configure(&self.device, &self.config);
             self.is_surface_configured = true;
 
-            let (
-                supasim_buffer,
-                shared_buffer,
-                buffer_bind_group,
-                render_texture,
-                render_texture_view,
-                render_texture_bind_group,
-            ) = Self::create_buffer(
+            let (supasim_buffer, shared_buffer, buffer_bind_group) = Self::create_buffer(
                 &self.device,
                 self.features,
                 width,
                 height,
                 &self.instance,
                 &self.buffer_bind_group_layout,
-                &self.render_texture_bind_group_layout,
             );
             self.supasim_buffer = supasim_buffer;
             self.shared_buffer = shared_buffer;
             self.buffer_bind_group = buffer_bind_group;
-            self.render_texture = render_texture;
-            self.render_texture_view = render_texture_view;
-            self.render_texture_bind_group = render_texture_bind_group;
             self.just_resized = true;
             self.queue.write_buffer(
                 &self.width_height_buffer,
@@ -506,15 +441,20 @@ impl AppState {
                     self.config.width as u64 * self.config.height as u64 * 4,
                 )
                 .unwrap();
-            recorder
-                .write_buffer::<u32>(
-                    &self.supasim_width_height_buffer,
-                    0,
-                    &[self.config.width, self.config.height],
-                )
-                .unwrap();
             self.just_resized = false;
         }
+        let random_seed = random::<u64>();
+        recorder
+            .write_buffer(
+                &self.supasim_width_height_buffer,
+                0,
+                &[BuddhabrotInputOptions {
+                    width: self.config.width,
+                    height: self.config.height,
+                    random_seed,
+                }],
+            )
+            .unwrap();
         recorder
             .dispatch_kernel(
                 &self.kernel,
@@ -525,11 +465,46 @@ impl AppState {
                 [16, 16, 16],
             )
             .unwrap();
+        let download_buffer = self
+            .instance
+            .create_buffer(&supasim::BufferDescriptor {
+                size: self.config.width as u64 * self.config.height as u64 * 4,
+                buffer_type: supasim::BufferType::Download,
+                contents_align: 4,
+                priority: 1.0,
+                can_export: false,
+            })
+            .unwrap();
+        recorder
+            .copy_buffer(
+                &self.supasim_buffer,
+                &download_buffer,
+                0,
+                0,
+                self.config.width as u64 * self.config.height as u64 * 4,
+            )
+            .unwrap();
         self.instance
             .submit_commands(&mut [recorder])
             .unwrap()
             .wait()
             .unwrap();
+        let access = download_buffer
+            .access(
+                0,
+                self.config.width as u64 * self.config.height as u64 * 4,
+                false,
+            )
+            .unwrap();
+        let readable = access.readable::<u32>().unwrap();
+        // Count is always zero :(
+        let mut count = 0;
+        for &val in readable {
+            if val != 0 {
+                count += 1;
+            }
+        }
+        println!("Count: {count}");
     }
 
     pub fn render(&mut self) -> bool {
@@ -550,7 +525,22 @@ impl AppState {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            const MAX_PIPELINE_WORKGROUP_SIZE: u32 = 256;
+            let mut max_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: None,
+                timestamp_writes: None,
+            });
+            max_pass.set_pipeline(&self.max_pipeline);
+            max_pass.set_bind_group(0, Some(&self.max_uniform_bind_group), &[]);
+            max_pass.set_bind_group(1, Some(&self.buffer_bind_group), &[]);
+            max_pass.dispatch_workgroups(
+                (self.config.width * self.config.height).div_ceil(MAX_PIPELINE_WORKGROUP_SIZE),
+                1,
+                1,
+            );
+        }
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &output_view,
@@ -570,37 +560,10 @@ impl AppState {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
-        }
-        {
-            const MAX_PIPELINE_WORKGROUP_SIZE: u32 = 256;
-            let mut max_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: None,
-                timestamp_writes: None,
-            });
-            max_pass.set_pipeline(&self.max_pipeline);
-            max_pass.set_bind_group(0, Some(&self.max_uniform_bind_group), &[]);
-            max_pass.set_bind_group(1, Some(&self.buffer_bind_group), &[]);
-            max_pass.dispatch_workgroups(
-                (self.config.width * self.config.height).div_ceil(MAX_PIPELINE_WORKGROUP_SIZE),
-                1,
-                1,
-            );
-        }
-        {
-            const RENDER_PIPELINE_WORKGROUP_SIZE: u32 = 16;
-            let mut max_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: None,
-                timestamp_writes: None,
-            });
-            max_pass.set_pipeline(&self.render_pipeline);
-            max_pass.set_bind_group(0, Some(&self.render_uniform_bind_group), &[]);
-            max_pass.set_bind_group(1, Some(&self.buffer_bind_group), &[]);
-            max_pass.set_bind_group(2, Some(&self.render_texture_bind_group), &[]);
-            max_pass.dispatch_workgroups(
-                self.config.width.div_ceil(RENDER_PIPELINE_WORKGROUP_SIZE),
-                self.config.height.div_ceil(RENDER_PIPELINE_WORKGROUP_SIZE),
-                1,
-            );
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_bind_group(0, Some(&self.render_uniform_bind_group), &[]);
+            render_pass.set_bind_group(1, Some(&self.buffer_bind_group), &[]);
+            render_pass.draw(0..6, 0..1);
         }
 
         self.queue.submit([encoder.finish()]);
