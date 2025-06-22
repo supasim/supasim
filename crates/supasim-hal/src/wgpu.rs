@@ -84,7 +84,7 @@ impl Wgpu {
             device_type == wgpu::DeviceType::Cpu || device_type == wgpu::DeviceType::IntegratedGpu
         };
 
-        let mut features = wgpu::Features::empty();
+        let mut features = wgpu::Features::SHADER_INT64;
         if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
             features |= wgpu::Features::PIPELINE_CACHE;
         }
@@ -154,10 +154,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     ) -> Result<bool, <Wgpu as Backend>::Error> {
         #[cfg(feature = "external_wgpu")]
         if let Some(info) = device.downcast_ref::<crate::WgpuDeviceExportInfo>() {
-            if info.device == self.device {
-                return Ok(true);
-            }
-            return Ok(info.supports_external_memory());
+            return Ok(info.supports_external_memory() && self.get_properties().export_memory);
         }
         Ok(false)
     }
@@ -191,17 +188,42 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                     },
                 ),
             });
+        let mut layout_entries = Vec::new();
+        for i in 0..reflection.num_buffers {
+            layout_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: i,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            });
+        }
+        let bgl = self
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &layout_entries,
+            });
+        let layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[&bgl],
+                push_constant_ranges: &[],
+            });
         let pipeline = self
             .device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: None,
-                layout: None,
+                layout: Some(&layout),
                 module: &kernel,
                 entry_point: Some("main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: cache.map(|a| &a.inner),
             });
-        let bgl = pipeline.get_bind_group_layout(0);
         Ok(WgpuKernel {
             _kernel: kernel,
             pipeline,
@@ -550,9 +572,6 @@ impl Buffer<Wgpu> for WgpuBuffer {
     ) -> Result<Box<dyn Any>, <Wgpu as Backend>::Error> {
         #[cfg(feature = "external_wgpu")]
         if let Some(info) = external_device.downcast_ref::<crate::WgpuDeviceExportInfo>() {
-            if info.device == instance.device {
-                return Ok(self.inner.clone());
-            }
             let memory_obj = unsafe { self.export(instance)? };
             return Ok(Box::new(unsafe {
                 info.import_external_memory(memory_obj, self.create_info)

@@ -1,6 +1,5 @@
 //! Lots of this code is just stolen from https://sotrh.github.io/learn-wgpu/ lol
 
-use hal::WgpuDeviceExportInfo;
 use rand::random;
 use std::sync::Arc;
 use supasim::{SupaSimInstance, wgpu};
@@ -12,7 +11,7 @@ use winit::{
     window::Window,
 };
 
-pub type Backend = supasim::hal::Vulkan;
+pub type Backend = supasim::hal::Wgpu;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -99,7 +98,9 @@ impl AppState {
             desired_maximum_frame_latency: 2,
         };
 
-        let instance = SupaSimInstance::from_hal(Backend::create_instance(true).unwrap());
+        let instance = SupaSimInstance::from_hal(
+            Backend::create_instance(true, wgpu::Backends::VULKAN, None).unwrap(),
+        );
 
         let global_state = kernels::GlobalState::new_from_env().unwrap();
         let mut spirv = Vec::new();
@@ -369,16 +370,17 @@ impl AppState {
         instance: &SupaSimInstance<Backend>,
         buffer_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> (supasim::Buffer<Backend>, wgpu::Buffer, wgpu::BindGroup) {
+        let size = width as u64 * height as u64 * 4;
         let supasim_buffer = instance
             .create_buffer(&supasim::BufferDescriptor {
-                size: width as u64 * height as u64 * 4,
+                size,
                 buffer_type: supasim::BufferType::Gpu,
                 contents_align: 4,
                 priority: 1.0,
                 can_export: true,
             })
             .unwrap();
-        let shared_buffer = unsafe {
+        /*let shared_buffer = unsafe {
             supasim_buffer
                 .export_to_wgpu(WgpuDeviceExportInfo {
                     device: device.clone(),
@@ -389,7 +391,15 @@ impl AppState {
                         | wgpu::BufferUsages::COPY_SRC,
                 })
                 .unwrap()
-        };
+        };*/
+        let shared_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            label: None,
+            size,
+            mapped_at_creation: false,
+        });
         let buffer_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: buffer_bind_group_layout,

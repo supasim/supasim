@@ -8,7 +8,7 @@ struct InputOptions
 struct Parameters
 {
     [[vk::binding(0, 0)]]
-    InputOptions imageSize;
+    RWStructuredBuffer<InputOptions> imageSize;
     [[vk::binding(1, 0)]]
     RWStructuredBuffer<Atomic<uint32_t>> buffer;
 }
@@ -34,26 +34,27 @@ float UIntToFloat01(uint x)
 }
 
 [shader("compute")]
-[numthreads(32, 32, 1)]
+[numthreads(16, 16, 1)]
 void Main(uint3 threadId: SV_DispatchThreadID, ParameterBlock<Parameters> parameters)
 {
-    if (threadId.x >= parameters.imageSize.imageWidth ||
-        threadId.y >= parameters.imageSize.imageHeight)
+    InputOptions options = parameters.imageSize[0];
+    if (threadId.x >= options.imageWidth ||
+        threadId.y >= options.imageHeight)
     {
         return;
     }
 
-    uint index = threadId.y * parameters.imageSize.imageWidth + threadId.x;
+    uint index = threadId.y * options.imageWidth + threadId.x;
 
-    uint seedX = Hash(uint(parameters.imageSize.randomSeed), index * 2);
-    uint seedY = Hash(uint(parameters.imageSize.randomSeed), index * 2 + 1);
+    uint seedX = Hash(uint(options.randomSeed), index * 2);
+    uint seedY = Hash(uint(options.randomSeed), index * 2 + 1);
 
     float randX = UIntToFloat01(seedX);
     float randY = UIntToFloat01(seedY);
 
     float2 randomVec = float2(randX, randY);
 
-    uint newIndex = seedX % (parameters.imageSize.imageWidth * parameters.imageSize.imageHeight);
+    uint newIndex = seedX % (options.imageWidth * options.imageHeight);
 
     // Example write
     // InterlockedAdd(parameters.buffer[newIndex], 1);
