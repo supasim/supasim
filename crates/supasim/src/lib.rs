@@ -310,7 +310,7 @@ impl<T, B: hal::Backend> MapSupasimError<T, B> for Result<T, B::Error> {
 }
 impl<B: hal::Backend> std::fmt::Display for SupaSimError<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 pub type SupaSimResult<B, T> = Result<T, SupaSimError<B>>;
@@ -539,6 +539,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             create_info: *desc,
             last_used: 0,
             slice_tracker: SliceTracker::new(gpu_available, cpu_available),
+            is_currently_external: false,
         });
         b.inner_mut()?.id = s.buffers.lock().insert(Some(b.downgrade()));
         Ok(b)
@@ -984,6 +985,9 @@ enum BufferCommandInner<B: hal::Backend> {
         kernel: Kernel<B>,
         workgroup_dims: [u32; 3],
     },
+    MemoryTransfer {
+        import: bool,
+    },
     CommandRecorderEnd,
     Dummy,
 }
@@ -1127,6 +1131,15 @@ impl<B: hal::Backend> CommandRecorder<B> {
         });
         Ok(())
     }
+    pub fn transfer_memory(&self, buffer: &BufferSlice<B>, import: bool) -> SupaSimResult<B, ()> {
+        self.check_destroyed()?;
+        buffer.validate()?;
+        self.inner_mut()?.commands.push(BufferCommand {
+            inner: BufferCommandInner::MemoryTransfer { import },
+            buffers: vec![buffer.clone()],
+        });
+        Ok(())
+    }
 }
 impl<B: hal::Backend> CommandRecorderInner<B> {
     fn destroy(&mut self, instance: &InstanceState<B>) {
@@ -1191,6 +1204,7 @@ api_type!(Buffer, {
     create_info: BufferDescriptor,
     last_used: u64,
     slice_tracker: SliceTracker,
+    is_currently_external: bool,
 },);
 impl<B: hal::Backend> Buffer<B> {
     pub fn write<T: bytemuck::Pod>(&self, offset: u64, data: &[T]) -> SupaSimResult<B, ()> {

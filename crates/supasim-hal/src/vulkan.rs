@@ -801,10 +801,16 @@ impl BackendInstance<Vulkan> for VulkanInstance {
     ) -> Result<<Vulkan as Backend>::Buffer, <Vulkan as Backend>::Error> {
         unsafe {
             let err = Cell::new(true);
+            let queue_family_indices = [self.queue_family_idx, vk::QUEUE_FAMILY_EXTERNAL];
+            /*let sharing_mode = if alloc_info.can_export {
+                vk::SharingMode::CONCURRENT
+            } else {
+                vk::SharingMode::EXCLUSIVE
+            };*/
             let create_info = vk::BufferCreateInfo::default()
                 .size(alloc_info.size)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .queue_family_indices(std::slice::from_ref(&self.queue_family_idx))
+                .queue_family_indices(&queue_family_indices)
                 .usage({
                     use vk::BufferUsageFlags as F;
                     match alloc_info.memory_type {
@@ -1368,6 +1374,7 @@ impl VulkanCommandRecorder {
     }
     fn stage_mask_khr(sync_ops: SyncOperations) -> vk::PipelineStageFlags2KHR {
         match sync_ops {
+            SyncOperations::None => vk::PipelineStageFlags2KHR::empty(),
             SyncOperations::Transfer => vk::PipelineStageFlags2KHR::TRANSFER,
             SyncOperations::ComputeDispatch => vk::PipelineStageFlags2KHR::COMPUTE_SHADER,
             SyncOperations::Both => vk::PipelineStageFlags2KHR::ALL_COMMANDS,
@@ -1390,15 +1397,47 @@ impl VulkanCommandRecorder {
                         HalBufferSlice {
                             buffer,
                             offset,
-                            len: size,
+                            len,
                         },
                 } => barriers.push(
                     vk::BufferMemoryBarrier2KHR::default()
                         .buffer(buffer.buffer)
                         .offset(*offset)
-                        .size(*size)
+                        .size(*len)
                         .src_queue_family_index(instance.queue_family_idx)
                         .dst_queue_family_index(instance.queue_family_idx)
+                        .src_access_mask(
+                            vk::AccessFlags2KHR::MEMORY_READ_KHR
+                                | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
+                        )
+                        .dst_access_mask(
+                            vk::AccessFlags2KHR::MEMORY_READ_KHR
+                                | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
+                        ),
+                ),
+                BufferCommand::MemoryTransfer {
+                    buffer:
+                        HalBufferSlice {
+                            buffer,
+                            offset,
+                            len,
+                        },
+                    import,
+                } => barriers.push(
+                    vk::BufferMemoryBarrier2KHR::default()
+                        .buffer(buffer.buffer)
+                        .offset(*offset)
+                        .size(*len)
+                        .src_queue_family_index(if *import {
+                            vk::QUEUE_FAMILY_EXTERNAL
+                        } else {
+                            instance.queue_family_idx
+                        })
+                        .dst_queue_family_index(if *import {
+                            instance.queue_family_idx
+                        } else {
+                            vk::QUEUE_FAMILY_EXTERNAL
+                        })
                         .src_access_mask(
                             vk::AccessFlags2KHR::MEMORY_READ_KHR
                                 | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
@@ -1470,10 +1509,9 @@ impl VulkanCommandRecorder {
                 cb,
             )?,
 
-            BufferCommand::PipelineBarrier { .. } => {
-                unreachable!()
-            }
-            BufferCommand::MemoryBarrier { .. } => {
+            BufferCommand::PipelineBarrier { .. }
+            | BufferCommand::MemoryBarrier { .. }
+            | BufferCommand::MemoryTransfer { .. } => {
                 unreachable!()
             }
             BufferCommand::UpdateBindGroup { .. } => unreachable!(),
@@ -1501,7 +1539,9 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         let mut pipeline_chain_start = None;
         for i in 0..commands.len() {
             match &commands[i] {
-                BufferCommand::MemoryBarrier { .. } | BufferCommand::PipelineBarrier { .. } => {
+                BufferCommand::MemoryBarrier { .. }
+                | BufferCommand::PipelineBarrier { .. }
+                | BufferCommand::MemoryTransfer { .. } => {
                     if pipeline_chain_start.is_none() {
                         pipeline_chain_start = Some(i);
                     }

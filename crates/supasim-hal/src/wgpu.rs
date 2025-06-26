@@ -640,6 +640,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                         workgroup_dims[2],
                     );
                 }
+                BufferCommand::MemoryTransfer { .. } => todo!(),
                 BufferCommand::UpdateBindGroup { .. } => {
                     unreachable!()
                 }

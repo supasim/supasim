@@ -33,14 +33,12 @@ pub struct AppState {
     supasim_buffer: supasim::Buffer<Backend>,
     supasim_width_height_buffer: supasim::Buffer<Backend>,
     kernel: supasim::Kernel<Backend>,
-    shared_buffer: wgpu::Buffer,
     features: wgpu::Features,
     just_resized: bool,
 
     width_height_buffer: wgpu::Buffer,
     render_uniform_bind_group: wgpu::BindGroup,
     max_uniform_bind_group: wgpu::BindGroup,
-    buffer_bind_group: wgpu::BindGroup,
     buffer_bind_group_layout: wgpu::BindGroupLayout,
 
     max_pipeline: wgpu::ComputePipeline,
@@ -313,14 +311,7 @@ impl AppState {
             ],
         });
 
-        let (supasim_buffer, shared_buffer, buffer_bind_group) = Self::create_buffer(
-            &device,
-            required_features,
-            config.width,
-            config.height,
-            &instance,
-            &buffer_bind_group_layout,
-        );
+        let supasim_buffer = Self::create_buffer(config.width, config.height, &instance);
 
         let supasim_width_height_buffer = instance
             .create_buffer(&supasim::BufferDescriptor {
@@ -346,7 +337,6 @@ impl AppState {
             window,
             instance,
             supasim_buffer,
-            shared_buffer,
             features: required_features,
             just_resized: true,
             kernel,
@@ -355,22 +345,18 @@ impl AppState {
             render_pipeline,
 
             width_height_buffer,
-            buffer_bind_group,
             render_uniform_bind_group,
             max_uniform_bind_group,
             buffer_bind_group_layout,
         }
     }
     pub fn create_buffer(
-        device: &wgpu::Device,
-        features: wgpu::Features,
         width: u32,
         height: u32,
         instance: &SupaSimInstance<Backend>,
-        buffer_bind_group_layout: &wgpu::BindGroupLayout,
-    ) -> (supasim::Buffer<Backend>, wgpu::Buffer, wgpu::BindGroup) {
+    ) -> supasim::Buffer<Backend> {
         let size = width as u64 * height as u64 * 4;
-        let supasim_buffer = instance
+        instance
             .create_buffer(&supasim::BufferDescriptor {
                 size,
                 buffer_type: supasim::BufferType::Gpu,
@@ -378,32 +364,7 @@ impl AppState {
                 priority: 1.0,
                 can_export: true,
             })
-            .unwrap();
-        let shared_buffer = unsafe {
-            supasim_buffer
-                .export_to_wgpu(WgpuDeviceExportInfo {
-                    device: device.clone(),
-                    features,
-                    backend: wgpu::Backend::Vulkan,
-                    usages: wgpu::BufferUsages::STORAGE
-                        | wgpu::BufferUsages::COPY_DST
-                        | wgpu::BufferUsages::COPY_SRC,
-                })
-                .unwrap()
-        };
-        let buffer_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: buffer_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &shared_buffer,
-                    offset: 0,
-                    size: None,
-                }),
-            }],
-        });
-        (supasim_buffer, shared_buffer, buffer_bind_group)
+            .unwrap()
     }
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
@@ -412,17 +373,8 @@ impl AppState {
             self.surface.configure(&self.device, &self.config);
             self.is_surface_configured = true;
 
-            let (supasim_buffer, shared_buffer, buffer_bind_group) = Self::create_buffer(
-                &self.device,
-                self.features,
-                width,
-                height,
-                &self.instance,
-                &self.buffer_bind_group_layout,
-            );
+            let supasim_buffer = Self::create_buffer(width, height, &self.instance);
             self.supasim_buffer = supasim_buffer;
-            self.shared_buffer = shared_buffer;
-            self.buffer_bind_group = buffer_bind_group;
             self.just_resized = true;
             self.queue.write_buffer(
                 &self.width_height_buffer,
@@ -443,6 +395,13 @@ impl AppState {
                 )
                 .unwrap();
             self.just_resized = false;
+        } else {
+            recorder
+                .transfer_memory(
+                    &supasim::BufferSlice::entire_buffer(&self.supasim_buffer, false).unwrap(),
+                    true,
+                )
+                .unwrap();
         }
         let random_seed = random::<u64>();
         recorder
@@ -483,6 +442,12 @@ impl AppState {
                 0,
                 0,
                 self.config.width as u64 * self.config.height as u64 * 4,
+            )
+            .unwrap();
+        recorder
+            .transfer_memory(
+                &supasim::BufferSlice::entire_buffer(&self.supasim_buffer, false).unwrap(),
+                false,
             )
             .unwrap();
         self.instance
@@ -527,6 +492,30 @@ impl AppState {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
+        let shared_buffer = unsafe {
+            self.supasim_buffer
+                .export_to_wgpu(WgpuDeviceExportInfo {
+                    device: self.device.clone(),
+                    features: self.features,
+                    backend: wgpu::Backend::Vulkan,
+                    usages: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST
+                        | wgpu::BufferUsages::COPY_SRC,
+                })
+                .unwrap()
+        };
+        let buffer_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.buffer_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &shared_buffer,
+                    offset: 0,
+                    size: None,
+                }),
+            }],
+        });
 
         let mut encoder = self
             .device
@@ -539,7 +528,7 @@ impl AppState {
             });
             max_pass.set_pipeline(&self.max_pipeline);
             max_pass.set_bind_group(0, Some(&self.max_uniform_bind_group), &[]);
-            max_pass.set_bind_group(1, Some(&self.buffer_bind_group), &[]);
+            max_pass.set_bind_group(1, Some(&buffer_bind_group), &[]);
             max_pass.dispatch_workgroups(
                 (self.config.width * self.config.height).div_ceil(MAX_PIPELINE_WORKGROUP_SIZE),
                 1,
@@ -569,11 +558,11 @@ impl AppState {
             });
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, Some(&self.render_uniform_bind_group), &[]);
-            render_pass.set_bind_group(1, Some(&self.buffer_bind_group), &[]);
+            render_pass.set_bind_group(1, Some(&buffer_bind_group), &[]);
             render_pass.draw(0..6, 0..1);
         }
         encoder.copy_buffer_to_buffer(
-            &self.shared_buffer,
+            &shared_buffer,
             0,
             &download_buffer,
             0,

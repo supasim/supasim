@@ -42,10 +42,10 @@ where
                     tracing_subscriber::fmt::format::DefaultFields,
                 >>()
             {
-                write!(fields, "{}", ext).ok();
+                write!(fields, "{ext}").ok();
             }
 
-            println!("\t{} [{}]", name, fields);
+            println!("\t{name} [{fields}]");
         }
     }
 }

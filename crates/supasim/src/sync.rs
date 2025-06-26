@@ -73,6 +73,12 @@ pub enum HalCommandBuilder {
         offset: u64,
         len: u64,
     },
+    MemoryTransfer {
+        resource: Index,
+        offset: u64,
+        len: u64,
+        import: bool,
+    },
     UpdateBindGroup {
         bg: Index,
         kernel: Index,
@@ -354,6 +360,15 @@ pub fn dag_to_command_streams<B: hal::Backend>(
                         offset: cmd.buffers[0].start,
                         size: cmd.buffers[0].len,
                     },
+                    BufferCommandInner::MemoryTransfer { import } => {
+                        HalCommandBuilder::MemoryTransfer {
+                            resource: cmd.buffers[0].buffer.inner()?.id,
+                            offset: cmd.buffers[0].start,
+                            len: cmd.buffers[0].len,
+                            import: *import,
+                        }
+                    }
+
                     BufferCommandInner::CommandRecorderEnd => HalCommandBuilder::Dummy,
                 };
                 stream.commands.push(hal);
@@ -494,6 +509,16 @@ pub fn record_command_streams<B: hal::Backend>(
                         .unwrap()
                         .upgrade()?,
                 ),
+                HalCommandBuilder::MemoryTransfer { resource, .. } => buffer_refs.push(
+                    instance
+                        .buffers
+                        .lock()
+                        .get(*resource)
+                        .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
+                        .as_ref()
+                        .unwrap()
+                        .upgrade()?,
+                ),
                 _ => (),
             }
         }
@@ -584,6 +609,33 @@ pub fn record_command_streams<B: hal::Backend>(
                         dst_offset: *dst_offset,
                         len: *len,
                     },
+                    HalCommandBuilder::MemoryTransfer {
+                        offset,
+                        len,
+                        import,
+                        ..
+                    } => {
+                        hal_commands.push(hal::BufferCommand::PipelineBarrier {
+                            before: if *import {
+                                SyncOperations::None
+                            } else {
+                                SyncOperations::Both
+                            },
+                            after: if *import {
+                                SyncOperations::Both
+                            } else {
+                                SyncOperations::None
+                            },
+                        });
+                        hal::BufferCommand::MemoryTransfer {
+                            buffer: HalBufferSlice {
+                                buffer: get_buffer(),
+                                offset: *offset,
+                                len: *len,
+                            },
+                            import: *import,
+                        }
+                    }
                     HalCommandBuilder::UpdateBindGroup { .. } => todo!(),
                     HalCommandBuilder::Dummy => hal::BufferCommand::Dummy,
                 };

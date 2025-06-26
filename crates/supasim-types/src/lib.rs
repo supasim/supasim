@@ -143,6 +143,7 @@ pub enum SyncOperations {
     ComputeDispatch,
     Transfer,
     Both,
+    None,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct HalInstanceProperties {

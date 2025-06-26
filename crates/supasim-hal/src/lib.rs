@@ -298,6 +298,10 @@ pub enum BufferCommand<'a, B: Backend> {
     MemoryBarrier {
         buffer: HalBufferSlice<'a, B>,
     },
+    MemoryTransfer {
+        buffer: HalBufferSlice<'a, B>,
+        import: bool,
+    },
     /// Writes a bind group. This is for instances with the `easily_update_bind_groups` property.
     UpdateBindGroup {
         bg: &'a B::BindGroup,
