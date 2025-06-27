@@ -82,7 +82,8 @@ void Main(uint3 threadId: SV_DispatchThreadID, ParameterBlock<Parameters> parame
             pos = square(pos) + c;
             if (dot(pos, pos) > 4)
             {
-                num = i;
+                // This makes it no longer precisely a buddhabrot render, but I think it looks cooler and less cluttered
+                num = i - 10;
                 break;
             }
         }
@@ -90,7 +91,8 @@ void Main(uint3 threadId: SV_DispatchThreadID, ParameterBlock<Parameters> parame
         for (int i = 0; i < num; i++)
         {
             pos = square(pos) + c;
-            int index = getPixelIndex(pos, parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
+            // Flip the x and y here so Buddhabrot is "sitting up"
+            int index = getPixelIndex(float2(pos.y, pos.x), parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
             parameters.buffer[index].add(1);
         }
     }
