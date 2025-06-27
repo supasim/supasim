@@ -30,5 +30,5 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
-iced = "0.13"
-plotters = "0.3.7"
+# iced = "0.13"
+# plotters = "0.3.7"
