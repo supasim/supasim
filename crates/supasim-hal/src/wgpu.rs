@@ -69,6 +69,12 @@ impl Wgpu {
                 wgpu::InstanceFlags::debugging()
             },
             backends,
+            backend_options: wgpu::BackendOptions {
+                dx12: wgpu::Dx12BackendOptions {
+                    shader_compiler: wgpu::Dx12Compiler::default_dynamic_dxc(),
+                },
+                ..Default::default()
+            },
             ..Default::default()
         });
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
