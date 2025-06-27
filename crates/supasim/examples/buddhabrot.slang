@@ -78,10 +78,6 @@ void Main(uint3 threadId: SV_DispatchThreadID, ParameterBlock<Parameters> parame
             parameters.buffer[index].add(1);
         }
     }
-
-    // Example write
-    // InterlockedAdd(parameters.buffer[newIndex], 1);
-    // parameters.buffer[newIndex].add(1);
 }
 
 float2 square(float2 pos)
