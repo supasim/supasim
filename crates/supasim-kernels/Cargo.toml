@@ -46,11 +46,6 @@ slang = { package = "supasim-slang", version = "0.0.1" }
 rand.workspace = true
 tempfile.workspace = true
 spirv-cross-sys = { package = "supasim-spirv-cross-sys", version = "0.0.1", optional = true }
-#spirv_cross = { version = "0.23", features = [
-#    "msl",
-#    "hlsl",
-#    "glsl",
-#], optional = true } # git = "https://github.com/supasim/spirv_cross.git"
 bytemuck.workspace = true
 spirv-tools-sys = { package = "supasim-spirv-tools-sys", version = "0.0.1", optional = true }
 libc = "0.2"
