@@ -1930,6 +1930,7 @@ dependencies = [
 name = "supasim-dev-utils"
 version = "0.0.1"
 dependencies = [
+ "env_logger",
  "paste",
  "tracing",
  "tracing-subscriber",

@@ -61,6 +61,7 @@ pub fn setup_trace_printer_if_env() {
             setup_trace_printer();
         }
     }
+    let _ = env_logger::try_init();
 }
 #[macro_export]
 macro_rules! all_backend_tests_inner {

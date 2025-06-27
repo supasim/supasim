@@ -614,7 +614,6 @@ impl<B: hal::Backend> ApplicationHandler<AppState<B>> for App<B> {
 
 pub fn main() {
     dev_utils::setup_trace_printer_if_env();
-    env_logger::init();
     let use_vulkan = match std::env::var("BACKEND") {
         Ok(e) => &e == "vulkan",
         Err(_) => false,

@@ -33,3 +33,4 @@ homepage.workspace = true
 tracing-subscriber.workspace = true
 tracing.workspace = true
 paste.workspace = true
+env_logger.workspace = true
