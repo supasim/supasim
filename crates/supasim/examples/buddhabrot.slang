@@ -7,9 +7,7 @@ struct InputOptions
 
 struct Parameters
 {
-    [[vk::binding(0, 0)]]
     StructuredBuffer<InputOptions> imageSize;
-    [[vk::binding(1, 0)]]
     RWStructuredBuffer<Atomic<uint32_t>> buffer;
 }
 
@@ -56,7 +54,7 @@ void Main(uint3 threadId: SV_DispatchThreadID, ParameterBlock<Parameters> parame
 
     float2 pos = float2(0.0);
 
-    const int MAX_ITERATIONS = 4096;
+    const int MAX_ITERATIONS = 1024;
 
     int num = 0;
     if (dot(pos, pos) <= 4)
