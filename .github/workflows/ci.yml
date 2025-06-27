@@ -76,7 +76,7 @@ jobs:
       run: |
         set -e
         rustup toolchain install ${{ env.REPO_MSRV }} --no-self-update --profile=minimal --component clippy
-        rustup default stable
+        rustup default ${{ env.REPO_MSRV }}
       
     - name: Install Vulkan SDK, Mesa, Layers, DXC (Linux)
       shell: bash
