@@ -51,7 +51,7 @@ if __name__ == "__main__":
         print(f"Editing {fname}")
         extension = os.path.splitext(fname)[1]
         header: list[str]
-        if extension in [".rs", ".slang"]:
+        if extension in [".rs", ".slang", ".wgsl"]:
             header = header_rust
         elif extension in [".toml", ".py", ".yml"]:
             header = header_toml

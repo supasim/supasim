@@ -71,4 +71,4 @@ Note that CPU support is desired due to relieving gpu/not using its memory, even
   * Release, counter example - 64s, 25.9MB
 
 ## Updating the license header
-Run `./scripts/update-license-header.py -h LICENSE_HEADER ./**/*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml` after `shopt -s globstar`
+Run `./scripts/update-license-header.py -h LICENSE_HEADER ./**/*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml ./**/*.slang ./**/*.wgsl` after `shopt -s globstar`
