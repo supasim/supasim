@@ -11,8 +11,6 @@ use winit::{
     window::Window,
 };
 
-pub type Backend = supasim::hal::Vulkan;
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct BuddhabrotInputOptions {
@@ -21,17 +19,17 @@ struct BuddhabrotInputOptions {
     random_seed: u64,
 }
 
-pub struct AppState {
+pub struct AppState<B: hal::Backend> {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
     window: Arc<Window>,
-    instance: SupaSimInstance<Backend>,
-    supasim_buffer: supasim::Buffer<Backend>,
-    supasim_width_height_buffer: supasim::Buffer<Backend>,
-    kernel: supasim::Kernel<Backend>,
+    instance: SupaSimInstance<B>,
+    supasim_buffer: supasim::Buffer<B>,
+    supasim_width_height_buffer: supasim::Buffer<B>,
+    kernel: supasim::Kernel<B>,
     _features: wgpu::Features,
     just_resized: bool,
 
@@ -46,8 +44,8 @@ pub struct AppState {
 
     workgroup_dim: u32,
 }
-impl AppState {
-    pub async fn new(window: Arc<Window>) -> Self {
+impl<B: hal::Backend> AppState<B> {
+    pub async fn new(window: Arc<Window>, hal_instance: B::Instance) -> Self {
         let size = window.inner_size();
 
         let wgpu_instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -99,10 +97,9 @@ impl AppState {
             desired_maximum_frame_latency: 2,
         };
 
-        let instance = SupaSimInstance::from_hal(Backend::create_instance(true).unwrap());
-
         let global_state = kernels::GlobalState::new_from_env().unwrap();
         let mut spirv = Vec::new();
+        let instance = SupaSimInstance::from_hal(hal_instance);
         global_state
             .compile_kernel(supasim::kernels::KernelCompileOptions {
                 target: instance.properties().unwrap().kernel_lang,
@@ -368,9 +365,9 @@ impl AppState {
     pub fn create_buffer(
         width: u32,
         height: u32,
-        instance: &SupaSimInstance<Backend>,
+        instance: &SupaSimInstance<B>,
         device: &wgpu::Device,
-    ) -> (supasim::Buffer<Backend>, wgpu::Buffer) {
+    ) -> (supasim::Buffer<B>, wgpu::Buffer) {
         let size = width as u64 * height as u64 * 4;
         let supasim_buffer = instance
             .create_buffer(&supasim::BufferDescriptor {
@@ -420,13 +417,6 @@ impl AppState {
                 )
                 .unwrap();
             self.just_resized = false;
-        } else {
-            recorder
-                .transfer_memory(
-                    &supasim::BufferSlice::entire_buffer(&self.supasim_buffer, false).unwrap(),
-                    true,
-                )
-                .unwrap();
         }
         let random_seed = random::<u64>();
         recorder
@@ -467,12 +457,6 @@ impl AppState {
                 0,
                 0,
                 self.config.width as u64 * self.config.height as u64 * 4,
-            )
-            .unwrap();
-        recorder
-            .transfer_memory(
-                &supasim::BufferSlice::entire_buffer(&self.supasim_buffer, false).unwrap(),
-                false,
             )
             .unwrap();
         self.instance
@@ -570,19 +554,19 @@ impl AppState {
     }
 }
 
-#[derive(Default)]
-pub struct App {
-    state: Option<AppState>,
+pub struct App<B: hal::Backend> {
+    state: Option<AppState<B>>,
+    instance: Option<B::Instance>,
 }
-impl ApplicationHandler<AppState> for App {
+impl<B: hal::Backend> ApplicationHandler<AppState<B>> for App<B> {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         let window_attributes = Window::default_attributes();
 
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
-
-        self.state = Some(pollster::block_on(AppState::new(window)));
+        let i = std::mem::take(&mut self.instance).unwrap();
+        self.state = Some(pollster::block_on(AppState::new(window, i)));
     }
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppState) {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppState<B>) {
         self.state = Some(event);
     }
     fn window_event(
@@ -614,8 +598,29 @@ impl ApplicationHandler<AppState> for App {
 pub fn main() {
     dev_utils::setup_trace_printer_if_env();
     env_logger::init();
-    let event_loop = EventLoop::with_user_event().build().unwrap();
-    event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-    let mut app = App::default();
-    event_loop.run_app(&mut app).unwrap();
+    let use_vulkan = match std::env::var("BACKEND") {
+        Ok(e) => &e == "vulkan",
+        Err(_) => false,
+    };
+    if use_vulkan {
+        println!("Selected vulkan backend");
+        let event_loop = EventLoop::with_user_event().build().unwrap();
+        event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+        let mut app = App::<hal::Vulkan> {
+            state: None,
+            instance: Some(hal::Vulkan::create_instance(true).unwrap()),
+        };
+        event_loop.run_app(&mut app).unwrap();
+    } else {
+        println!("Selected wgpu backend");
+        let event_loop = EventLoop::with_user_event().build().unwrap();
+        event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+        let mut app = App::<hal::Wgpu> {
+            state: None,
+            instance: Some(
+                hal::Wgpu::create_instance(true, wgpu::Backends::PRIMARY, None).unwrap(),
+            ),
+        };
+        event_loop.run_app(&mut app).unwrap();
+    }
 }

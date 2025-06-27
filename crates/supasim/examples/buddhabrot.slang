@@ -8,7 +8,7 @@ struct InputOptions
 struct Parameters
 {
     [[vk::binding(0, 0)]]
-    RWStructuredBuffer<InputOptions> imageSize;
+    StructuredBuffer<InputOptions> imageSize;
     [[vk::binding(1, 0)]]
     RWStructuredBuffer<Atomic<uint32_t>> buffer;
 }

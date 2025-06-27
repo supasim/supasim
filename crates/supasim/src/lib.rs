@@ -858,9 +858,7 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
             }
         }
         unsafe {
-            let mut inner = std::mem::take(&mut *self.inner.lock()).unwrap();
-            let _ = inner.wait_for_idle().is_ok();
-            let _ = inner.destroy();
+            let _ = self.inner.lock().as_mut().unwrap().wait_for_idle().is_ok();
         }
     }
 }
