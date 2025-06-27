@@ -43,6 +43,8 @@ pub struct AppState {
 
     max_pipeline: wgpu::ComputePipeline,
     render_pipeline: wgpu::RenderPipeline,
+
+    workgroup_dim: u32,
 }
 impl AppState {
     pub async fn new(window: Arc<Window>) -> Self {
@@ -324,6 +326,15 @@ impl AppState {
             })
             .unwrap();
 
+        const DEFAULT_WORKGROUP_DIM: u32 = 4;
+        let workgroup_dim = match std::env::var("WORKGROUP_DIM") {
+            Ok(w) => match w.parse::<u32>() {
+                Ok(v) => v.clamp(1, 16),
+                Err(_) => DEFAULT_WORKGROUP_DIM,
+            },
+            Err(_) => DEFAULT_WORKGROUP_DIM,
+        };
+
         // Layouts:
         // Buffer bind group - just one buffer, the main imported buffer
         // Max uniform bind group - width/height, max value
@@ -350,6 +361,8 @@ impl AppState {
             max_uniform_bind_group,
             buffer_bind_group_layout,
             wgpu_device_buffer,
+
+            workgroup_dim,
         }
     }
     pub fn create_buffer(
@@ -434,7 +447,7 @@ impl AppState {
                     &self.supasim_width_height_buffer.slice(.., false),
                     &self.supasim_buffer.slice(.., true),
                 ],
-                [16, 16, 16],
+                [self.workgroup_dim, self.workgroup_dim, self.workgroup_dim],
             )
             .unwrap();
         let download_buffer = self
