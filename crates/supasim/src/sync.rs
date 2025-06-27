@@ -33,7 +33,6 @@ use crate::{
     CommandRecorderInner, InstanceState, KernelWeak, MapSupasimError, SupaSimError,
     SupaSimInstance, SupaSimResult,
 };
-use anyhow::anyhow;
 
 pub type CommandDag<B> = Dag<BufferCommand<B>>;
 
@@ -807,7 +806,7 @@ pub fn create_sync_thread<B: hal::Backend>(
 
         if let Err(e) = std::panic::catch_unwind(|| {
             let mut data = data;
-            sync_thread_main(&mut data).unwrap()
+            sync_thread_main(&mut data)
         }) {
             let mut lock = shared.0.lock();
             let mut error = String::from("Unknown panic");
@@ -830,7 +829,7 @@ enum Work<B: hal::Backend> {
     GpuSubmission(GpuSubmissionInfo<B>),
     CpuWork(CpuSubmission<B>),
 }
-fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<(), SupaSimError<B>> {
+fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
     const SUBMISSION_WAIT_PERIOD: Duration = Duration::from_millis(10);
     const MAX_SUBMISSION_WINDOW: Duration = Duration::from_millis(50);
 
@@ -874,8 +873,8 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
         // Initial stuff - any non GPU work can be completed immediately
         loop {
             match logic.receiver.recv().unwrap() {
-                SendSyncThreadEvent::AddFinishedJob(_, job) => job.run(&logic.instance)?,
-                SendSyncThreadEvent::CpuWork(job) => job.run(&logic.instance)?,
+                SendSyncThreadEvent::AddFinishedJob(_, job) => job.run(&logic.instance).unwrap(),
+                SendSyncThreadEvent::CpuWork(job) => job.run(&logic.instance).unwrap(),
                 SendSyncThreadEvent::WaitFinishAndShutdown => {
                     for semaphore in semaphores {
                         unsafe {
@@ -886,10 +885,10 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                                 .as_mut()
                                 .unwrap()
                                 .destroy_semaphore(semaphore)
-                                .map_supasim()?;
+                                .unwrap();
                         }
                     }
-                    return Ok(());
+                    return;
                 }
                 SendSyncThreadEvent::AddSubmission(submission) => {
                     temp_submission_vec.push(Work::GpuSubmission(submission));
@@ -926,10 +925,10 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                                 .as_mut()
                                 .unwrap()
                                 .destroy_semaphore(semaphore)
-                                .map_supasim()?;
+                                .unwrap();
                         }
                     }
-                    return Ok(());
+                    return;
                 }
                 Ok(SendSyncThreadEvent::CpuWork(job)) => {
                     if !semaphore_signal {
@@ -943,7 +942,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                 Ok(SendSyncThreadEvent::AddFinishedJob(idx, job)) => {
                     last_was_submission = false;
                     if idx < next_submission_idx {
-                        job.run(&logic.instance)?;
+                        job.run(&logic.instance).unwrap();
                     } else {
                         jobs.push((idx, job));
                     }
@@ -956,9 +955,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                 Ok(SendSyncThreadEvent::SubmitBatchNow) => break,
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err(SupaSimError::Other(anyhow!(
-                        "Main thread disconnected from sender"
-                    )));
+                    panic!("Main thread disconnected from sender");
                 }
             }
         }
@@ -967,7 +964,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
         while let Some(job) = jobs.last() {
             if job.0 < next_submission_idx {
                 let job = jobs.pop().unwrap();
-                job.1.run(&logic.instance)?;
+                job.1.run(&logic.instance).unwrap();
             } else {
                 break;
             }
@@ -983,9 +980,9 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                         prev_was_cpu = true;
                     }
                     Work::GpuSubmission(g) => {
-                        used_semaphores.push(acquire_semaphore(&mut semaphores)?);
+                        used_semaphores.push(acquire_semaphore(&mut semaphores).unwrap());
                         if prev_was_cpu {
-                            used_semaphores.push(acquire_semaphore(&mut semaphores)?);
+                            used_semaphores.push(acquire_semaphore(&mut semaphores).unwrap());
                         }
                         prev_was_cpu = false;
                         recorders.push(std::mem::take(&mut g.command_recorder).unwrap());
@@ -1029,7 +1026,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                 .as_mut()
                 .unwrap()
                 .submit_recorders(&mut submits)
-                .map_supasim()?;
+                .unwrap();
         }
         // Do the incremental waiting
         {
@@ -1038,7 +1035,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
             for s in temp_submission_vec {
                 match s {
                     Work::CpuWork(w) => {
-                        w.run(&logic.instance)?;
+                        w.run(&logic.instance).unwrap();
                         next_submission_idx += 1;
                         logic.shared.0.lock().next_job = next_submission_idx;
                         logic.shared.1.notify_all();
@@ -1046,12 +1043,12 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                     Work::GpuSubmission(mut item) => {
                         if let Some(s) = submits[submit_idx].wait_semaphore {
                             unsafe {
-                                s.signal().map_supasim()?;
+                                s.signal().unwrap();
                             }
                             semaphore_idx += 1;
                         }
                         unsafe {
-                            used_semaphores[semaphore_idx].wait().map_supasim()?;
+                            used_semaphores[semaphore_idx].wait().unwrap();
                         }
                         semaphore_idx += 1;
                         submit_idx += 1;
@@ -1091,15 +1088,15 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                                     .as_mut()
                                     .unwrap()
                                     .destroy_buffer(b)
-                                    .map_supasim()?;
+                                    .unwrap();
                             }
                         }
                         for (bg, kernel) in item.bind_groups {
                             // TODO: fix issue here if kernel is already destroyed or is destroyed during this
                             let mut lock = logic.instance.kernels.lock();
                             let k = lock.get_mut(kernel).unwrap();
-                            let kernel = k.upgrade()?;
-                            let mut _k = kernel.inner_mut()?;
+                            let kernel = k.upgrade().unwrap();
+                            let mut _k = kernel.inner_mut().unwrap();
                             let k = _k.inner.as_mut().unwrap();
                             unsafe {
                                 logic
@@ -1109,14 +1106,14 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                                     .as_mut()
                                     .unwrap()
                                     .destroy_bind_group(k, bg)
-                                    .map_supasim()?;
+                                    .unwrap();
                             }
                         }
                     }
                 }
                 while let Some(last) = jobs.last() {
                     if last.0 < next_submission_idx {
-                        jobs.pop().unwrap().1.run(&logic.instance)?;
+                        jobs.pop().unwrap().1.run(&logic.instance).unwrap();
                     } else {
                         break;
                     }
@@ -1124,7 +1121,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
             }
         }
         if let Some(final_cpu) = final_cpu {
-            final_cpu.run(&logic.instance)?;
+            final_cpu.run(&logic.instance).unwrap();
         }
         semaphores.append(&mut used_semaphores);
         logic

@@ -802,13 +802,12 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
         let mut sync_thread =
             std::mem::take::<Option<SyncThreadHandle<B>>>(unsafe { &mut *self.sync_thread.get() })
                 .unwrap();
-        sync_thread.wait_for_idle().unwrap();
-        sync_thread
+        let _ = sync_thread.wait_for_idle();
+        let _ = sync_thread
             .sender
             .get_mut()
-            .send(sync::SendSyncThreadEvent::WaitFinishAndShutdown)
-            .unwrap();
-        sync_thread.thread.join().unwrap();
+            .send(sync::SendSyncThreadEvent::WaitFinishAndShutdown);
+        let _ = sync_thread.thread.join();
         if sync_thread.shared_thread.0.lock().error.is_some() {
             println!("Instance attempting to shutdown gracefully despite sync thread error");
         }
@@ -859,7 +858,9 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
             }
         }
         unsafe {
-            self.inner.lock().as_mut().unwrap().wait_for_idle().unwrap();
+            let mut inner = std::mem::take(&mut *self.inner.lock()).unwrap();
+            let _ = inner.wait_for_idle().is_ok();
+            let _ = inner.destroy();
         }
     }
 }
