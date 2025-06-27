@@ -72,29 +72,33 @@ void Main(uint3 threadId: SV_DispatchThreadID, ParameterBlock<Parameters> parame
 
     float2 pos = float2(0.0);
 
-    const int MAX_ITERATIONS = 1024;
+    // Setting this too high can result in the GPU killing it and the process
+    // I don't have a good workaround. On my system 2048 is fine but 4096 isn't.
+    // 512 is set here to hopefully make most systems able to run it.
+    const int MAX_ITERATIONS = 512;
 
     int num = 0;
-    if (dot(pos, pos) <= 4)
+    // I have removed a conditional check for starting outside of the exit circle.
+    // This check would darken the areas around the fractal slightly, making it seem
+    // less cluttered, but only if there wasn't already something being subtracted from num.
+    // Unfortunately, subtracting 1 makes it look bad in other ways.
+    for (int i = 0; i < MAX_ITERATIONS; i++)
     {
-        for (int i = 0; i < MAX_ITERATIONS; i++)
+        pos = square(pos) + c;
+        if (dot(pos, pos) > 4)
         {
-            pos = square(pos) + c;
-            if (dot(pos, pos) > 4)
-            {
-                // This makes it no longer precisely a buddhabrot render, but I think it looks cooler and less cluttered
-                num = i - 10;
-                break;
-            }
+            // This makes it no longer precisely a buddhabrot render, but I think it looks cooler and less cluttered
+            num = i - 10;
+            break;
         }
-        pos = float2(0.0);
-        for (int i = 0; i < num; i++)
-        {
-            pos = square(pos) + c;
-            // Flip the x and y here so Buddhabrot is "sitting up"
-            int index = getPixelIndex(float2(pos.y, pos.x), parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
-            parameters.buffer[index].add(1);
-        }
+    }
+    pos = float2(0.0);
+    for (int i = 0; i < num; i++)
+    {
+        pos = square(pos) + c;
+        // Flip the x and y here so Buddhabrot is "sitting up"
+        int index = getPixelIndex(float2(pos.y, pos.x), parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
+        parameters.buffer[index].add(1);
     }
 }
 
