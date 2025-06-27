@@ -715,11 +715,11 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     self.device.destroy_shader_module(kernel, None);
                 }
             }
-            let mut bindings = Vec::with_capacity(reflection.num_buffers as usize);
-            for i in 0..reflection.num_buffers {
+            let mut bindings = Vec::with_capacity(reflection.buffers.len());
+            for i in 0..reflection.buffers.len() {
                 bindings.push(
                     vk::DescriptorSetLayoutBinding::default()
-                        .binding(i)
+                        .binding(i as u32)
                         .descriptor_count(1)
                         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                         .stage_flags(vk::ShaderStageFlags::COMPUTE),

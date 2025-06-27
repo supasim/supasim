@@ -189,12 +189,12 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                 ),
             });
         let mut layout_entries = Vec::new();
-        for i in 0..reflection.num_buffers {
+        for (i, &b) in reflection.buffers.iter().enumerate() {
             layout_entries.push(wgpu::BindGroupLayoutEntry {
-                binding: i,
+                binding: i as u32,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                    ty: wgpu::BufferBindingType::Storage { read_only: !b },
                     has_dynamic_offset: false,
                     min_binding_size: None,
                 },

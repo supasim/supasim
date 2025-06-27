@@ -328,7 +328,7 @@ struct InstanceState<B: hal::Backend> {
     /// The hal instance properties
     inner_properties: types::HalInstanceProperties,
     /// All created kernels
-    kernels: Mutex<Arena<SavedKernel<B>>>,
+    kernels: Mutex<Arena<KernelWeak<B>>>,
     /// All created kernel caches
     kernel_caches: Mutex<Arena<Option<KernelCacheWeak<B>>>>,
     /// All created buffers
@@ -444,7 +444,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             reflection_info,
             last_used: 0,
         });
-        k.inner_mut()?.id = s.kernels.lock().insert(SavedKernel::Loaded(k.downgrade()));
+        k.inner_mut()?.id = s.kernels.lock().insert(k.downgrade());
         Ok(k)
     }
     pub fn compile_slang_kernel(
@@ -571,7 +571,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             let mut used_buffers = HashSet::new();
             let mut used_buffer_ranges = Vec::new();
             let mut used_kernels = Vec::new();
-            let (dag, sync_info, src_buffer) =
+            let (dag, sync_info, resources) =
                 sync::assemble_dag(&mut recorder_inners, &mut used_kernels, &s)?;
             for (&buf_id, ranges) in &sync_info {
                 let b = s
@@ -607,7 +607,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                         &streams,
                         self.clone(),
                         &mut recorder,
-                        &src_buffer,
+                        &resources.temp_copy_buffer,
                     )?
                 }
                 types::SyncMode::Automatic => {
@@ -616,7 +616,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                         &streams,
                         self.clone(),
                         &mut recorder,
-                        &src_buffer,
+                        &resources.temp_copy_buffer,
                     )?
                 }
             };
@@ -630,13 +630,8 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                 bind_groups,
                 used_buffer_ranges: used_buffer_ranges.clone(),
                 used_buffers,
+                used_resources: resources,
             })?;
-            if let Some(src_buffer) = src_buffer {
-                s.sync_thread().append_finished_job(
-                    submission_idx,
-                    sync::SemaphoreFinishedJob::DestroyBuffer(src_buffer),
-                )?;
-            }
 
             for kernel in &used_kernels {
                 kernel.upgrade()?.inner_mut()?.last_used = submission_idx;
@@ -856,16 +851,11 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
             }
         }
         for (_, k) in std::mem::take(&mut *self.kernels.lock()) {
-            if let SavedKernel::Loaded(k) = k {
-                if let Ok(k) = k.upgrade() {
-                    if let Ok(mut k2) = k.inner_mut() {
-                        k2.destroy(self);
-                    }
-                    let _ = k._destroy();
+            if let Ok(k) = k.upgrade() {
+                if let Ok(mut k2) = k.inner_mut() {
+                    k2.destroy(self);
                 }
-            } else {
-                // This is a sanity check, not necessary
-                unreachable!()
+                let _ = k._destroy();
             }
         }
         unsafe {
@@ -892,16 +882,17 @@ impl<B: hal::Backend> std::fmt::Debug for Kernel<B> {
 }
 impl<B: hal::Backend> KernelInner<B> {
     pub fn destroy(&mut self, instance: &InstanceState<B>) {
-        *instance.kernels.lock().get_mut(self.id).unwrap() = SavedKernel::WaitingForDestroy {
-            inner: std::mem::take(&mut self.inner).unwrap(),
-        };
-        instance
-            .sync_thread()
-            .append_finished_job(
-                self.last_used,
-                sync::SemaphoreFinishedJob::DestroyKernel(self.id),
-            )
-            .unwrap();
+        let inner = std::mem::take(&mut self.inner).unwrap();
+        instance.kernels.lock().remove(self.id).unwrap();
+        unsafe {
+            instance
+                .inner
+                .lock()
+                .as_mut()
+                .unwrap()
+                .destroy_kernel(inner)
+                .unwrap();
+        }
     }
 }
 impl<B: hal::Backend> Drop for KernelInner<B> {
@@ -910,18 +901,6 @@ impl<B: hal::Backend> Drop for KernelInner<B> {
             if let Ok(instance) = self.instance.clone().inner() {
                 self.destroy(&instance);
             }
-        }
-    }
-}
-enum SavedKernel<B: hal::Backend> {
-    Loaded(KernelWeak<B>),
-    WaitingForDestroy { inner: B::Kernel },
-}
-impl<B: hal::Backend> SavedKernel<B> {
-    fn loaded_ref(&self) -> KernelWeak<B> {
-        match self {
-            Self::Loaded(l) => l.clone(),
-            Self::WaitingForDestroy { .. } => panic!(),
         }
     }
 }
@@ -1110,10 +1089,18 @@ impl<B: hal::Backend> CommandRecorder<B> {
         workgroup_dims: [u32; 3],
     ) -> SupaSimResult<B, ()> {
         self.check_destroyed()?;
-        if buffers.len() != kernel.inner()?.reflection_info.num_buffers as usize {
+        let reflection_info = kernel.inner()?.reflection_info.clone();
+        if buffers.len() != reflection_info.buffers.len() {
             return Err(SupaSimError::Other(anyhow!(
                 "Incorrect number of buffers passed to dispatch_kernel"
             )));
+        }
+        for (i, &b) in reflection_info.buffers.iter().enumerate() {
+            if buffers[i].needs_mut != b {
+                return Err(SupaSimError::Other(anyhow!(
+                    "Buffer at index {i} in dispatch_kernel does not have the correct mutability"
+                )));
+            }
         }
         for b in buffers {
             b.validate()?;
@@ -1401,14 +1388,15 @@ impl<B: hal::Backend> std::fmt::Debug for Buffer<B> {
 impl<B: hal::Backend> BufferInner<B> {
     fn destroy(&mut self, instance: &InstanceState<B>) {
         instance.buffers.lock().remove(self.id);
-
-        instance
-            .sync_thread()
-            .append_finished_job(
-                self.last_used,
-                sync::SemaphoreFinishedJob::DestroyBuffer(std::mem::take(&mut self.inner).unwrap()),
-            )
-            .unwrap();
+        unsafe {
+            instance
+                .inner
+                .lock()
+                .as_mut()
+                .unwrap()
+                .destroy_buffer(std::mem::take(&mut self.inner).unwrap())
+                .unwrap();
+        }
     }
 }
 impl<B: hal::Backend> Drop for BufferInner<B> {

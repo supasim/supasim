@@ -30,12 +30,27 @@ use types::{Dag, NodeIndex, SyncOperations, Walker};
 
 use crate::{
     BufferCommand, BufferCommandInner, BufferRange, BufferSlice, BufferUserId, BufferWeak,
-    CommandRecorderInner, InstanceState, KernelWeak, MapSupasimError, SavedKernel, SupaSimError,
+    CommandRecorderInner, InstanceState, KernelWeak, MapSupasimError, SupaSimError,
     SupaSimInstance, SupaSimResult,
 };
 use anyhow::anyhow;
 
 pub type CommandDag<B> = Dag<BufferCommand<B>>;
+
+pub struct SubmissionResources<B: hal::Backend> {
+    kernels: Vec<crate::Kernel<B>>,
+    buffers: Vec<crate::Buffer<B>>,
+    pub temp_copy_buffer: Option<B::Buffer>,
+}
+impl<B: hal::Backend> Default for SubmissionResources<B> {
+    fn default() -> Self {
+        Self {
+            kernels: Vec::new(),
+            buffers: Vec::new(),
+            temp_copy_buffer: None,
+        }
+    }
+}
 
 pub enum HalCommandBuilder {
     CopyBuffer {
@@ -110,10 +125,11 @@ pub fn assemble_dag<B: hal::Backend>(
     (
         CommandDag<B>,
         HashMap<Index, Vec<BufferRange>>,
-        Option<B::Buffer>,
+        SubmissionResources<B>,
     ),
 > {
     let mut buffers_tracker: HashMap<Index, Vec<(BufferRange, usize)>> = HashMap::new();
+    let mut resources = SubmissionResources::default();
 
     let mut commands = Vec::new();
     let mut src_buffer_len = 0;
@@ -134,6 +150,12 @@ pub fn assemble_dag<B: hal::Backend>(
 
     let mut dag = Dag::new();
     for cmd in commands {
+        for b in &cmd.buffers {
+            resources.buffers.push(b.buffer.clone());
+        }
+        if let BufferCommandInner::KernelDispatch { kernel, .. } = &cmd.inner {
+            resources.kernels.push(kernel.clone());
+        }
         dag.add_node(cmd);
     }
 
@@ -179,7 +201,7 @@ pub fn assemble_dag<B: hal::Backend>(
         .into_iter()
         .map(|(key, value)| (key, value.iter().map(|a| a.0).collect()))
         .collect();
-    let src_buffer = if src_buffer_len > 0 {
+    resources.temp_copy_buffer = if src_buffer_len > 0 {
         let mut buf = unsafe {
             instance
                 .inner
@@ -211,7 +233,7 @@ pub fn assemble_dag<B: hal::Backend>(
     } else {
         None
     };
-    Ok((dag, out_map, src_buffer))
+    Ok((dag, out_map, resources))
 }
 #[allow(clippy::type_complexity)]
 pub fn record_dag<B: hal::Backend>(
@@ -395,7 +417,6 @@ pub fn record_command_streams<B: hal::Backend>(
             .lock()
             .get(bg.kernel_idx)
             .ok_or(SupaSimError::AlreadyDestroyed("Kernel".to_owned()))?
-            .loaded_ref()
             .upgrade()?;
         let mut kernel = _k.inner_mut()?;
         let mut resources_a = Vec::new();
@@ -473,7 +494,6 @@ pub fn record_command_streams<B: hal::Backend>(
                             .lock()
                             .get(*kernel)
                             .ok_or(SupaSimError::AlreadyDestroyed("Kernel".to_owned()))?
-                            .loaded_ref()
                             .upgrade()?,
                     );
                 }
@@ -656,39 +676,17 @@ pub struct GpuSubmissionInfo<B: hal::Backend> {
     pub bind_groups: Vec<(B::BindGroup, Index)>,
     pub used_buffer_ranges: Vec<(BufferUserId, BufferWeak<B>)>,
     pub used_buffers: Vec<BufferWeak<B>>,
+    pub used_resources: SubmissionResources<B>,
 }
 /// A job for the CPU to run when some GPU work has completed or immediately, without ideally blocking for long. This won't necessarily run before other submissions
 pub enum SemaphoreFinishedJob<B: hal::Backend> {
-    DestroyBuffer(B::Buffer),
-    DestroyKernel(Index),
+    Dummy(PhantomData<B>),
 }
 impl<B: hal::Backend> SemaphoreFinishedJob<B> {
-    pub fn run(self, instance: &InstanceState<B>) -> SupaSimResult<B, ()> {
+    pub fn run(self, _instance: &InstanceState<B>) -> SupaSimResult<B, ()> {
         match self {
-            Self::DestroyBuffer(b) => unsafe {
-                instance
-                    .inner
-                    .lock()
-                    .as_mut()
-                    .unwrap()
-                    .destroy_buffer(b)
-                    .map_supasim()?;
-            },
-            Self::DestroyKernel(k) => unsafe {
-                let k = instance.kernels.lock().remove(k).unwrap();
-                match k {
-                    SavedKernel::WaitingForDestroy { inner } => instance
-                        .inner
-                        .lock()
-                        .as_mut()
-                        .unwrap()
-                        .destroy_kernel(inner)
-                        .map_supasim()?,
-                    _ => unreachable!(),
-                }
-            },
+            Self::Dummy(_) => unreachable!(),
         }
-        Ok(())
     }
 }
 /// A job for the CPU to run in between GPU submissions
@@ -1045,7 +1043,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                         logic.shared.0.lock().next_job = next_submission_idx;
                         logic.shared.1.notify_all();
                     }
-                    Work::GpuSubmission(item) => {
+                    Work::GpuSubmission(mut item) => {
                         if let Some(s) = submits[submit_idx].wait_semaphore {
                             unsafe {
                                 s.signal().map_supasim()?;
@@ -1082,34 +1080,36 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) -> Result<()
                                 }
                             }
                         }
+                        item.used_resources.buffers.clear();
+                        item.used_resources.kernels.clear();
+                        if let Some(b) = std::mem::take(&mut item.used_resources.temp_copy_buffer) {
+                            unsafe {
+                                logic
+                                    .instance
+                                    .inner
+                                    .lock()
+                                    .as_mut()
+                                    .unwrap()
+                                    .destroy_buffer(b)
+                                    .map_supasim()?;
+                            }
+                        }
                         for (bg, kernel) in item.bind_groups {
                             // TODO: fix issue here if kernel is already destroyed or is destroyed during this
-                            match logic.instance.kernels.lock().get_mut(kernel).unwrap() {
-                                SavedKernel::Loaded(k) => {
-                                    let kernel = k.upgrade()?;
-                                    let mut _k = kernel.inner_mut()?;
-                                    let k = _k.inner.as_mut().unwrap();
-                                    unsafe {
-                                        logic
-                                            .instance
-                                            .inner
-                                            .lock()
-                                            .as_mut()
-                                            .unwrap()
-                                            .destroy_bind_group(k, bg)
-                                            .map_supasim()?;
-                                    }
-                                }
-                                SavedKernel::WaitingForDestroy { inner } => unsafe {
-                                    logic
-                                        .instance
-                                        .inner
-                                        .lock()
-                                        .as_mut()
-                                        .unwrap()
-                                        .destroy_bind_group(inner, bg)
-                                        .map_supasim()?;
-                                },
+                            let mut lock = logic.instance.kernels.lock();
+                            let k = lock.get_mut(kernel).unwrap();
+                            let kernel = k.upgrade()?;
+                            let mut _k = kernel.inner_mut()?;
+                            let k = _k.inner.as_mut().unwrap();
+                            unsafe {
+                                logic
+                                    .instance
+                                    .inner
+                                    .lock()
+                                    .as_mut()
+                                    .unwrap()
+                                    .destroy_bind_group(k, bg)
+                                    .map_supasim()?;
                             }
                         }
                     }

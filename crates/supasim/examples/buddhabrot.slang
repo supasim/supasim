@@ -56,7 +56,7 @@ void Main(uint3 threadId: SV_DispatchThreadID, ParameterBlock<Parameters> parame
 
     float2 pos = float2(0.0);
 
-    const int MAX_ITERATIONS = 512;
+    const int MAX_ITERATIONS = 4096;
 
     int num = 0;
     if (dot(pos, pos) <= 4)

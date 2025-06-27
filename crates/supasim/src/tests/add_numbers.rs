@@ -88,7 +88,7 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
         })
         .unwrap();
     // Reflection isn't working yet so this is a temporary workaround
-    reflection_info.num_buffers = 3;
+    reflection_info.buffers = vec![false, false, true];
     let kernel = instance
         .compile_raw_kernel(&spirv, reflection_info, cache.as_ref())
         .unwrap();

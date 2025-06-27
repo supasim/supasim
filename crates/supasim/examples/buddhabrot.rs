@@ -122,7 +122,7 @@ impl AppState {
                 &spirv,
                 supasim::KernelReflectionInfo {
                     workgroup_size: [32, 32, 1],
-                    num_buffers: 2,
+                    buffers: vec![false, true],
                 },
                 None,
             )

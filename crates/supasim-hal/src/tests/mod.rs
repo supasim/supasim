@@ -98,8 +98,8 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             })
             .unwrap();
         // Temporary fix for no reflection
-        add_reflection.num_buffers = 3;
-        double_reflection.num_buffers = 1;
+        add_reflection.buffers = vec![false, false, true];
+        double_reflection.buffers = vec![true];
         drop(kernel_compiler);
         let mut kernel = instance.compile_kernel(&add_code, &add_reflection, cache.as_mut())?;
         let mut kernel2 =

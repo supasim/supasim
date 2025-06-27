@@ -191,7 +191,8 @@ pub unsafe fn to_static_lifetime_mut<T>(r: &mut T) -> &'static mut T {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct KernelReflectionInfo {
     pub workgroup_size: [u32; 3],
-    pub num_buffers: u32,
+    // bool is for whether it is writeable
+    pub buffers: Vec<bool>,
 }
 
 pub type Dag<T> = daggy::Dag<T, ()>;
