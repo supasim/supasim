@@ -77,20 +77,18 @@ impl<B: hal::Backend> AppState<B> {
         } else {
             wgpu::Features::VULKAN_EXTERNAL_MEMORY_FD
         };
-        let adapter = match wgpu_instance
-            .enumerate_adapters(wgpu::Backends::VULKAN)
-            .into_iter()
-            .find(|a| a.features().contains(required_features))
-        {
-            Some(adapter) => adapter,
-            None => {
-                panic!("No wpgu adpters have export memory property");
-            }
-        };
+        let adapter = wgpu_instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: Some(&surface),
+            })
+            .await
+            .unwrap();
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features,
+                required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::defaults(),
                 memory_hints: Default::default(),
                 trace: wgpu::Trace::Off,
@@ -581,6 +579,7 @@ impl<B: hal::Backend> ApplicationHandler<AppState<B>> for App<B> {
         let window_attributes = Window::default_attributes();
 
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
+        window.set_title("SupaSim Buddhabrot Demo");
         let i = std::mem::take(&mut self.instance).unwrap();
         self.state = Some(pollster::block_on(AppState::new(window, i)));
     }

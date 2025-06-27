@@ -97,6 +97,12 @@ impl Wgpu {
         if unified_memory {
             features |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
         }
+        if adapter.features().contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_FD) {
+            features |= wgpu::Features::VULKAN_EXTERNAL_MEMORY_FD;
+        }
+        if adapter.features().contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32) {
+            features |= wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32;
+        }
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: None,
