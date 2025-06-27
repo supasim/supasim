@@ -1,6 +1,5 @@
 //! Lots of this code is just stolen from https://sotrh.github.io/learn-wgpu/ lol
 
-use hal::WgpuDeviceExportInfo;
 use rand::random;
 use std::sync::Arc;
 use supasim::{SupaSimInstance, wgpu};
@@ -33,13 +32,14 @@ pub struct AppState {
     supasim_buffer: supasim::Buffer<Backend>,
     supasim_width_height_buffer: supasim::Buffer<Backend>,
     kernel: supasim::Kernel<Backend>,
-    features: wgpu::Features,
+    _features: wgpu::Features,
     just_resized: bool,
 
     width_height_buffer: wgpu::Buffer,
     render_uniform_bind_group: wgpu::BindGroup,
     max_uniform_bind_group: wgpu::BindGroup,
     buffer_bind_group_layout: wgpu::BindGroupLayout,
+    wgpu_device_buffer: wgpu::Buffer,
 
     max_pipeline: wgpu::ComputePipeline,
     render_pipeline: wgpu::RenderPipeline,
@@ -311,7 +311,8 @@ impl AppState {
             ],
         });
 
-        let supasim_buffer = Self::create_buffer(config.width, config.height, &instance);
+        let (supasim_buffer, wgpu_device_buffer) =
+            Self::create_buffer(config.width, config.height, &instance, &device);
 
         let supasim_width_height_buffer = instance
             .create_buffer(&supasim::BufferDescriptor {
@@ -337,7 +338,7 @@ impl AppState {
             window,
             instance,
             supasim_buffer,
-            features: required_features,
+            _features: required_features,
             just_resized: true,
             kernel,
             supasim_width_height_buffer,
@@ -348,15 +349,17 @@ impl AppState {
             render_uniform_bind_group,
             max_uniform_bind_group,
             buffer_bind_group_layout,
+            wgpu_device_buffer,
         }
     }
     pub fn create_buffer(
         width: u32,
         height: u32,
         instance: &SupaSimInstance<Backend>,
-    ) -> supasim::Buffer<Backend> {
+        device: &wgpu::Device,
+    ) -> (supasim::Buffer<Backend>, wgpu::Buffer) {
         let size = width as u64 * height as u64 * 4;
-        instance
+        let supasim_buffer = instance
             .create_buffer(&supasim::BufferDescriptor {
                 size,
                 buffer_type: supasim::BufferType::Gpu,
@@ -364,7 +367,14 @@ impl AppState {
                 priority: 1.0,
                 can_export: true,
             })
-            .unwrap()
+            .unwrap();
+        let device_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        (supasim_buffer, device_buffer)
     }
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
@@ -373,8 +383,10 @@ impl AppState {
             self.surface.configure(&self.device, &self.config);
             self.is_surface_configured = true;
 
-            let supasim_buffer = Self::create_buffer(width, height, &self.instance);
+            let (supasim_buffer, wgpu_device_buffer) =
+                Self::create_buffer(width, height, &self.instance, &self.device);
             self.supasim_buffer = supasim_buffer;
+            self.wgpu_device_buffer = wgpu_device_buffer;
             self.just_resized = true;
             self.queue.write_buffer(
                 &self.width_height_buffer,
@@ -462,15 +474,9 @@ impl AppState {
                 false,
             )
             .unwrap();
-        let readable = access.readable::<u32>().unwrap();
-        // Count is always zero :(
-        let mut count = 0;
-        for &val in readable {
-            if val != 0 {
-                count += 1;
-            }
-        }
-        println!("Count: {count}");
+        let readable = access.readable::<u8>().unwrap();
+        self.queue
+            .write_buffer(&self.wgpu_device_buffer, 0, readable);
     }
 
     pub fn render(&mut self) -> bool {
@@ -486,31 +492,13 @@ impl AppState {
         let output_view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let download_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: self.config.width as u64 * self.config.height as u64 * 4,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let shared_buffer = unsafe {
-            self.supasim_buffer
-                .export_to_wgpu(WgpuDeviceExportInfo {
-                    device: self.device.clone(),
-                    features: self.features,
-                    backend: wgpu::Backend::Vulkan,
-                    usages: wgpu::BufferUsages::STORAGE
-                        | wgpu::BufferUsages::COPY_DST
-                        | wgpu::BufferUsages::COPY_SRC,
-                })
-                .unwrap()
-        };
         let buffer_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.buffer_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &shared_buffer,
+                    buffer: &self.wgpu_device_buffer,
                     offset: 0,
                     size: None,
                 }),
@@ -561,27 +549,10 @@ impl AppState {
             render_pass.set_bind_group(1, Some(&buffer_bind_group), &[]);
             render_pass.draw(0..6, 0..1);
         }
-        encoder.copy_buffer_to_buffer(
-            &shared_buffer,
-            0,
-            &download_buffer,
-            0,
-            self.config.width as u64 * self.config.height as u64 * 4,
-        );
 
         self.queue.submit([encoder.finish()]);
-        download_buffer.map_async(wgpu::MapMode::Read, .., |_| ());
         output.present();
         self.device.poll(wgpu::PollType::Wait).unwrap();
-        let view = download_buffer.get_mapped_range(..);
-        let view_as_u32 = bytemuck::cast_slice::<u8, u32>(&view);
-        let mut count = 0;
-        for &val in view_as_u32 {
-            if val > 0 {
-                count += 1;
-            }
-        }
-        println!("Count wgpu: {count}");
         true
     }
 }
