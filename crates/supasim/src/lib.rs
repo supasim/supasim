@@ -32,7 +32,7 @@ mod tests;
 mod sync;
 
 use anyhow::anyhow;
-use hal::BackendInstance as _;
+use hal::{BackendInstance as _, CommandRecorder as _};
 use parking_lot::{Condvar, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::cell::UnsafeCell;
 use std::collections::{HashMap, HashSet};
@@ -546,7 +546,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
     }
     pub fn submit_commands(
         &self,
-        recorders: &mut [CommandRecorder<B>],
+        recorders: &mut [crate::CommandRecorder<B>],
     ) -> SupaSimResult<B, WaitHandle<B>> {
         self.check_destroyed()?;
         let submission_idx;
@@ -563,7 +563,10 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                 recorder_inners.push(&mut **r);
             }
 
-            let mut recorder = if let Some(r) = s.hal_command_recorders.lock().pop() {
+            let mut recorder = if let Some(mut r) = s.hal_command_recorders.lock().pop() {
+                unsafe {
+                    r.clear(s.inner.lock().as_mut().unwrap()).map_supasim()?;
+                }
                 r
             } else {
                 unsafe { s.inner.lock().as_mut().unwrap().create_recorder() }.map_supasim()?

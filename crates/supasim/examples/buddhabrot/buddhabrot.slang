@@ -20,14 +20,30 @@ struct InputOptions
 {
     uint32_t imageWidth;
     uint32_t imageHeight;
+    uint32_t iterationSetIndex;
+    uint32_t skipLastPoints;
+    uint64_t workgroupDim;
     uint64_t randomSeed;
+}
+struct TempData
+{
+    float2 position;
+    float2 c;
+    int32_t numIterations;
+    int32_t hasCompleted;
 }
 
 struct Parameters
 {
+    [[vk::binding(0, 0)]]
     StructuredBuffer<InputOptions> imageSize;
+    [[vk::binding(1, 0)]]
     RWStructuredBuffer<Atomic<uint32_t>> buffer;
+    [[vk::binding(2, 0)]]
+    RWStructuredBuffer<TempData> tempBuffer;
 }
+
+Parameters parameters;
 
 // Simple hash function to generate a uint from a seed and index
 uint Hash(uint seed, uint value)
@@ -49,57 +65,69 @@ float UIntToFloat01(uint x)
     return (x & 0x00FFFFFF) / 16777216.0;
 }
 
+static const int ITERATIONS_PER = 512;
+
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void Main(uint3 threadId: SV_DispatchThreadID, ParameterBlock<Parameters> parameters)
+void Run(uint3 id: SV_DispatchThreadID)
 {
     InputOptions options = parameters.imageSize[0];
-    if (threadId.x >= options.imageWidth ||
-        threadId.y >= options.imageHeight)
+    uint3 totalSize = uint3(16, 16, 1) * (uint)options.workgroupDim;
+    uint index = id.y * totalSize.x + id.x;
+
+    int iterationSetIndex = (int)parameters.imageSize[0].iterationSetIndex;
+    TempData data = parameters.tempBuffer[index];
+
+    if (iterationSetIndex == 0)
     {
-        return;
+
+        uint64_t seed = parameters.imageSize[0].randomSeed;
+
+        uint seedX = Hash(uint(seed), index * 2);
+        uint seedY = Hash(uint(seed), index * 2 + 1);
+
+        float cx = UIntToFloat01(seedX) * 4.0 - 2.0;
+        float cy = UIntToFloat01(seedY) * 4.0 - 2.0;
+
+        data.c = float2(cx, cy);
+        data.hasCompleted = 0;
+        data.numIterations = 0;
+        data.position = float2(0.0);
     }
 
-    uint index = threadId.y * options.imageWidth + threadId.x;
-
-    uint seedX = Hash(uint(options.randomSeed), index * 2);
-    uint seedY = Hash(uint(options.randomSeed), index * 2 + 1);
-
-    float cx = UIntToFloat01(seedX) * 4.0 - 2.0;
-    float cy = UIntToFloat01(seedY) * 4.0 - 2.0;
-
-    float2 c = float2(cx, cy);
-
-    float2 pos = float2(0.0);
-
-    // Setting this too high can result in the GPU killing it and the process
-    // I don't have a good workaround. On my system 2048 is fine but 4096 isn't.
-    // 512 is set here to hopefully make most systems able to run it.
-    const int MAX_ITERATIONS = 512;
-
-    int num = 0;
-    // I have removed a conditional check for starting outside of the exit circle.
-    // This check would darken the areas around the fractal slightly, making it seem
-    // less cluttered, but only if there wasn't already something being subtracted from num.
-    // Unfortunately, subtracting 1 makes it look bad in other ways.
-    for (int i = 0; i < MAX_ITERATIONS; i++)
+    for (int i = 0; i < ITERATIONS_PER && data.hasCompleted == 0; i++)
     {
-        pos = square(pos) + c;
-        if (dot(pos, pos) > 4)
+        data.position = square(data.position) + data.c;
+        if (dot(data.position, data.position) > 4)
         {
-            // This makes it no longer precisely a buddhabrot render, but I think it looks cooler and less cluttered
-            num = i - 10;
-            break;
+            data.hasCompleted = 1;
+            data.numIterations = iterationSetIndex * ITERATIONS_PER + i + 1;
         }
     }
-    pos = float2(0.0);
-    for (int i = 0; i < num; i++)
+    parameters.tempBuffer[index] = data;
+}
+
+[shader("compute")]
+[numthreads(16, 16, 1)]
+void Finalize(uint3 id: SV_DispatchThreadID)
+{
+    InputOptions options = parameters.imageSize[0];
+    uint3 totalSize = uint3(16, 16, 1) * (uint)options.workgroupDim;
+    uint index = id.y * totalSize.x + id.x;
+
+    TempData data = parameters.tempBuffer[index];
+    if (options.iterationSetIndex == 0)
     {
-        pos = square(pos) + c;
-        // Flip the x and y here so Buddhabrot is "sitting up"
-        int index = getPixelIndex(float2(pos.y, pos.x), parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
-        parameters.buffer[index].add(1);
+        data.hasCompleted = false;
+        data.position = float2(0.0);
     }
+    for (int i = 0; i < data.numIterations - options.skipLastPoints; i++)
+    {
+        data.position = square(data.position) + data.c;
+        int pixelIndex = getPixelIndex(float2(data.position.y, data.position.x), parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
+        parameters.buffer[pixelIndex].add(1);
+    }
+    parameters.tempBuffer[index] = data;
 }
 
 float2 square(float2 pos)

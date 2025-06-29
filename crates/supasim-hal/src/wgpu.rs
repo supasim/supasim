@@ -309,7 +309,9 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         let encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        Ok(WgpuCommandRecorder::Unrecorded(encoder))
+        Ok(WgpuCommandRecorder {
+            inner: Some(encoder),
+        })
     }
 
     #[tracing::instrument]
@@ -322,11 +324,8 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             new_recorders.push(unsafe { self.create_recorder()? });
         }
         let idx = self.queue.submit(infos.iter_mut().map(|a| {
-            let thing = std::mem::replace(a.command_recorder, new_recorders.pop().unwrap());
-            match thing {
-                WgpuCommandRecorder::Unrecorded(a) => a.finish(),
-                WgpuCommandRecorder::Recorded(a) => a,
-            }
+            let thing = std::mem::take(&mut a.command_recorder.inner).unwrap();
+            thing.finish()
         }));
         for info in infos {
             if let Some(signal) = info.signal_semaphore {
@@ -605,9 +604,8 @@ impl Buffer<Wgpu> for WgpuBuffer {
     }
 }
 #[derive(Debug)]
-pub enum WgpuCommandRecorder {
-    Unrecorded(wgpu::CommandEncoder),
-    Recorded(wgpu::CommandBuffer),
+pub struct WgpuCommandRecorder {
+    inner: Option<wgpu::CommandEncoder>,
 }
 impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
     #[tracing::instrument]
@@ -616,10 +614,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
         instance: &mut <Wgpu as Backend>::Instance,
         commands: &mut [BufferCommand<Wgpu>],
     ) -> Result<(), <Wgpu as Backend>::Error> {
-        let r = match self {
-            Self::Unrecorded(r) => r,
-            _ => unreachable!(),
-        };
+        let r = self.inner.as_mut().unwrap();
         for command in commands {
             match command {
                 BufferCommand::CopyBuffer {
@@ -657,6 +652,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                         workgroup_dims[1],
                         workgroup_dims[2],
                     );
+                    drop(pass);
                 }
                 BufferCommand::MemoryTransfer { .. } => todo!(),
                 BufferCommand::UpdateBindGroup { .. } => {

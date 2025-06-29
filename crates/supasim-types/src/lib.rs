@@ -191,7 +191,7 @@ pub unsafe fn to_static_lifetime_mut<T>(r: &mut T) -> &'static mut T {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct KernelReflectionInfo {
     pub workgroup_size: [u32; 3],
-    // bool is for whether it is writeable
+    /// bool is for whether it is writeable
     pub buffers: Vec<bool>,
 }
 

@@ -260,6 +260,10 @@ impl Vulkan {
                         .map(|a| a.extension_name_as_c_str().unwrap())
                         .collect();
                     let mut extension_spirv_version = types::SpirvVersion::V1_0;
+                    let caps = instance.get_physical_device_features(phyd);
+                    if caps.shader_int64 == 0 {
+                        continue;
+                    }
                     for extension in ext {
                         if extension.1 > api_version && !extensions.contains(&extension.0) {
                             continue 'outer;

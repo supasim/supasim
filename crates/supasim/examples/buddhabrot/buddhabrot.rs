@@ -34,6 +34,9 @@ use winit::{
 struct BuddhabrotInputOptions {
     width: u32,
     height: u32,
+    iteration_set_index: u32,
+    skip_last_points: u32,
+    workgroup_dim: u64,
     random_seed: u64,
 }
 
@@ -46,8 +49,10 @@ pub struct AppState<B: hal::Backend> {
     window: Arc<Window>,
     instance: SupaSimInstance<B>,
     supasim_buffer: supasim::Buffer<B>,
+    supasim_temp_buffer: supasim::Buffer<B>,
     supasim_width_height_buffer: supasim::Buffer<B>,
-    kernel: supasim::Kernel<B>,
+    run_kernel: supasim::Kernel<B>,
+    finalize_kernel: supasim::Kernel<B>,
     _features: wgpu::Features,
     just_resized: bool,
 
@@ -61,9 +66,42 @@ pub struct AppState<B: hal::Backend> {
     render_pipeline: wgpu::RenderPipeline,
 
     workgroup_dim: u32,
+    iterations: u32,
+    skip_last_points: u32,
 }
 impl<B: hal::Backend> AppState<B> {
     pub async fn new(window: Arc<Window>, hal_instance: B::Instance) -> Self {
+        const DEFAULT_WORKGROUP_DIM: u32 = 4;
+        let workgroup_dim = match std::env::var("WORKGROUP_DIM") {
+            Ok(w) => match w.parse::<u32>() {
+                Ok(v) => v.clamp(1, 16),
+                Err(_) => DEFAULT_WORKGROUP_DIM,
+            },
+            Err(_) => DEFAULT_WORKGROUP_DIM,
+        };
+        println!(
+            "Running with {workgroup_dim}x{workgroup_dim}x{workgroup_dim} workgroup dimensions"
+        );
+        const DEFAULT_ITERATION_COUNT: u32 = 4;
+        // The number of sets of 512 iterations
+        let iterations = match std::env::var("ITERATION_SETS") {
+            Ok(w) => match w.parse::<u32>() {
+                Ok(v) => v.max(1),
+                Err(_) => DEFAULT_ITERATION_COUNT,
+            },
+            Err(_) => DEFAULT_ITERATION_COUNT,
+        };
+        println!("Rendering with {} iterations", 512 * iterations);
+        const DEFAULT_SKIP_LAST_POINTS: u32 = 0;
+        let skip_last_points = match std::env::var("SKIP_LAST_POINTS") {
+            Ok(w) => match w.parse::<u32>() {
+                Ok(v) => v,
+                Err(_) => DEFAULT_SKIP_LAST_POINTS,
+            },
+            Err(_) => DEFAULT_SKIP_LAST_POINTS,
+        };
+        println!("Skipping last {skip_last_points} points");
+
         let size = window.inner_size();
 
         let wgpu_instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -116,30 +154,36 @@ impl<B: hal::Backend> AppState<B> {
         let global_state = kernels::GlobalState::new_from_env().unwrap();
         let mut spirv = Vec::new();
         let instance = SupaSimInstance::from_hal(hal_instance);
-        global_state
-            .compile_kernel(supasim::kernels::KernelCompileOptions {
-                target: instance.properties().unwrap().kernel_lang,
-                source: kernels::KernelSource::Memory(include_bytes!("buddhabrot.slang")),
-                dest: kernels::KernelDest::Memory(&mut spirv),
-                entry: "Main",
-                include: None,
-                fp_mode: kernels::KernelFpMode::Precise,
-                opt_level: kernels::OptimizationLevel::Standard,
-                stability: kernels::StabilityGuarantee::Stable,
-                minify: true,
-            })
-            .unwrap();
+        let workgroup_size = [16, 16, 1];
+        let mut compile_kernel = |entry: &str| {
+            spirv.clear();
+            global_state
+                .compile_kernel(supasim::kernels::KernelCompileOptions {
+                    target: instance.properties().unwrap().kernel_lang,
+                    source: kernels::KernelSource::Memory(include_bytes!("buddhabrot.slang")),
+                    dest: kernels::KernelDest::Memory(&mut spirv),
+                    entry,
+                    include: None,
+                    fp_mode: kernels::KernelFpMode::Precise,
+                    opt_level: kernels::OptimizationLevel::Standard,
+                    stability: kernels::StabilityGuarantee::Stable,
+                    minify: true,
+                })
+                .unwrap();
 
-        let kernel = instance
-            .compile_raw_kernel(
-                &spirv,
-                supasim::KernelReflectionInfo {
-                    workgroup_size: [32, 32, 1],
-                    buffers: vec![false, true],
-                },
-                None,
-            )
-            .unwrap();
+            instance
+                .compile_raw_kernel(
+                    &spirv,
+                    supasim::KernelReflectionInfo {
+                        workgroup_size,
+                        buffers: vec![false, true, true],
+                    },
+                    None,
+                )
+                .unwrap()
+        };
+        let run_kernel = compile_kernel("Run");
+        let finalize_kernel = compile_kernel("Finalize");
 
         let width_height_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -326,27 +370,34 @@ impl<B: hal::Backend> AppState<B> {
             ],
         });
 
+        let supasim_temp_buffer = instance
+            .create_buffer(&supasim::BufferDescriptor {
+                size: 24
+                    * workgroup_size[0] as u64
+                    * workgroup_size[1] as u64
+                    * workgroup_size[2] as u64
+                    * workgroup_dim as u64
+                    * workgroup_dim as u64
+                    * workgroup_dim as u64,
+                buffer_type: supasim::BufferType::Gpu,
+                contents_align: 8,
+                priority: 1.0,
+                can_export: false,
+            })
+            .unwrap();
+
         let (supasim_buffer, wgpu_device_buffer) =
             Self::create_buffer(config.width, config.height, &instance, &device);
 
         let supasim_width_height_buffer = instance
             .create_buffer(&supasim::BufferDescriptor {
-                size: 16,
+                size: size_of::<BuddhabrotInputOptions>() as u64,
                 buffer_type: supasim::BufferType::Gpu,
                 contents_align: 4,
                 priority: 1.0,
                 can_export: false,
             })
             .unwrap();
-
-        const DEFAULT_WORKGROUP_DIM: u32 = 4;
-        let workgroup_dim = match std::env::var("WORKGROUP_DIM") {
-            Ok(w) => match w.parse::<u32>() {
-                Ok(v) => v.clamp(1, 16),
-                Err(_) => DEFAULT_WORKGROUP_DIM,
-            },
-            Err(_) => DEFAULT_WORKGROUP_DIM,
-        };
 
         // Layouts:
         // Buffer bind group - just one buffer, the main imported buffer
@@ -364,7 +415,8 @@ impl<B: hal::Backend> AppState<B> {
             supasim_buffer,
             _features: required_features,
             just_resized: true,
-            kernel,
+            run_kernel,
+            finalize_kernel,
             supasim_width_height_buffer,
             max_pipeline,
             render_pipeline,
@@ -376,6 +428,9 @@ impl<B: hal::Backend> AppState<B> {
             wgpu_device_buffer,
 
             workgroup_dim,
+            supasim_temp_buffer,
+            iterations,
+            skip_last_points,
         }
     }
     pub fn create_buffer(
@@ -434,28 +489,54 @@ impl<B: hal::Backend> AppState<B> {
                 .unwrap();
             self.just_resized = false;
         }
+
+        let workgroup_dims = [self.workgroup_dim, self.workgroup_dim, self.workgroup_dim];
+        let buffers = [
+            &self.supasim_width_height_buffer.slice(.., false),
+            &self.supasim_buffer.slice(.., true),
+            &self.supasim_temp_buffer.slice(.., true),
+        ];
         let random_seed = random::<u64>();
-        recorder
-            .write_buffer(
-                &self.supasim_width_height_buffer,
-                0,
-                &[BuddhabrotInputOptions {
-                    width: self.config.width,
-                    height: self.config.height,
-                    random_seed,
-                }],
-            )
-            .unwrap();
-        recorder
-            .dispatch_kernel(
-                &self.kernel,
-                &[
-                    &self.supasim_width_height_buffer.slice(.., false),
-                    &self.supasim_buffer.slice(.., true),
-                ],
-                [self.workgroup_dim, self.workgroup_dim, self.workgroup_dim],
-            )
-            .unwrap();
+        for i in 0..self.iterations {
+            // Update set iteration index
+            recorder
+                .write_buffer(
+                    &self.supasim_width_height_buffer,
+                    0,
+                    &[BuddhabrotInputOptions {
+                        width: self.config.width,
+                        height: self.config.height,
+                        random_seed,
+                        iteration_set_index: i,
+                        skip_last_points: self.skip_last_points,
+                        workgroup_dim: self.workgroup_dim as u64,
+                    }],
+                )
+                .unwrap();
+            recorder
+                .dispatch_kernel(&self.run_kernel, &buffers, workgroup_dims)
+                .unwrap();
+        }
+        for i in 0..self.iterations {
+            // Update set iteration index
+            recorder
+                .write_buffer(
+                    &self.supasim_width_height_buffer,
+                    0,
+                    &[BuddhabrotInputOptions {
+                        width: self.config.width,
+                        height: self.config.height,
+                        random_seed,
+                        iteration_set_index: i,
+                        skip_last_points: self.skip_last_points,
+                        workgroup_dim: self.workgroup_dim as u64,
+                    }],
+                )
+                .unwrap();
+            recorder
+                .dispatch_kernel(&self.finalize_kernel, &buffers, workgroup_dims)
+                .unwrap();
+        }
         let download_buffer = self
             .instance
             .create_buffer(&supasim::BufferDescriptor {

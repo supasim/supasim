@@ -1,22 +1,33 @@
-struct InputOptions {
+struct InputOptions
+{
     float gravityStrength;
     uint32_t binSize;
     float chunkWidth;
+    uint32_t3 numChunks;
+    // Should be very large for high precisions
+    float accelerationPrecisionFactor;
 }
-struct Particle {
+struct Particle
+{
     float3 position;
     float3 velocity;
-    // Velocity may be used directly for some calculations
-    Atomic<float3> acceleration;
+    // Accelerations, as velocity may be used directly for some calculations. These are stored as quantized ints
+    // so that they can be used with fast and widely supported integer atomics
+    Atomic<int> ax;
+    Atomic<int> ay;
+    Atomic<int> az;
     uint32_t binIndex;
 }
-struct ChunkInfo {
+struct ChunkInfo
+{
+    // Lock is used to set the bin index
     Atomic<uint32_t> numParticles;
     Atomic<uint32_t> firstBinIndex;
-    Atomic<bool> lock;
+    Atomic<uint32_t> lock;
 }
 
-struct Parameters {
+struct Parameters
+{
     StructuredBuffer<InputOptions> options;
     RWStructuredBuffer<Atomic<uint32_t>> numParticles;
     RWStructuredBuffer<Particle> particleBuffer;
