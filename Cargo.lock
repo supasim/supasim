@@ -1035,18 +1035,20 @@ dependencies = [
 
 [[package]]
 name = "naga"
-version = "25.0.1"
+version = "26.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b977c445f26e49757f9aca3631c3b8b836942cb278d69a92e7b80d3b24da632"
+checksum = "916cbc7cb27db60be930a4e2da243cf4bc39569195f22fd8ee419cd31d5b662c"
 dependencies = [
  "arrayvec",
  "bit-set",
  "bitflags 2.9.1",
+ "cfg-if",
  "cfg_aliases",
  "codespan-reporting",
  "half",
  "hashbrown",
  "indexmap",
+ "libm",
  "log",
  "num-traits",
  "once_cell",
@@ -1469,7 +1471,6 @@ dependencies = [
  "fixedbitset",
  "hashbrown",
  "indexmap",
- "serde",
 ]
 
 [[package]]
@@ -1967,7 +1968,7 @@ dependencies = [
  "bytemuck",
  "hassle-rs",
  "libc",
- "naga 25.0.1",
+ "naga 26.0.0",
  "rand",
  "serde_json",
  "supasim-slang",
