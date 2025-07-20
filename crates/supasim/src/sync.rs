@@ -852,6 +852,9 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
     let mut semaphores = Vec::new();
     let acquire_semaphore = |sems: &mut Vec<B::Semaphore>| -> SupaSimResult<B, B::Semaphore> {
         Ok(if let Some(s) = sems.pop() {
+            unsafe {
+                s.reset().map_supasim()?;
+            }
             s
         } else {
             unsafe {
@@ -1088,7 +1091,6 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                             }
                         }
                         for (bg, kernel) in item.bind_groups {
-                            // TODO: fix issue here if kernel is already destroyed or is destroyed during this
                             let mut _k = kernel.inner_mut().unwrap();
                             let k = _k.inner.as_mut().unwrap();
                             unsafe {

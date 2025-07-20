@@ -319,7 +319,6 @@ impl<B: hal::Backend> AppState<B> {
             multiview: None,
             cache: None,
         });
-
         let max_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &max_uniform_bind_group_layout,
@@ -473,29 +472,7 @@ impl<B: hal::Backend> AppState<B> {
     }
 
     fn update(&mut self) {
-        let mut download_buffers = Vec::new();
-        let main_size = self.supasim_buffer.slice(.., false).len;
-        let temp_buffer_size = self.supasim_temp_buffer.slice(.., false).len;
-        for _ in 0..3 {
-            download_buffers.push(
-                self.instance
-                    .create_buffer(&supasim::BufferDescriptor {
-                        size: main_size,
-                        buffer_type: supasim::BufferType::Download,
-                        contents_align: 4,
-                        priority: 0.0,
-                        can_export: false,
-                    })
-                    .unwrap(),
-            );
-        }
         let recorder = self.instance.create_recorder().unwrap();
-        for b in &download_buffers {
-            recorder.zero_memory(b, 0, main_size).unwrap();
-        }
-        recorder
-            .zero_memory(&self.supasim_temp_buffer, 0, temp_buffer_size)
-            .unwrap();
         if self.just_resized {
             recorder
                 .zero_memory(
@@ -533,27 +510,7 @@ impl<B: hal::Backend> AppState<B> {
             recorder
                 .dispatch_kernel(&self.run_kernel, &buffers, workgroup_dims)
                 .unwrap();
-            if i == 0 {
-                recorder
-                    .copy_buffer(
-                        &self.supasim_temp_buffer,
-                        &download_buffers[0],
-                        0,
-                        0,
-                        temp_buffer_size,
-                    )
-                    .unwrap();
-            }
         }
-        recorder
-            .copy_buffer(
-                &self.supasim_temp_buffer,
-                &download_buffers[1],
-                0,
-                0,
-                temp_buffer_size,
-            )
-            .unwrap();
         for i in 0..self.iterations {
             // Update set iteration index
             recorder
@@ -574,9 +531,6 @@ impl<B: hal::Backend> AppState<B> {
                 .dispatch_kernel(&self.finalize_kernel, &buffers, workgroup_dims)
                 .unwrap();
         }
-        recorder
-            .copy_buffer(&self.supasim_buffer, &download_buffers[2], 0, 0, main_size)
-            .unwrap();
         let download_buffer = self
             .instance
             .create_buffer(&supasim::BufferDescriptor {
@@ -601,21 +555,26 @@ impl<B: hal::Backend> AppState<B> {
             .unwrap()
             .wait()
             .unwrap();
-        let access = download_buffer
-            .access(
-                0,
-                self.config.width as u64 * self.config.height as u64 * 4,
-                false,
-            )
-            .unwrap();
-        let readable = access.readable::<u8>().unwrap();
-        self.queue
-            .write_buffer(&self.wgpu_device_buffer, 0, readable);
-        for d in download_buffers {
-            println!("{}", is_all_zeros(d));
+        {
+            let access = download_buffer
+                .access(
+                    0,
+                    self.config.width as u64 * self.config.height as u64 * 4,
+                    false,
+                )
+                .unwrap();
+            let readable = access.readable::<u8>().unwrap();
+            self.queue
+                .write_buffer(&self.wgpu_device_buffer, 0, readable);
+            let max = access
+                .readable::<u32>()
+                .unwrap()
+                .iter()
+                .enumerate()
+                .max_by_key(|a| *a.1)
+                .unwrap();
+            println!("Max: {}, {}", max.0, max.1);
         }
-        println!("{}", readable.iter().any(|a| *a != 0));
-        panic!();
     }
 
     pub fn render(&mut self) -> bool {
@@ -765,15 +724,4 @@ pub fn main() {
         };
         event_loop.run_app(&mut app).unwrap();
     }
-}
-
-pub fn is_all_zeros<B: supasim::hal::Backend>(b: supasim::Buffer<B>) -> bool {
-    let slice = b.slice(.., false);
-    let mapped = b.access(0, slice.len, false).unwrap();
-    for val in mapped.readable::<u32>().unwrap() {
-        if *val != 0 {
-            return false;
-        }
-    }
-    true
 }

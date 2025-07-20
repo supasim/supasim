@@ -1026,7 +1026,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
             (
                 src_buffer.inner()?.create_info.buffer_type,
                 dst_buffer.inner()?.create_info.buffer_type,
-            ), // TODO: handle case where size isn't multiple of 4
+            ),
             (BufferType::Download, _) | (_, BufferType::Upload)
         ) {
             return Err(SupaSimError::BufferLocalityViolated);
