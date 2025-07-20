@@ -37,16 +37,15 @@ const EXTERNAL_MEMORY_VULKAN_EXTENSION: &std::ffi::CStr = const {
     }
 };
 
-pub fn wgpu_adapter_supports_external(adapter: wgpu::Adapter, backend: wgpu::Backend) -> bool {
+pub fn wgpu_adapter_supports_external(_adapter: wgpu::Adapter, backend: wgpu::Backend) -> bool {
     match backend {
         #[cfg(all(not(target_vendor = "apple"), feature = "vulkan"))]
         wgpu::Backend::Vulkan => unsafe {
-            let a = adapter.as_hal::<wgpu::hal::vulkan::Api>().unwrap();
+            let a = _adapter.as_hal::<wgpu::hal::vulkan::Api>().unwrap();
             let exts = a.required_device_extensions(wgpu::Features::empty());
             exts.contains(&EXTERNAL_MEMORY_VULKAN_EXTENSION)
         },
         // TODO: add support for dx12, metal external memory
-        wgpu::Backend::Dx12 | wgpu::Backend::Metal => false,
         _ => false,
     }
 }
