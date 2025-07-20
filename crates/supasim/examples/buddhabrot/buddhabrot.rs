@@ -110,11 +110,6 @@ impl<B: hal::Backend> AppState<B> {
             ..Default::default()
         });
         let surface = wgpu_instance.create_surface(window.clone()).unwrap();
-        let required_features = if cfg!(windows) {
-            wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32
-        } else {
-            wgpu::Features::VULKAN_EXTERNAL_MEMORY_FD
-        };
         let adapter = wgpu_instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -413,7 +408,7 @@ impl<B: hal::Backend> AppState<B> {
             window,
             instance,
             supasim_buffer,
-            _features: required_features,
+            _features: wgpu::Features::empty(),
             just_resized: true,
             run_kernel,
             finalize_kernel,

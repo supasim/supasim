@@ -31,7 +31,7 @@ use std::any::Any;
 
 pub use dummy::Dummy;
 #[cfg(feature = "external_wgpu")]
-pub use external_wgpu::WgpuDeviceExportInfo;
+pub use external_wgpu::{WgpuDeviceExportInfo, wgpu_adapter_supports_external};
 #[cfg(feature = "vulkan")]
 pub use vulkan::Vulkan;
 #[cfg(feature = "wgpu")]

@@ -37,28 +37,30 @@ const EXTERNAL_MEMORY_VULKAN_EXTENSION: &std::ffi::CStr = const {
     }
 };
 
+pub fn wgpu_adapter_supports_external(adapter: wgpu::Adapter, backend: wgpu::Backend) -> bool {
+    match backend {
+        #[cfg(all(not(target_vendor = "apple"), feature = "vulkan"))]
+        wgpu::Backend::Vulkan => unsafe {
+            let a = adapter.as_hal::<wgpu::hal::vulkan::Api>().unwrap();
+            let exts = a.required_device_extensions(wgpu::Features::empty());
+            exts.contains(&EXTERNAL_MEMORY_VULKAN_EXTENSION)
+        },
+        // TODO: add support for dx12, metal external memory
+        wgpu::Backend::Dx12 | wgpu::Backend::Metal => false,
+        _ => false,
+    }
+}
 #[derive(Clone, Debug)]
 pub struct WgpuDeviceExportInfo {
     pub device: wgpu::Device,
     pub features: wgpu::Features,
     pub backend: wgpu::Backend,
     pub usages: wgpu::BufferUsages,
+    pub adapter: wgpu::Adapter,
 }
 impl WgpuDeviceExportInfo {
     pub fn supports_external_memory(&self) -> bool {
-        match self.backend {
-            #[cfg(not(target_vendor = "apple"))]
-            wgpu::Backend::Vulkan => unsafe {
-                self.device.as_hal::<wgpu::hal::vulkan::Api, _, _>(|dev| {
-                    dev.unwrap()
-                        .enabled_device_extensions()
-                        .contains(&EXTERNAL_MEMORY_VULKAN_EXTENSION)
-                })
-            },
-            // TODO: add support for dx12, metal external memory
-            wgpu::Backend::Dx12 | wgpu::Backend::Metal => false,
-            _ => false,
-        }
+        wgpu_adapter_supports_external(self.adapter.clone(), self.backend)
     }
     /// # Safety
     /// * No current requirements are specified. Don't do anything stupid :)
@@ -74,89 +76,140 @@ impl WgpuDeviceExportInfo {
         match self.backend {
             #[cfg(not(target_vendor = "apple"))]
             wgpu::Backend::Vulkan => {
-                /*self.device.as_hal::<wgpu::hal::vulkan::Api, _, _>(|dev| {
-                    use ash::vk;
-                    let hal_dev = dev.unwrap();
-                    let dev = hal_dev.raw_device();
-
-                    let buffer = dev
-                        .create_buffer(
-                            &vk::BufferCreateInfo::default()
-                                .size(alloc_info.size)
-                                .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                                .queue_family_indices(std::slice::from_ref(
-                                    &hal_dev.queue_family_index(),
-                                ))
-                                .usage({
-                                    use vk::BufferUsageFlags as F;
-                                    match alloc_info.memory_type {
-                                        HalBufferType::Storage => {
-                                            F::TRANSFER_SRC
-                                                | F::TRANSFER_DST
-                                                | F::STORAGE_BUFFER
-                                        }
-                                        HalBufferType::Upload => F::TRANSFER_SRC,
-                                        HalBufferType::Download => F::TRANSFER_DST,
-                                        HalBufferType::UploadDownload => {
-                                            F::TRANSFER_SRC | F::TRANSFER_DST
-                                        }
-                                    }
-                                }),
-                            None,
-                        )
-                        .unwrap();
-                    // TODO: currently this doesn't check for dedicated allocation requirements.
-                    // That's because I can't guarantee wgpu has enabled the right extensions
-                    #[cfg(unix)]
-                    let mut import_info = vk::ImportMemoryFdInfoKHR::default()
-                        .fd(handle.handle as std::ffi::c_int)
-                        .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD_KHR);
-                    #[cfg(windows)]
-                    let mut import_info = vk::ImportMemoryWin32HandleInfoKHR::default()
-                        .handle(handle.handle)
-                        .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KHR);
-                    let allocate_info =
-                        vk::MemoryAllocateInfo::default().push_next(&mut import_info);
-                    let device_memory = dev.allocate_memory(&allocate_info, None).unwrap();
-                    dev.bind_buffer_memory(buffer, device_memory, handle.offset)
-                        .unwrap();
-                    // TODO: revise this, as wgpu requires we keep track of the buffer memory ourselves
-                    // Currently, we simply forget about the device memory backing the buffer.
-                    let hal_buffer = wgpu::hal::vulkan::Device::buffer_from_raw(buffer);
-                    let buffer = self
-                        .device
-                        .create_buffer_from_hal::<wgpu::hal::vulkan::Api>(
-                            hal_buffer,
-                            &wgpu::BufferDescriptor {
-                                label: None,
-                                size: alloc_info.size,
-                                usage: wgpu::BufferUsages::STORAGE
-                                    | wgpu::BufferUsages::COPY_SRC
-                                    | wgpu::BufferUsages::COPY_DST,
-                                mapped_at_creation: false,
-                            },
-                        );
-                    Some(buffer)
-                })*/
-                if self
+                /*if self
                     .features
                     .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_FD)
                 {
-                    Some(unsafe {
-                        self.device.create_buffer_external_memory_fd(
-                            handle.handle as i32,
-                            handle.offset,
-                            &wgpu::BufferDescriptor {
-                                label: None,
-                                size: alloc_info.size,
-                                usage: self.usages,
-                                mapped_at_creation: false,
-                            },
-                        )
+                    let buffer_usage = wgpu::hal::vulkan::conv::map_buffer_usage(desc.usage);
+
+                    let handle_type = if is_win32 {
+                        vk::ExternalMemoryHandleTypeFlagsKHR::OPAQUE_WIN32_KHR
+                    } else {
+                        vk::ExternalMemoryHandleTypeFlagsKHR::OPAQUE_FD_KHR
+                    };
+
+                    let mut external_properties = vk::ExternalBufferProperties::default();
+                    unsafe {
+                        let caps = self
+                            .shared_instance()
+                            .external_memory_capabilities
+                            .as_ref()
+                            .unwrap();
+                        let info = vk::PhysicalDeviceExternalBufferInfoKHR::default()
+                            .usage(buffer_usage)
+                            .handle_type(handle_type);
+                        (caps.fp().get_physical_device_external_buffer_properties_khr)(
+                            self.raw_physical_device(),
+                            &info,
+                            &mut external_properties,
+                        );
+                    }
+                    if !external_properties
+                        .external_memory_properties
+                        .external_memory_features
+                        .contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE_KHR)
+                    {
+                        return Err(crate::DeviceError::Unexpected);
+                    }
+                    let needs_dedicated = external_properties
+                        .external_memory_properties
+                        .external_memory_features
+                        .contains(vk::ExternalMemoryFeatureFlags::DEDICATED_ONLY_KHR);
+
+                    let mut external_vk_info =
+                        vk::ExternalMemoryBufferCreateInfoKHR::default().handle_types(handle_type);
+                    let vk_info = vk::BufferCreateInfo::default()
+                        .size(desc.size)
+                        .usage(buffer_usage)
+                        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                        .push_next(&mut external_vk_info);
+
+                    let raw = unsafe {
+                        self.shared
+                            .raw
+                            .create_buffer(&vk_info, None)
+                            .map_err(super::map_host_device_oom_and_ioca_err)?
+                    };
+
+                    let mut alloc_usage = if desc
+                        .usage
+                        .intersects(wgt::BufferUses::MAP_READ | wgt::BufferUses::MAP_WRITE)
+                    {
+                        let mut flags = gpu_alloc::UsageFlags::HOST_ACCESS;
+                        //TODO: find a way to use `crate::MemoryFlags::PREFER_COHERENT`
+                        flags.set(
+                            gpu_alloc::UsageFlags::DOWNLOAD,
+                            desc.usage.contains(wgt::BufferUses::MAP_READ),
+                        );
+                        flags.set(
+                            gpu_alloc::UsageFlags::UPLOAD,
+                            desc.usage.contains(wgt::BufferUses::MAP_WRITE),
+                        );
+                        flags
+                    } else {
+                        gpu_alloc::UsageFlags::FAST_DEVICE_ACCESS
+                    };
+                    alloc_usage.set(
+                        gpu_alloc::UsageFlags::TRANSIENT,
+                        desc.memory_flags.contains(crate::MemoryFlags::TRANSIENT),
+                    );
+                    let reqs = unsafe { self.raw_device().get_buffer_memory_requirements(raw) };
+
+                    let mut dedicated_alloc_info =
+                        vk::MemoryDedicatedAllocateInfoKHR::default().buffer(raw);
+                    let memory = if is_win32 {
+                        let mut import_info = vk::ImportMemoryWin32HandleInfoKHR::default()
+                            .handle(handle as isize)
+                            .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KHR);
+                        let mut allocate_info = vk::MemoryAllocateInfo::default()
+                            .allocation_size(reqs.size)
+                            .memory_type_index(reqs.memory_type_bits.trailing_zeros())
+                            .push_next(&mut import_info);
+                        if needs_dedicated {
+                            allocate_info = allocate_info.push_next(&mut dedicated_alloc_info);
+                        }
+                        unsafe { self.raw_device().allocate_memory(&allocate_info, None) }
+                    } else {
+                        let mut import_info = vk::ImportMemoryFdInfoKHR::default()
+                            .fd(handle as i32)
+                            .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD_KHR);
+                        let mut allocate_info = vk::MemoryAllocateInfo::default()
+                            .allocation_size(reqs.size)
+                            .memory_type_index(reqs.memory_type_bits.trailing_zeros())
+                            .push_next(&mut import_info);
+                        if needs_dedicated {
+                            allocate_info = allocate_info.push_next(&mut dedicated_alloc_info);
+                        }
+                        unsafe { self.raw_device().allocate_memory(&allocate_info, None) }
+                    }
+                    .map_err(|_| crate::DeviceError::Unexpected)
+                    .inspect_err(|_| unsafe { self.raw_device().destroy_buffer(raw, None) })?;
+
+                    unsafe { self.shared.raw.bind_buffer_memory(raw, memory, offset) }
+                        .map_err(super::map_host_device_oom_and_ioca_err)
+                        .inspect_err(|_| {
+                            unsafe { self.shared.raw.destroy_buffer(raw, None) };
+                        })?;
+
+                    if let Some(label) = desc.label {
+                        unsafe { self.shared.set_object_name(raw, label) };
+                    }
+
+                    self.counters.buffer_memory.add(desc.size as isize);
+                    self.counters.buffers.add(1);
+
+                    Ok(super::Buffer {
+                        raw,
+                        block: Some(Mutex::new(super::BufferMemoryBacking::VulkanMemory {
+                            memory,
+                            offset,
+                            size: reqs.size,
+                        })),
                     })
                 } else {
                     None
-                }
+                }*/
+                None
             }
             _ => None,
         }

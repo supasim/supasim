@@ -41,16 +41,14 @@ pub fn buffer_export<Backend: hal::Backend>(hal: Backend::Instance) -> Result<()
         flags: wgpu::InstanceFlags::all(),
         ..Default::default()
     });
-    let required_features = if cfg!(windows) {
-        wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32
-    } else {
-        wgpu::Features::VULKAN_EXTERNAL_MEMORY_FD
-    };
+    let required_features = wgpu::Features::SHADER_INT64;
     let adapter = match wgpu_instance
         .enumerate_adapters(wgpu::Backends::VULKAN)
         .into_iter()
-        .find(|a| a.features().contains(required_features))
-    {
+        .find(|a| {
+            a.features().contains(required_features)
+                && hal::wgpu_adapter_supports_external(a.clone(), wgpu::Backend::Vulkan)
+        }) {
         Some(adapter) => adapter,
         None => {
             println!("Skipping test as wgpu device doesn't have export memory property");
@@ -69,6 +67,7 @@ pub fn buffer_export<Backend: hal::Backend>(hal: Backend::Instance) -> Result<()
         usages: wgpu::BufferUsages::STORAGE
             | wgpu::BufferUsages::COPY_DST
             | wgpu::BufferUsages::COPY_SRC,
+        adapter,
     };
 
     let supasim_buffer = instance

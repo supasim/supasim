@@ -456,20 +456,17 @@ impl Vulkan {
         supports_external_memory: bool,
     ) -> Result<VulkanInstance, VulkanError> {
         unsafe {
+            let mut debug_settings = AllocatorDebugSettings::default();
+            if debug {
+                debug_settings.log_leaks_on_shutdown = true;
+                debug_settings.log_stack_traces = true;
+                debug_settings.log_memory_information = true;
+            }
             let alloc = Allocator::new(&AllocatorCreateDesc {
                 instance: instance.clone(),
                 device: device.clone(),
                 physical_device: phyd,
-                debug_settings: if debug {
-                    AllocatorDebugSettings {
-                        log_leaks_on_shutdown: true,
-                        log_stack_traces: true,
-                        log_memory_information: true,
-                        ..Default::default()
-                    }
-                } else {
-                    AllocatorDebugSettings::default()
-                },
+                debug_settings,
                 buffer_device_address: false,
                 allocation_sizes: AllocationSizes::default(),
                 external_memory: supports_external_memory,

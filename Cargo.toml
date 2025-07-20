@@ -74,7 +74,7 @@ paste = "1.0"
 
 pollster = { version = "0.4" }
 
-wgpu = { git = "https://github.com/SupaMaggie70Incorporated/wgpu.git", branch = "external_memory_fd_implementation", default-features = false, features = [
+wgpu = { version = "26.0", default-features = false, features = [
   "spirv",
   "dx12",
   "metal",
