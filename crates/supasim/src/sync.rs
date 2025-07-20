@@ -29,9 +29,9 @@ use thunderdome::Index;
 use types::{Dag, NodeIndex, SyncOperations, Walker};
 
 use crate::{
-    BufferCommand, BufferCommandInner, BufferRange, BufferSlice, BufferUserId, BufferWeak,
-    CommandRecorderInner, InstanceState, KernelWeak, MapSupasimError, SupaSimError,
-    SupaSimInstance, SupaSimResult,
+    Buffer, BufferCommand, BufferCommandInner, BufferRange, BufferSlice, BufferUserId,
+    CommandRecorderInner, InstanceState, Kernel, MapSupasimError, SupaSimError, SupaSimInstance,
+    SupaSimResult,
 };
 
 pub type CommandDag<B> = Dag<BufferCommand<B>>;
@@ -117,7 +117,7 @@ pub struct StreamingCommands {
 #[allow(clippy::type_complexity)]
 pub fn assemble_dag<B: hal::Backend>(
     crs: &mut [&mut CommandRecorderInner<B>],
-    used_kernels: &mut Vec<KernelWeak<B>>,
+    used_kernels: &mut Vec<Kernel<B>>,
     instance: &InstanceState<B>,
 ) -> SupaSimResult<
     B,
@@ -184,7 +184,7 @@ pub fn assemble_dag<B: hal::Backend>(
             work_on_buffer(&buffer, &mut dag)?;
         }
         if let BufferCommandInner::KernelDispatch { kernel, .. } = &dag[NodeIndex::new(i)].inner {
-            used_kernels.push(kernel.downgrade());
+            used_kernels.push(kernel.clone());
         }
     }
     dag.add_node(BufferCommand {
@@ -238,7 +238,7 @@ pub fn assemble_dag<B: hal::Backend>(
 pub fn record_dag<B: hal::Backend>(
     _dag: &CommandDag<B>,
     _cr: &mut B::CommandRecorder,
-) -> SupaSimResult<B, Vec<(B::BindGroup, Index)>> {
+) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
     // TODO: work on this when cuda support lands
     todo!()
 }
@@ -407,7 +407,7 @@ pub fn record_command_streams<B: hal::Backend>(
     instance: SupaSimInstance<B>,
     recorder: &mut B::CommandRecorder,
     write_buffer: &Option<B::Buffer>,
-) -> SupaSimResult<B, Vec<(B::BindGroup, Index)>> {
+) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
     let instance = instance.inner()?;
     let mut bindgroups = Vec::new();
     for bg in &streams.bind_groups {
@@ -453,7 +453,7 @@ pub fn record_command_streams<B: hal::Backend>(
                 .create_bind_group(kernel.inner.as_mut().unwrap(), &resources)
                 .map_supasim()?
         };
-        bindgroups.push((bg, kernel.id));
+        bindgroups.push((bg, _k.clone()));
     }
     for stream in &streams.streams {
         let mut buffer_refs = Vec::new();
@@ -672,9 +672,9 @@ pub fn record_command_streams<B: hal::Backend>(
 }
 pub struct GpuSubmissionInfo<B: hal::Backend> {
     pub command_recorder: Option<B::CommandRecorder>,
-    pub bind_groups: Vec<(B::BindGroup, Index)>,
-    pub used_buffer_ranges: Vec<(BufferUserId, BufferWeak<B>)>,
-    pub used_buffers: Vec<BufferWeak<B>>,
+    pub bind_groups: Vec<(B::BindGroup, Kernel<B>)>,
+    pub used_buffer_ranges: Vec<(BufferUserId, Buffer<B>)>,
+    pub used_buffers: Vec<Buffer<B>>,
     pub used_resources: SubmissionResources<B>,
 }
 /// A job for the CPU to run when some GPU work has completed or immediately, without ideally blocking for long. This won't necessarily run before other submissions
@@ -690,16 +690,16 @@ impl<B: hal::Backend> SemaphoreFinishedJob<B> {
 }
 /// A job for the CPU to run in between GPU submissions
 pub enum CpuSubmission<B: hal::Backend> {
-    CreateGpuBuffer { buffer_id: Index },
-    DestroyGpuBuffer { buffer_id: Index },
-    Dummy(PhantomData<B>),
+    CreateGpuBuffer { buffer_id: Buffer<B> },
+    DestroyGpuBuffer { buffer_id: Buffer<B> },
+    Dummy,
 }
 impl<B: hal::Backend> CpuSubmission<B> {
     pub fn run(self, _instance: &InstanceState<B>) -> SupaSimResult<B, ()> {
         match self {
             Self::CreateGpuBuffer { .. } => todo!(),
             Self::DestroyGpuBuffer { .. } => todo!(),
-            Self::Dummy(_) => (),
+            Self::Dummy => (),
         }
         Ok(())
     }
@@ -1060,19 +1060,15 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                         drop(lock);
 
                         for b in item.used_buffer_ranges {
-                            if let Ok(buffer) = b.1.upgrade() {
-                                if let Ok(b_inner) = buffer.inner() {
-                                    b_inner.slice_tracker.release(b.0);
-                                }
+                            if let Ok(b_inner) = b.1.inner() {
+                                b_inner.slice_tracker.release(b.0);
                             }
                         }
                         if !map_buffer_while_gpu_use {
                             for b in item.used_buffers {
-                                if let Ok(buffer) = b.upgrade() {
-                                    if let Ok(b_inner) = buffer.inner() {
-                                        if b_inner.last_used == next_submission_idx {
-                                            b_inner.slice_tracker.release_cpu();
-                                        }
+                                if let Ok(b_inner) = b.inner() {
+                                    if b_inner.last_used == next_submission_idx {
+                                        b_inner.slice_tracker.release_cpu();
                                     }
                                 }
                             }
@@ -1093,9 +1089,6 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                         }
                         for (bg, kernel) in item.bind_groups {
                             // TODO: fix issue here if kernel is already destroyed or is destroyed during this
-                            let mut lock = logic.instance.kernels.lock();
-                            let k = lock.get_mut(kernel).unwrap();
-                            let kernel = k.upgrade().unwrap();
                             let mut _k = kernel.inner_mut().unwrap();
                             let k = _k.inner.as_mut().unwrap();
                             unsafe {

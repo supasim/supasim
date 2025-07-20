@@ -132,7 +132,12 @@ impl Vulkan {
                     .enumerate_instance_extension_properties(None)
                     .unwrap()
                     .iter()
-                    .any(|e| e.extension_name_as_c_str().unwrap() == c"VK_LAYER_KHRONOS_validation")
+                    .any(|e| e.extension_name_as_c_str().unwrap() == c"VK_EXT_debug_utils")
+                && entry
+                    .enumerate_instance_layer_properties()
+                    .unwrap()
+                    .iter()
+                    .any(|l| l.layer_name_as_c_str().unwrap() == c"VK_LAYER_KHRONOS_validation")
             {
                 true
             } else if debug {

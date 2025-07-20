@@ -586,7 +586,8 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                     .as_ref()
                     .unwrap()
                     .upgrade()?;
-                let b_mut = b.inner()?;
+                let _b = b.clone();
+                let b_mut = _b.inner()?;
                 for &range in ranges {
                     let id = b_mut.slice_tracker.acquire(
                         &s,
@@ -597,7 +598,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                             BufferUser::Cross(u64::MAX)
                         },
                     )?;
-                    used_buffer_ranges.push((id, b.downgrade()))
+                    used_buffer_ranges.push((id, b.clone()))
                 }
                 used_buffers.insert(buf_id);
             }
@@ -627,7 +628,16 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             let s = self.inner()?;
             let used_buffers: Vec<_> = used_buffers
                 .iter()
-                .map(|a| s.buffers.lock().get(*a).unwrap().as_ref().unwrap().clone())
+                .map(|a| {
+                    s.buffers
+                        .lock()
+                        .get(*a)
+                        .unwrap()
+                        .as_ref()
+                        .unwrap()
+                        .upgrade()
+                        .unwrap()
+                })
                 .collect();
             submission_idx = s.sync_thread().submit_gpu(GpuSubmissionInfo {
                 command_recorder: Some(recorder),
@@ -638,7 +648,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             })?;
 
             for kernel in &used_kernels {
-                kernel.upgrade()?.inner_mut()?.last_used = submission_idx;
+                kernel.inner_mut()?.last_used = submission_idx;
             }
             for &buf_id in sync_info.keys() {
                 let b = s
@@ -653,8 +663,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                 b_mut.last_used = submission_idx;
             }
             for (id, b) in used_buffer_ranges {
-                b.upgrade()?
-                    .inner()?
+                b.inner()?
                     .slice_tracker
                     .update_user_submission(id, submission_idx, &s);
             }

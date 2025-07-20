@@ -61,7 +61,10 @@ pub fn setup_trace_printer_if_env() {
             setup_trace_printer();
         }
     }
-    let _ = env_logger::try_init();
+    let _ = env_logger::builder()
+        .filter_level(log::LevelFilter::Info)
+        .parse_default_env()
+        .try_init();
 }
 #[macro_export]
 macro_rules! all_backend_tests_inner {
@@ -73,6 +76,7 @@ macro_rules! all_backend_tests_inner {
             {
                 return;
             }
+            $crate::setup_trace_printer_if_env();
             log::info!("{} test", $backend_name);
             let instance = $instance_create;
             let instance = instance.expect(&format!("Failed to create {} instance", $backend_name));
