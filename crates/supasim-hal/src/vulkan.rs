@@ -398,6 +398,7 @@ impl Vulkan {
                 vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
             let mut sync2 =
                 vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
+            let phyd_features = vk::PhysicalDeviceFeatures::default().shader_int64(true);
             // TODO: investigate multiple queues. currently we only use a general queue, but this could potentially be optimized by using special compute queues and special transfer queues
             let queue_priority = 1.0;
             let queue_create_info = vk::DeviceQueueCreateInfo::default()
@@ -406,6 +407,7 @@ impl Vulkan {
             let dev_create_info = vk::DeviceCreateInfo::default()
                 .queue_create_infos(std::slice::from_ref(&queue_create_info))
                 .enabled_extension_names(&ext)
+                .enabled_features(&phyd_features)
                 .push_next(&mut timeline_semaphore)
                 .push_next(&mut sync2);
             let device = instance.create_device(phyd, &dev_create_info, None)?;
