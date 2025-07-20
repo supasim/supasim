@@ -391,12 +391,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         offset: u64,
         data: &[u8],
     ) -> Result<(), <Wgpu as Backend>::Error> {
-        let was_mapped = buffer.mapped_slice.is_some();
-        let ptr = unsafe { self.map_buffer(buffer)?.add(offset as usize) };
-        unsafe { std::slice::from_raw_parts_mut(ptr, data.len()) }.clone_from_slice(data);
-        if !was_mapped {
-            unsafe { self.unmap_buffer(buffer)? };
-        }
+        self.queue.write_buffer(&buffer.inner, offset, data);
         Ok(())
     }
 
