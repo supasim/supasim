@@ -296,6 +296,7 @@ pub enum SupaSimError<B: hal::Backend> {
     KernelCompileError(#[from] kernels::KernelCompileError),
     SyncThreadPanic(String),
     BufferExportError(String),
+    ZeroMemoryWrongAlignment,
 }
 trait MapSupasimError<T, B: hal::Backend> {
     fn map_supasim(self) -> Result<T, SupaSimError<B>>;
@@ -1016,7 +1017,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
             (
                 src_buffer.inner()?.create_info.buffer_type,
                 dst_buffer.inner()?.create_info.buffer_type,
-            ),
+            ), // TODO: handle case where size isn't multiple of 4
             (BufferType::Download, _) | (_, BufferType::Upload)
         ) {
             return Err(SupaSimError::BufferLocalityViolated);
@@ -1038,8 +1039,12 @@ impl<B: hal::Backend> CommandRecorder<B> {
         }
         Ok(())
     }
+    /// Offset and length must be multiples of 4
     pub fn zero_memory(&self, buffer: &Buffer<B>, offset: u64, size: u64) -> SupaSimResult<B, ()> {
         self.check_destroyed()?;
+        if offset % 4 != 0 || size % 4 != 0 {
+            return Err(SupaSimError::ZeroMemoryWrongAlignment);
+        }
         let slice = BufferSlice {
             buffer: buffer.clone(),
             start: offset,

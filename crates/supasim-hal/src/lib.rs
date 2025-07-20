@@ -56,6 +56,7 @@ pub trait Backend: Sized + std::fmt::Debug + Clone + Send + Sync + 'static {
 
     type Error: Error<Self>;
 }
+
 pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
     fn get_properties(&mut self) -> HalInstanceProperties;
     /// Get whether or not memory can be shared to a certain device. Usually, this device would be a wgpu device. Note that using this
@@ -194,20 +195,27 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
     /// * All device work must be completed
     unsafe fn destroy(self) -> Result<(), B::Error>;
 }
+
+/// # Safety
+/// * Wherever this is accepted in the API, it is assumed to be a valid slice within the buffer
+///   unless explicitly stated otherwise
 #[derive(Debug)]
 pub struct HalBufferSlice<'a, B: Backend> {
     pub buffer: &'a B::Buffer,
     pub offset: u64,
     pub len: u64,
 }
+
 pub struct CommandSynchronization<'a, B: Backend> {
     pub buffers_needing_sync: &'a mut [&'a mut HalBufferSlice<'a, B>],
     pub out_semaphore: Option<(&'a mut B::Semaphore, u64)>,
 }
+
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
     /// # Safety
     /// * Must only be called on instances with `SyncMode::Dag`
     /// * The recorder must not have had any record command since being created or cleared
+    /// * All commands must follow the corresponding safety section in BufferCommand
     unsafe fn record_dag(
         &mut self,
         instance: &mut B::Instance,
@@ -216,6 +224,7 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
     /// # Safety
     /// * Must only be called on instances with `SyncMode` of `Automatic` or `VulkanStyle`
     /// * The recorder must not have had any record command since being created or cleared
+    /// * All commands must follow the corresponding safety section in BufferCommand
     unsafe fn record_commands(
         &mut self,
         instance: &mut B::Instance,
@@ -225,7 +234,9 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
     /// * The recorder must not be queued and incomplete on the GPU
     unsafe fn clear(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
+
 pub trait Kernel<B: Backend<Kernel = Self>>: Send + Sync {}
+
 pub trait Buffer<B: Backend<Buffer = Self>>: Send + Sync {
     /// # Safety
     /// * Synchronization must be managed by the user
@@ -244,8 +255,11 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send + Sync {
         external_device: &dyn Any,
     ) -> Result<Box<dyn Any>, B::Error>;
 }
+
 pub trait BindGroup<B: Backend<BindGroup = Self>>: Send + Sync {}
+
 pub trait KernelCache<B: Backend<KernelCache = Self>>: Send + Sync {}
+
 pub trait Semaphore<B: Backend<Semaphore = Self>>: Send + Sync {
     /// # Safety
     /// * The semaphore must be signalled by some already submitted command recorder
@@ -262,20 +276,25 @@ pub trait Semaphore<B: Backend<Semaphore = Self>>: Send + Sync {
     /// * The semaphore must not be signalled by any CPU or GPU side signal command
     unsafe fn reset(&self) -> Result<(), B::Error>;
 }
+
 #[derive(Debug)]
 pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub command_recorder: &'a mut B::CommandRecorder,
     pub wait_semaphore: Option<&'a B::Semaphore>,
     pub signal_semaphore: Option<&'a B::Semaphore>,
 }
+
 #[must_use]
 pub trait Error<B: Backend<Error = Self>>: std::error::Error + Send + Sync {
     fn is_out_of_device_memory(&self) -> bool;
     fn is_out_of_host_memory(&self) -> bool;
     fn is_timeout(&self) -> bool;
 }
+
 #[derive(Debug)]
 pub enum BufferCommand<'a, B: Backend> {
+    /// # Safety
+    /// * The length and offsets must be form valid slices in the buffers
     CopyBuffer {
         src_buffer: &'a B::Buffer,
         dst_buffer: &'a B::Buffer,
@@ -283,6 +302,8 @@ pub enum BufferCommand<'a, B: Backend> {
         dst_offset: u64,
         len: u64,
     },
+    /// # Safety
+    /// * The bindgroup must be created for the kernel
     DispatchKernel {
         kernel: &'a B::Kernel,
         bind_group: &'a B::BindGroup,
@@ -290,29 +311,37 @@ pub enum BufferCommand<'a, B: Backend> {
         workgroup_dims: [u32; 3],
     },
     /// Only for vulkan like synchronization
+    /// # Safety
+    /// * this is always safe
     PipelineBarrier {
         before: SyncOperations,
         after: SyncOperations,
     },
     /// Only for vulkan like synchronization. Consecutive pipeline and memory barriers will combine. Memory barriers without such a pipeline barrier are undefined behavior.
-    MemoryBarrier {
-        buffer: HalBufferSlice<'a, B>,
-    },
+    /// # Safety
+    /// * This is always safe
+    MemoryBarrier { buffer: HalBufferSlice<'a, B> },
+    /// # Safety
+    /// * The instance must support the form of import/export used
     MemoryTransfer {
         buffer: HalBufferSlice<'a, B>,
         import: bool,
     },
-    /// Writes a bind group. This is for instances with the `easily_update_bind_groups` property.
+    /// # Safety
+    /// * Only valid on instances with the `easily_update_bind_groups` property.
     UpdateBindGroup {
         bg: &'a B::BindGroup,
         kernel: &'a B::Kernel,
         buffers: &'a [HalBufferSlice<'a, B>],
     },
-    ZeroMemory {
-        buffer: HalBufferSlice<'a, B>,
-    },
+    /// # Safety
+    /// * Offset and length must be multiples of 4
+    ZeroMemory { buffer: HalBufferSlice<'a, B> },
+    /// # Safety
+    /// * This is always safe
     Dummy,
 }
+
 #[derive(Debug)]
 pub struct ExternalMemoryObject {
     pub handle: isize,

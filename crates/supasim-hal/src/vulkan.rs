@@ -1365,7 +1365,6 @@ impl VulkanCommandRecorder {
         size: u64,
         cb: vk::CommandBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        // TODO: handle case where size isn't multiple of 4
         unsafe {
             instance
                 .device
