@@ -566,14 +566,6 @@ impl<B: hal::Backend> AppState<B> {
             let readable = access.readable::<u8>().unwrap();
             self.queue
                 .write_buffer(&self.wgpu_device_buffer, 0, readable);
-            let max = access
-                .readable::<u32>()
-                .unwrap()
-                .iter()
-                .enumerate()
-                .max_by_key(|a| *a.1)
-                .unwrap();
-            println!("Max: {}, {}", max.0, max.1);
         }
     }
 

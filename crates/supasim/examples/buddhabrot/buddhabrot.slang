@@ -73,7 +73,7 @@ void Run(uint3 id: SV_DispatchThreadID)
 {
     InputOptions options = parameters.imageSize[0];
     uint3 totalSize = uint3(16, 16, 1) * (uint)options.workgroupDim;
-    uint index = id.y * totalSize.x + id.x;
+    uint index = id.z * totalSize.x * totalSize.y + id.y * totalSize.x + id.x;
 
     int iterationSetIndex = (int)parameters.imageSize[0].iterationSetIndex;
     TempData data = parameters.tempBuffer[index];
@@ -95,13 +95,17 @@ void Run(uint3 id: SV_DispatchThreadID)
         data.position = float2(0.0);
     }
 
-    for (int i = 0; i < ITERATIONS_PER && data.hasCompleted == 0; i++)
+    if (data.hasCompleted == 0)
     {
-        data.position = square(data.position) + data.c;
-        if (dot(data.position, data.position) > 4)
+        for (int i = 0; i < ITERATIONS_PER && data.hasCompleted == 0; i++)
         {
-            data.hasCompleted = 1;
-            data.numIterations = iterationSetIndex * ITERATIONS_PER + i + 1;
+            data.position = square(data.position) + data.c;
+            if (dot(data.position, data.position) > 4)
+            {
+                data.hasCompleted = 1;
+                data.numIterations = iterationSetIndex * ITERATIONS_PER + i + 1;
+                break;
+            }
         }
     }
     parameters.tempBuffer[index] = data;
@@ -113,19 +117,21 @@ void Finalize(uint3 id: SV_DispatchThreadID)
 {
     InputOptions options = parameters.imageSize[0];
     uint3 totalSize = uint3(16, 16, 1) * (uint)options.workgroupDim;
-    uint index = id.y * totalSize.x + id.x;
+    uint index = id.z * totalSize.x * totalSize.y + id.y * totalSize.x + id.x;
 
     TempData data = parameters.tempBuffer[index];
     if (options.iterationSetIndex == 0)
     {
-        data.hasCompleted = false;
         data.position = float2(0.0);
     }
-    for (int i = 0; i < data.numIterations - options.skipLastPoints; i++)
+    if (data.hasCompleted == 1)
     {
-        data.position = square(data.position) + data.c;
-        int pixelIndex = getPixelIndex(float2(data.position.y, data.position.x), parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
-        parameters.buffer[pixelIndex].add(1);
+        for (int i = 0; i < min(ITERATIONS_PER, data.numIterations - (int)options.skipLastPoints - ITERATIONS_PER * (int)options.iterationSetIndex); i++)
+        {
+            data.position = square(data.position) + data.c;
+            int pixelIndex = getPixelIndex(float2(data.position.y, data.position.x), parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
+            parameters.buffer[pixelIndex].add(1);
+        }
     }
     parameters.tempBuffer[index] = data;
 }
