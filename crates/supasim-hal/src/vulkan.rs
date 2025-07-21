@@ -995,6 +995,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 );
                 Err(e)
             } else {
+                kernel.descriptor_pools[pool_idx].current_size += 1;
                 Ok(bg)
             }
         }
