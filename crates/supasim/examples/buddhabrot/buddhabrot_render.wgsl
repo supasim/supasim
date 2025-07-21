@@ -55,6 +55,6 @@ fn render_fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let y = u32(position.y);
     let index = y * size.width + x;
     let value = buffer[index];
-    let scaled = f32(value) / f32(max_value) * 3.0;
+    //let scaled = f32(value) / f32(max_value) * 3.0;
     return vec4<f32>(0.0, 0.0, scaled, 1.0);
 }
