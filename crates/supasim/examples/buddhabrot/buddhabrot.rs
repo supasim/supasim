@@ -105,7 +105,7 @@ impl<B: hal::Backend> AppState<B> {
         let size = window.inner_size();
 
         let wgpu_instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
+            backends: wgpu::Backends::PRIMARY,
             flags: wgpu::InstanceFlags::all(),
             ..Default::default()
         });
@@ -642,7 +642,6 @@ impl<B: hal::Backend> AppState<B> {
 
         self.queue.submit([encoder.finish()]);
         output.present();
-        self.device.poll(wgpu::PollType::Wait).unwrap();
         true
     }
 }
