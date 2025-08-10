@@ -16,7 +16,6 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
-//! Lots of this code is just stolen from https://sotrh.github.io/learn-wgpu/ lol
 
 use rand::random;
 use std::sync::Arc;
