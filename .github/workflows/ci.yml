@@ -1,21 +1,3 @@
-# BEGIN LICENSE
-#   SupaSim, a GPGPU and simulation toolkit.
-#   Copyright (C) 2025 SupaMaggie70 (Magnus Larsson)
-#
-#
-#   SupaSim is free software; you can redistribute it and/or
-#   modify it under the terms of the GNU General Public License
-#   as published by the Free Software Foundation; either version 3
-#   of the License, or (at your option) any later version.
-#
-#   SupaSim is distributed in the hope that it will be useful,
-#   but WITHOUT ANY WARRANTY; without even the implied warranty of
-#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#   GNU General Public License for more details.
-#
-#   You should have received a copy of the GNU General Public License
-#   along with this program.  If not, see <http://www.gnu.org/licenses/>.
-# END LICENSE
 name: CI
 
 on:
@@ -39,6 +21,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Run update-license-header
+        shell: bash
+        run: |
+          set -e
+          shopt -s globstar
+          ./scripts/update-license-header.py -h LICENSE_HEADER ./**/*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml ./**/*.slang ./**/*.wgsl
+          git diff --exit-code
+
       - name: Install Taplo(from wgpu CI)
         uses: uncenter/setup-taplo@v1
         with:
@@ -49,7 +40,7 @@ jobs:
 
       - name: Run `cargo fmt`
         run: cargo fmt --check
-  
+
   build-check-test:
     strategy:
       fail-fast: false
