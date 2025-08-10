@@ -42,14 +42,15 @@ naga = { version = "26.0", default-features = false, features = [
   "wgsl-out",
 ], optional = true }
 anyhow.workspace = true
-slang = { package = "supasim-slang", version = "0.0.1" }
+slang = { package = "shader-slang", version = "0.1.0" }
 rand.workspace = true
 tempfile.workspace = true
 spirv-cross-sys = { package = "supasim-spirv-cross-sys", version = "0.0.1", optional = true }
 bytemuck.workspace = true
 spirv-tools-sys = { package = "supasim-spirv-tools-sys", version = "0.0.1", optional = true }
+# Used to free objects created by other libraries
 libc = "0.2"
-hassle-rs = { version = "0.11", git = "https://github.com/Traverse-Research/hassle-rs.git", rev = "be9a1c5a929c1950ba28b3f75163b69e574a46e9", optional = true }
+hassle-rs = { version = "0.12", optional = true }
 
 types.workspace = true
 
