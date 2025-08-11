@@ -242,6 +242,35 @@ impl GlobalState {
             slang_session: global_session,
         })
     }
+    fn recurse_params_reflection(vec: &mut Vec<bool>, var: &slang::reflection::VariableLayout) {
+        let ty = var.ty().unwrap();
+        if ty.kind() == slang::TypeKind::Resource
+            && var.category() == slang::ParameterCategory::DescriptorTableSlot
+        {
+            let binding = var.binding_index();
+            assert!(var.binding_space() == 0);
+            let ty = var.ty().unwrap();
+            if ty.kind() == slang::TypeKind::Resource {
+                if vec.len() <= binding as usize {
+                    vec.resize(binding as usize + 1, false);
+                }
+                vec[binding as usize] |= match ty.resource_access() {
+                    slang::ResourceAccess::Read => false,
+                    slang::ResourceAccess::ReadWrite | slang::ResourceAccess::Write => true,
+                    other => panic!("Unexpected resource access: {other:?}"),
+                };
+            }
+        } else if ty.kind() == slang::TypeKind::Struct {
+            for field in var.type_layout().fields() {
+                Self::recurse_params_reflection(vec, field);
+            }
+        } else if ty.kind() == slang::TypeKind::ParameterBlock {
+            let a: &slang::reflection::TypeLayout = var.type_layout().element_type_layout();
+            for field in a.fields() {
+                Self::recurse_params_reflection(vec, field);
+            }
+        }
+    }
     pub fn compile_kernel(&self, options: KernelCompileOptions) -> Result<KernelReflectionInfo> {
         let extra_optim = options.opt_level == OptimizationLevel::Maximal || options.minify;
         let extra_valid = options.stability == StabilityGuarantee::ExtraValidation;
@@ -411,37 +440,42 @@ impl GlobalState {
 
         // TODO: get reflection info about params
 
+        let mut reflection_params = Vec::new();
         let mut workgroup_size = [0; 3];
+        let subgroup_size;
         let linked_program = program.link()?;
         {
             let layout = program.layout(0)?;
             //layout.global_params_type_layout();
             assert!(layout.entry_point_count() == 1);
             let ep = layout.entry_point_by_index(0).unwrap();
+            let ep_meta = program.entry_point_metadata(0, 0)?;
             let wgs = ep.compute_thread_group_size();
             for i in 0..3 {
                 workgroup_size[i] = wgs[i] as u32;
             }
-            /*for p in ep.parameters() {
-                println!(
-                    "Parameter: bind-index {} bind-space {} sem-name {:?} category {:?} var-name {:?}",
-                    p.binding_index(),
-                    p.binding_space(),
-                    p.semantic_name(),
-                    p.category(),
-                    p.variable().name()
-                )
+            subgroup_size = ep.compute_wave_size() as u32;
+            if ep.stage() != slang::Stage::Compute {
+                return Err(anyhow!(
+                    "Entry point has non-compute stage: {:?}",
+                    ep.stage()
+                ));
             }
-            for p in layout.global_params_type_layout().fields() {
-                println!(
-                    "Parameter: bind-index {} bind-space {} sem-name {:?} category {:?} var-name {:?}",
-                    p.binding_index(),
-                    p.binding_space(),
-                    p.semantic_name(),
+
+            let mut all_params: Vec<&slang::reflection::VariableLayout> = ep.parameters().collect();
+            for p in layout.parameters() {
+                if ep_meta.is_parameter_location_used(
                     p.category(),
-                    p.variable().name()
-                )
-            }*/
+                    p.binding_space() as u64,
+                    p.binding_index() as u64,
+                ) == Some(true)
+                {
+                    all_params.push(p);
+                }
+            }
+            for &p in &all_params {
+                Self::recurse_params_reflection(&mut reflection_params, p);
+            }
             /*
             As it stands:
             We need to find all global params, and filter out the ones unused for a given entry point
@@ -553,7 +587,8 @@ impl GlobalState {
         }
         Ok(KernelReflectionInfo {
             workgroup_size,
-            buffers: Vec::new(),
+            subgroup_size,
+            buffers: reflection_params,
         })
     }
 }

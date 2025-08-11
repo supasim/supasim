@@ -67,7 +67,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
         let mut add_code = Vec::new();
         let mut double_code = Vec::new();
         info!("Compiling kernels");
-        let mut add_reflection = kernel_compiler
+        let add_reflection = kernel_compiler
             .compile_kernel(KernelCompileOptions {
                 target: instance.get_properties().kernel_lang,
                 source: kernels::KernelSource::Memory(include_bytes!(
@@ -82,7 +82,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
                 minify: false,
             })
             .unwrap();
-        let mut double_reflection = kernel_compiler
+        let double_reflection = kernel_compiler
             .compile_kernel(KernelCompileOptions {
                 target: instance.get_properties().kernel_lang,
                 source: kernels::KernelSource::Memory(include_bytes!(
@@ -97,9 +97,8 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
                 minify: false,
             })
             .unwrap();
-        // Temporary fix for no reflection
-        add_reflection.buffers = vec![false, false, true];
-        double_reflection.buffers = vec![true];
+        assert_eq!(add_reflection.buffers, vec![false, false, true]);
+        assert_eq!(double_reflection.buffers, vec![true]);
         drop(kernel_compiler);
         let mut kernel = instance.compile_kernel(&add_code, &add_reflection, cache.as_mut())?;
         let mut kernel2 =

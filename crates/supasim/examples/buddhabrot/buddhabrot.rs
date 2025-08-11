@@ -157,7 +157,7 @@ impl<B: hal::Backend> AppState<B> {
         let workgroup_size = [16, 16, 1];
         let mut compile_kernel = |entry: &str| {
             spirv.clear();
-            global_state
+            let reflection_info = global_state
                 .compile_kernel(supasim::kernels::KernelCompileOptions {
                     target: instance.properties().unwrap().kernel_lang,
                     source: kernels::KernelSource::Memory(include_bytes!("buddhabrot.slang")),
@@ -170,16 +170,15 @@ impl<B: hal::Backend> AppState<B> {
                     minify: true,
                 })
                 .unwrap();
+            let other = supasim::KernelReflectionInfo {
+                workgroup_size,
+                buffers: vec![false, true, true],
+                subgroup_size: 0,
+            };
+            assert_eq!(reflection_info, other);
 
             instance
-                .compile_raw_kernel(
-                    &spirv,
-                    supasim::KernelReflectionInfo {
-                        workgroup_size,
-                        buffers: vec![false, true, true],
-                    },
-                    None,
-                )
+                .compile_raw_kernel(&spirv, reflection_info, None)
                 .unwrap()
         };
         let run_kernel = compile_kernel("Run");

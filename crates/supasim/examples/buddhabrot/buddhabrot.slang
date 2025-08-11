@@ -35,15 +35,10 @@ struct TempData
 
 struct Parameters
 {
-    [[vk::binding(0, 0)]]
     StructuredBuffer<InputOptions> imageSize;
-    [[vk::binding(1, 0)]]
     RWStructuredBuffer<Atomic<uint32_t>> buffer;
-    [[vk::binding(2, 0)]]
     RWStructuredBuffer<TempData> tempBuffer;
 }
-
-Parameters parameters;
 
 // Simple hash function to generate a uint from a seed and index
 uint Hash(uint seed, uint value)
@@ -69,7 +64,7 @@ static const int ITERATIONS_PER = 512;
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void Run(uint3 id: SV_DispatchThreadID)
+void Run(uint3 id: SV_DispatchThreadID, ParameterBlock<Parameters> parameters)
 {
     InputOptions options = parameters.imageSize[0];
     uint3 totalSize = uint3(16, 16, 1) * (uint)options.workgroupDim;
@@ -113,7 +108,7 @@ void Run(uint3 id: SV_DispatchThreadID)
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void Finalize(uint3 id: SV_DispatchThreadID)
+void Finalize(uint3 id: SV_DispatchThreadID, ParameterBlock<Parameters> parameters)
 {
     InputOptions options = parameters.imageSize[0];
     uint3 totalSize = uint3(16, 16, 1) * (uint)options.workgroupDim;
