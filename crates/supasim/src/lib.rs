@@ -56,6 +56,8 @@ use crate::sync::{GpuSubmissionInfo, SyncThreadHandle, create_sync_thread};
 
 pub type UserBufferAccessClosure<'a, B> =
     Box<dyn FnOnce(&mut [MappedBuffer<'a, B>]) -> anyhow::Result<()>>;
+pub type SendableUserBufferAccessClosure<B> =
+    Box<dyn Send + FnOnce(&mut [MappedBuffer<'_, B>]) -> anyhow::Result<()>>;
 
 struct InnerRef<'a, T>(RwLockReadGuard<'a, T>);
 impl<T> Deref for InnerRef<'_, T> {
@@ -179,7 +181,7 @@ impl<B: hal::Backend> BufferSlice<B> {
             needs_mut,
         })
     }
-    fn acquire(&self, user: BufferUser) -> SupaSimResult<B, BufferUserId> {
+    fn acquire(&self, user: BufferUser, bypass_gpu: bool) -> SupaSimResult<B, BufferUserId> {
         let s = self.buffer.inner()?;
         let instance = s.instance.clone();
 
@@ -191,6 +193,7 @@ impl<B: hal::Backend> BufferSlice<B> {
                 needs_mut: self.needs_mut,
             },
             user,
+            bypass_gpu,
         )
     }
     fn release(&self, id: u64) -> SupaSimResult<B, ()> {
@@ -597,6 +600,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                         } else {
                             BufferUser::Cross(u64::MAX)
                         },
+                        false,
                     )?;
                     used_buffer_ranges.push((id, b.clone()))
                 }
@@ -717,7 +721,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         let mut ids = Vec::new();
         for b in buffers {
             b.validate()?;
-            ids.push(b.acquire(BufferUser::Cpu)?.id);
+            ids.push(b.acquire(BufferUser::Cpu, false)?.id);
         }
         if properties.map_buffers {
             let instance = self.inner()?;
@@ -1218,7 +1222,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut: true,
         };
         buffer_slice.validate_with_align(size_of::<T>() as u64)?;
-        let id = buffer_slice.acquire(BufferUser::Cpu)?.id;
+        let id = buffer_slice.acquire(BufferUser::Cpu, false)?.id;
         let mut s = self.inner_mut()?;
         let _instance = s.instance.clone();
         let instance = _instance.inner()?;
@@ -1244,7 +1248,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut: false,
         };
         slice.validate_with_align(size_of::<T>() as u64)?;
-        let id = slice.acquire(BufferUser::Cpu)?;
+        let id = slice.acquire(BufferUser::Cpu, false)?;
         let mut s = self.inner_mut()?;
         let _instance = s.instance.clone();
         let instance = _instance.inner()?;
@@ -1275,7 +1279,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut,
         };
         slice.validate()?;
-        let id = slice.acquire(BufferUser::Cpu)?.id;
+        let id = slice.acquire(BufferUser::Cpu, false)?.id;
         let _instance = self.inner()?.instance.clone();
         let instance = _instance.inner()?;
         let mut s = self.inner_mut()?;
@@ -1581,6 +1585,7 @@ impl SliceTracker {
         instance: &InstanceState<B>,
         range: BufferRange,
         user: BufferUser,
+        bypass_gpu: bool,
     ) -> SupaSimResult<B, BufferUserId> {
         let mut lock = self.mutex.lock();
         if match user {
@@ -1590,46 +1595,48 @@ impl SliceTracker {
         } {
             return Err(SupaSimError::BufferLocalityViolated);
         }
-        let mut cont = true;
-        let mut gpu_submissions = Vec::new();
-        while cont {
-            let mut has_cpu = false;
-            cont = false;
-            gpu_submissions.clear();
-            if user.submission_id().is_none() && lock.cpu_locked.is_some() {
-                cont = true;
-                gpu_submissions.push(lock.cpu_locked.unwrap());
-            }
-            for (&a, &submission) in &lock.uses {
-                if a.range.overlaps(&range) {
-                    // If this is part of the same GPU submission, don't try to wait
-                    if submission.submission_id() == user.submission_id()
-                        && submission.submission_id().is_some()
-                    {
-                        continue;
-                    }
+        if !bypass_gpu {
+            let mut cont = true;
+            let mut gpu_submissions = Vec::new();
+            while cont {
+                let mut has_cpu = false;
+                cont = false;
+                gpu_submissions.clear();
+                if user.submission_id().is_none() && lock.cpu_locked.is_some() {
                     cont = true;
-                    if let Some(sub) = submission.submission_id() {
-                        gpu_submissions.push(sub);
-                    } else {
-                        has_cpu = true;
+                    gpu_submissions.push(lock.cpu_locked.unwrap());
+                }
+                for (&a, &submission) in &lock.uses {
+                    if a.range.overlaps(&range) {
+                        // If this is part of the same GPU submission, don't try to wait
+                        if submission.submission_id() == user.submission_id()
+                            && submission.submission_id().is_some()
+                        {
+                            continue;
+                        }
+                        cont = true;
+                        if let Some(sub) = submission.submission_id() {
+                            gpu_submissions.push(sub);
+                        } else {
+                            has_cpu = true;
+                        }
+                        break;
                     }
+                }
+                if cont && has_cpu {
+                    self.condvar.wait(&mut lock);
+                } else if cont {
+                    let sub = *gpu_submissions.iter().min().unwrap();
+                    if sub == u64::MAX {
+                        self.condvar.wait(&mut lock);
+                    } else {
+                        drop(lock);
+                        instance.sync_thread().wait_for(sub, true)?;
+                        lock = self.mutex.lock();
+                    }
+                } else {
                     break;
                 }
-            }
-            if cont && has_cpu {
-                self.condvar.wait(&mut lock);
-            } else if cont {
-                let sub = *gpu_submissions.iter().min().unwrap();
-                if sub == u64::MAX {
-                    self.condvar.wait(&mut lock);
-                } else {
-                    drop(lock);
-                    instance.sync_thread().wait_for(sub, true)?;
-                    lock = self.mutex.lock();
-                }
-            } else {
-                break;
             }
         }
         let id = BufferUserId {

@@ -30,8 +30,8 @@ use types::{Dag, NodeIndex, SyncOperations, Walker};
 
 use crate::{
     Buffer, BufferCommand, BufferCommandInner, BufferRange, BufferSlice, BufferUserId,
-    CommandRecorderInner, InstanceState, Kernel, MapSupasimError, SupaSimError, SupaSimInstance,
-    SupaSimResult,
+    CommandRecorderInner, InstanceState, Kernel, MapSupasimError, MappedBuffer,
+    SendableUserBufferAccessClosure, SupaSimError, SupaSimInstance, SupaSimResult,
 };
 
 pub type CommandDag<B> = Dag<BufferCommand<B>>;
@@ -690,15 +690,118 @@ impl<B: hal::Backend> SemaphoreFinishedJob<B> {
 }
 /// A job for the CPU to run in between GPU submissions
 pub enum CpuSubmission<B: hal::Backend> {
-    CreateGpuBuffer { buffer_id: Buffer<B> },
-    DestroyGpuBuffer { buffer_id: Buffer<B> },
+    CreateGpuBuffer {
+        buffer_id: Buffer<B>,
+    },
+    DestroyGpuBuffer {
+        buffer_id: Buffer<B>,
+    },
+    UserClosure {
+        closure: SendableUserBufferAccessClosure<B>,
+        buffers: Vec<BufferSlice<B>>,
+    },
     Dummy,
 }
 impl<B: hal::Backend> CpuSubmission<B> {
-    pub fn run(self, _instance: &InstanceState<B>) -> SupaSimResult<B, ()> {
+    pub fn run(self, instance: &InstanceState<B>) -> SupaSimResult<B, ()> {
         match self {
             Self::CreateGpuBuffer { .. } => todo!(),
             Self::DestroyGpuBuffer { .. } => todo!(),
+            Self::UserClosure { closure, buffers } => {
+                let instance_self = unsafe { &*instance.myself.get() }
+                    .as_ref()
+                    .unwrap()
+                    .upgrade()?;
+                let properties = instance.inner_properties;
+                let mut mapped_buffers = Vec::with_capacity(buffers.len());
+                let mut ids = Vec::new();
+                for b in &buffers {
+                    b.validate()?;
+                    ids.push(b.acquire(crate::BufferUser::Cpu, false)?.id);
+                }
+                if properties.map_buffers {
+                    #[allow(clippy::never_loop)]
+                    for (i, b) in buffers.iter().enumerate() {
+                        let mut buffer_inner = b.buffer.inner_mut()?;
+                        let mapping = unsafe {
+                            instance
+                                .inner
+                                .lock()
+                                .as_mut()
+                                .unwrap()
+                                .map_buffer(buffer_inner.inner.as_mut().unwrap())
+                                .map_supasim()?
+                        };
+                        mapped_buffers.push(MappedBuffer {
+                            instance: instance_self.clone(),
+                            inner: unsafe { mapping.add(b.start as usize) },
+                            len: b.len,
+                            buffer_align: buffer_inner.create_info.contents_align,
+                            has_mut: b.needs_mut,
+                            was_used_mut: false,
+                            in_buffer_offset: b.start,
+                            buffer: b.buffer.clone(),
+                            vec_capacity: None,
+                            user_id: ids[i],
+                            _p: Default::default(),
+                        });
+                    }
+                    // Memory issues if we don't unmap I guess
+                    let error =
+                        closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e));
+                    drop(mapped_buffers);
+                    error?;
+                } else {
+                    let mut buffer_datas = Vec::new();
+                    for b in &buffers {
+                        let mut buffer = b.buffer.inner_mut()?;
+                        let _instance = buffer.instance.clone();
+                        let mut data;
+                        #[allow(clippy::uninit_vec)]
+                        {
+                            data = Vec::with_capacity(b.len as usize);
+                            unsafe {
+                                data.set_len(b.len as usize);
+                                _instance
+                                    .inner()?
+                                    .inner
+                                    .lock()
+                                    .as_mut()
+                                    .unwrap()
+                                    .read_buffer(buffer.inner.as_mut().unwrap(), b.start, &mut data)
+                                    .map_supasim()?;
+                            };
+                        };
+                        buffer_datas.push(data);
+                    }
+                    for (i, a) in buffer_datas.iter_mut().enumerate() {
+                        let b = &buffers[i];
+                        let buffer_inner = b.buffer.inner()?;
+                        let mapped = MappedBuffer {
+                            instance: instance_self.clone(),
+                            inner: a.as_mut_ptr(),
+                            len: b.len,
+                            buffer_align: buffer_inner.create_info.contents_align,
+                            has_mut: b.needs_mut,
+                            was_used_mut: false,
+                            in_buffer_offset: b.start,
+                            buffer: b.buffer.clone(),
+                            vec_capacity: Some(a.capacity()),
+                            user_id: ids[i],
+                            _p: Default::default(),
+                        };
+                        mapped_buffers.push(mapped);
+                    }
+                    // Memory issues if we don't unmap I guess
+                    let error =
+                        closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e));
+                    for b in buffer_datas {
+                        std::mem::forget(b);
+                    }
+                    drop(mapped_buffers);
+                    error?;
+                }
+            }
             Self::Dummy => (),
         }
         Ok(())
