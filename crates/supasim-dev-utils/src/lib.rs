@@ -98,6 +98,11 @@ macro_rules! all_backend_tests {
                 hal::Vulkan::create_instance(true)
             }, $test_name, Vulkan);
 
+            #[cfg(all(feature = "metal", target_vendor = "apple"))]
+            $crate::all_backend_tests_inner!([<test_name _metal>], "METAL", {
+                hal::Metal::create_instance()
+            }, $test_name, Metal);
+
             #[cfg(feature = "wgpu")]
             $crate::all_backend_tests_inner!([<$test_name _wgpu_vulkan>], "WGPU_VULKAN", {
                 hal::wgpu::Wgpu::create_instance(true, hal::wgpu::Backends::VULKAN, None)

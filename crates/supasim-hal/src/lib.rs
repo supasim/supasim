@@ -19,6 +19,8 @@ END LICENSE */
 pub mod dummy;
 #[cfg(feature = "external_wgpu")]
 pub mod external_wgpu;
+#[cfg(all(feature = "metal", target_vendor = "apple"))]
+pub mod metal;
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
 #[cfg(feature = "wgpu")]
@@ -32,6 +34,8 @@ use std::any::Any;
 pub use dummy::Dummy;
 #[cfg(feature = "external_wgpu")]
 pub use external_wgpu::{WgpuDeviceExportInfo, wgpu_adapter_supports_external};
+#[cfg(feature = "wgpu")]
+pub use metal::Metal;
 #[cfg(feature = "vulkan")]
 pub use vulkan::Vulkan;
 #[cfg(feature = "wgpu")]
