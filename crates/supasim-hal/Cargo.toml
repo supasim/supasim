@@ -46,9 +46,15 @@ metal = [
 ]
 
 [dependencies]
-thiserror.workspace = true
 
 types.workspace = true
+# I'm putting this here for now. Otherwise, the metal feature tries to enable
+# kernels/opt-valid for compiling without actually bringing in the dependencies,
+# which is probably a bug in cargo or something but it breaks my project. So for
+# now, supasim-hal is a little more bloated than it needs to be
+kernels.workspace = true
+
+thiserror.workspace = true
 bytemuck.workspace = true
 log.workspace = true
 env_logger.workspace = true
@@ -83,7 +89,6 @@ objc2-foundation = { version = "0.3" }
 
 [dev-dependencies]
 dev-utils.workspace = true
-kernels.workspace = true
 
 [[example]]
 name = "hal_buffer_copy"

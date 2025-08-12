@@ -1932,7 +1932,6 @@ dependencies = [
  "rand",
  "supasim-dev-utils",
  "supasim-hal",
- "supasim-kernels",
  "supasim-types",
  "thiserror 2.0.14",
  "thunderdome",

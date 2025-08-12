@@ -47,7 +47,7 @@ use thunderdome::{Arena, Index};
 
 pub use bytemuck;
 pub use hal;
-pub use kernels;
+pub use hal::kernels;
 pub use types::{
     Backend, HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel,
     SpirvVersion,

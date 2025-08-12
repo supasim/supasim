@@ -46,7 +46,6 @@ thunderdome.workspace = true
 paste.workspace = true
 parking_lot = "0.12"
 
-kernels.workspace = true
 types.workspace = true
 hal = { workspace = true, default-features = false }
 
