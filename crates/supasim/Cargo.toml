@@ -47,6 +47,7 @@ paste.workspace = true
 parking_lot = "0.12"
 
 types.workspace = true
+kernels.workspace = true
 hal = { workspace = true, default-features = false }
 
 [dev-dependencies]

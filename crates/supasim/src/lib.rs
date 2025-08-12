@@ -26,6 +26,8 @@ END LICENSE */
 
 #![allow(dead_code)]
 
+pub extern crate kernels;
+
 #[cfg(test)]
 mod tests;
 
@@ -47,7 +49,6 @@ use thunderdome::{Arena, Index};
 
 pub use bytemuck;
 pub use hal;
-pub use hal::kernels;
 pub use types::{
     Backend, HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel,
     SpirvVersion,

@@ -19,7 +19,7 @@ END LICENSE */
 
 use rand::random;
 use std::sync::Arc;
-use supasim::{Backend, SupaSimInstance, kernels, wgpu};
+use supasim::{Backend, SupaSimInstance, wgpu};
 
 use winit::{
     application::ApplicationHandler,
