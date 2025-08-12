@@ -97,9 +97,6 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
                 minify: false,
             })
             .unwrap();
-        if TypeId::of::<B>() == TypeId::of::<crate::Metal>() {
-            std::fs::write("test_add_code.msl", &add_code);
-        }
         assert_eq!(add_reflection.buffers, vec![false, false, true]);
         assert_eq!(double_reflection.buffers, vec![true]);
         drop(kernel_compiler);

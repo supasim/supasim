@@ -83,7 +83,7 @@ objc2-foundation = { version = "0.3" }
 
 [dev-dependencies]
 dev-utils.workspace = true
-kernels = { workspace = true }
+kernels.workspace = true
 
 [[example]]
 name = "hal_buffer_copy"

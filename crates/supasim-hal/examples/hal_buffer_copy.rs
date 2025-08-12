@@ -97,6 +97,6 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
     }
 }
 pub fn main() {
-    let instance = supasim_hal::Metal::create_instance().unwrap();
-    example::<supasim_hal::Metal>(instance);
+    let instance = supasim_hal::Vulkan::create_instance(true).unwrap();
+    example::<supasim_hal::Vulkan>(instance);
 }
