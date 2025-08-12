@@ -37,7 +37,7 @@ cuda = [
 wgpu = ["dep:wgpu", "pollster", "external_wgpu"]
 external_wgpu = ["dep:wgpu", "ash", "wgpu/wgsl"]
 vulkan = ["ash", "gpu-allocator"]
-metal = ["objc2", "objc2-metal"]
+metal = ["objc2", "objc2-metal", "dispatch2"]
 
 [dependencies]
 thiserror.workspace = true
@@ -64,8 +64,16 @@ pollster = { workspace = true, optional = true }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 # Metal dependencies
+
+# Apple's programming model, like Windows's COM
 objc2 = { version = "0.6", optional = true }
+# Actual metal dependency
 objc2-metal = { version = "0.3", optional = true }
+# Required for "dispatch data" which is how you pass bytes in metal apparently
+dispatch2 = { version = "0.3", optional = true }
+# Needed for common types like NSString and NSError
+objc2-foundation = {version = "0.3"}
+
 
 [dev-dependencies]
 dev-utils.workspace = true

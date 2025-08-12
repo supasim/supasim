@@ -61,7 +61,7 @@ pub trait Backend: Sized + std::fmt::Debug + Clone + Send + Sync + 'static {
     type Error: Error<Self>;
 }
 
-pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
+pub trait BackendInstance<B: Backend<Instance = Self>>: Send {
     fn get_properties(&mut self) -> HalInstanceProperties;
     /// Get whether or not memory can be shared to a certain device. Usually, this device would be a wgpu device. Note that using this
     /// with wgpu devices will require the wgpu feature, even if the backend isn't used.
@@ -215,7 +215,7 @@ pub struct CommandSynchronization<'a, B: Backend> {
     pub out_semaphore: Option<(&'a mut B::Semaphore, u64)>,
 }
 
-pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
+pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send {
     /// # Safety
     /// * Must only be called on instances with `SyncMode::Dag`
     /// * The recorder must not have had any record command since being created or cleared
@@ -239,9 +239,9 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
     unsafe fn clear(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
 
-pub trait Kernel<B: Backend<Kernel = Self>>: Send + Sync {}
+pub trait Kernel<B: Backend<Kernel = Self>>: Send {}
 
-pub trait Buffer<B: Backend<Buffer = Self>>: Send + Sync {
+pub trait Buffer<B: Backend<Buffer = Self>>: Send {
     /// # Safety
     /// * Synchronization must be managed by the user
     /// * The buffer must be of type `Storage`
@@ -260,11 +260,11 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send + Sync {
     ) -> Result<Box<dyn Any>, B::Error>;
 }
 
-pub trait BindGroup<B: Backend<BindGroup = Self>>: Send + Sync {}
+pub trait BindGroup<B: Backend<BindGroup = Self>>: Send {}
 
-pub trait KernelCache<B: Backend<KernelCache = Self>>: Send + Sync {}
+pub trait KernelCache<B: Backend<KernelCache = Self>>: Send {}
 
-pub trait Semaphore<B: Backend<Semaphore = Self>>: Send + Sync {
+pub trait Semaphore<B: Backend<Semaphore = Self>>: Send {
     /// # Safety
     /// * The semaphore must be signalled by some already submitted command recorder
     unsafe fn wait(&self) -> Result<(), B::Error>;
@@ -289,7 +289,7 @@ pub struct RecorderSubmitInfo<'a, B: Backend> {
 }
 
 #[must_use]
-pub trait Error<B: Backend<Error = Self>>: std::error::Error + Send + Sync {
+pub trait Error<B: Backend<Error = Self>>: std::error::Error + Send {
     fn is_out_of_device_memory(&self) -> bool;
     fn is_out_of_host_memory(&self) -> bool;
     fn is_timeout(&self) -> bool;

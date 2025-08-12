@@ -1,29 +1,368 @@
-use objc2::{rc::Retained, runtime::ProtocolObject};
-use objc2_metal::MTLCommandQueue;
-use thiserror::Error;
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {}
 
-use crate::{Backend, BackendInstance};
+use std::{ops::Deref, sync::Mutex};
+
+use objc2::{
+    rc::{Retained, RetainedFromIterator},
+    runtime::{NSObjectProtocol, Protocol, ProtocolObject},
+};
+use objc2_foundation::{
+    NSArray, NSCopying, NSError, NSMutableArray, NSMutableCopying, NSString, ns_string,
+};
+use objc2_metal::{
+    MTLArgumentAccess, MTLArgumentDescriptor, MTLArgumentEncoder, MTLBuffer, MTLCommandBuffer,
+    MTLCommandQueue, MTLCompileOptions, MTLComputePipelineState, MTLDataType, MTLDevice, MTLEvent,
+    MTLFeatureSet, MTLFunction, MTLGPUFamily, MTLLibrary, MTLResourceOptions, MTLSharedEvent,
+};
+use thiserror::Error;
+use types::{
+    HalBufferType, HalInstanceProperties, KernelReflectionInfo, KernelTarget, MetalVersion,
+};
+
+use crate::{
+    Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, Kernel, KernelCache, Semaphore,
+};
+
+struct UniqueObject<T: ?Sized + NSObjectProtocol>(Retained<ProtocolObject<T>>);
+unsafe impl<T: ?Sized + NSObjectProtocol> Send for UniqueObject<T> {}
+impl<T: ?Sized + NSObjectProtocol> UniqueObject<T> {
+    pub fn new(inner: Retained<ProtocolObject<T>>) -> Self {
+        Self(inner)
+    }
+    pub fn into_inner(self) -> Retained<ProtocolObject<T>> {
+        self.0
+    }
+    /// # Safety
+    /// This should only be called if the cloned value will automatically be synced or won't be used.
+    pub unsafe fn unsafe_clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+impl<T: ?Sized + NSObjectProtocol> Deref for UniqueObject<T> {
+    type Target = ProtocolObject<T>;
+    fn deref(&self) -> &ProtocolObject<T> {
+        &self.0
+    }
+}
+impl<T: ?Sized + NSObjectProtocol> std::fmt::Debug for UniqueObject<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Metal;
 impl Metal {
     pub fn create_instance() -> Result<MetalInstance, MetalError> {
-        todo!()
+        let device = objc2_metal::MTLCreateSystemDefaultDevice().ok_or(MetalError::DeviceCreate)?;
+        let queue = device.newCommandQueue().ok_or(MetalError::DeviceCreate)?;
+        Ok(MetalInstance {
+            device: UniqueObject::new(device),
+            command_queue: UniqueObject::new(queue),
+        })
     }
 }
 impl Backend for Metal {
     type Instance = MetalInstance;
     type Error = MetalError;
+    type Semaphore = MetalSemaphore;
+    type BindGroup = MetalBindGroup;
+    type Kernel = MetalKernel;
+    type Buffer = MetalBuffer;
+    type KernelCache = MetalKernelCache;
+    type CommandRecorder = MetalCommandRecorder;
 }
 
 #[derive(Debug)]
 pub struct MetalInstance {
-    command_queue: ProtocolObject<dyn MTLCommandQueue>,
+    // It is important that they aren't `Retain`'d because `Retain` requires
+    // the inner type to be send + sync
+    device: UniqueObject<dyn MTLDevice>,
+    command_queue: UniqueObject<dyn MTLCommandQueue>,
 }
-impl BackendInstance<Metal> for MetalInstance {}
+impl BackendInstance<Metal> for MetalInstance {
+    fn get_properties(&mut self) -> HalInstanceProperties {
+        // TODO: check for supported metal version
+        //let metal_version = MetalVersion::V2_3;
+        //self.device.supportsFamily(MTLGPUFamily::Metal3);
+        HalInstanceProperties {
+            sync_mode: types::SyncMode::VulkanStyle,
+            pipeline_cache: false,
+            kernel_lang: KernelTarget::Msl {
+                version: MetalVersion::Prior,
+            },
+            easily_update_bind_groups: true,
+            semaphore_signal: true,
+            map_buffers: true,
+            is_unified_memory: self.device.hasUnifiedMemory(),
+            map_buffer_while_gpu_use: true,
+            upload_download_buffers: true,
+            export_memory: false,
+        }
+    }
+    unsafe fn can_share_memory_to_device(
+        &mut self,
+        _device: &dyn std::any::Any,
+    ) -> Result<bool, <Metal as Backend>::Error> {
+        Ok(false)
+    }
+    unsafe fn get_kernel_cache_data(
+        &mut self,
+        _cache: &mut <Metal as Backend>::KernelCache,
+    ) -> Result<Vec<u8>, <Metal as Backend>::Error> {
+        unreachable!()
+    }
+    unsafe fn create_semaphore(
+        &mut self,
+    ) -> Result<<Metal as Backend>::Semaphore, <Metal as Backend>::Error> {
+        Ok(MetalSemaphore {
+            event: UniqueObject::new(
+                self.device
+                    .newSharedEvent()
+                    .ok_or(MetalError::ObjectCreate)?,
+            ),
+            current_value: Mutex::new(0),
+        })
+    }
+    unsafe fn compile_kernel(
+        &mut self,
+        binary: &[u8],
+        reflection: &types::KernelReflectionInfo,
+        _cache: Option<&mut <Metal as Backend>::KernelCache>,
+    ) -> Result<<Metal as Backend>::Kernel, <Metal as Backend>::Error> {
+        let library_options = MTLCompileOptions::new();
+        let library = unsafe {
+            self.device.newLibraryWithSource_options_error(
+                &NSString::from_str(
+                    std::str::from_utf8(binary).map_err(|_| MetalError::NonUtf8KernelString)?,
+                ),
+                Some(&library_options),
+            )?
+        };
+        let function = library
+            .newFunctionWithName(&NSString::from_str(&reflection.entry_point_name))
+            .ok_or(MetalError::WrongMslFunctionName)?;
+        let pipeline = self
+            .device
+            .newComputePipelineStateWithFunction_error(&function)?;
+        Ok(MetalKernel {
+            library: UniqueObject::new(library),
+            function: UniqueObject::new(function),
+            pipeline: UniqueObject::new(pipeline),
+            reflection: reflection.clone(),
+        })
+    }
+    unsafe fn create_buffer(
+        &mut self,
+        alloc_info: &types::HalBufferDescriptor,
+    ) -> Result<<Metal as Backend>::Buffer, <Metal as Backend>::Error> {
+        let options = match alloc_info.memory_type {
+            HalBufferType::Storage => MTLResourceOptions::StorageModePrivate,
+            HalBufferType::Upload => {
+                MTLResourceOptions::StorageModeShared
+                    | MTLResourceOptions::CPUCacheModeWriteCombined
+            }
+            HalBufferType::Download | HalBufferType::UploadDownload => {
+                MTLResourceOptions::StorageModeShared
+            }
+        };
+        let buffer = self
+            .device
+            .newBufferWithLength_options(alloc_info.size as usize, options)
+            .ok_or(MetalError::BufferAllocate)?;
+        Ok(MetalBuffer {
+            buffer: UniqueObject::new(buffer),
+        })
+    }
+    unsafe fn create_recorder(
+        &mut self,
+    ) -> Result<<Metal as Backend>::CommandRecorder, <Metal as Backend>::Error> {
+        let command_buffer: Retained<ProtocolObject<dyn MTLCommandBuffer>> = self
+            .command_queue
+            .commandBuffer()
+            .ok_or(MetalError::ObjectCreate)?;
+        Ok(MetalCommandRecorder {
+            command_buffer: UniqueObject::new(command_buffer),
+        })
+    }
+    unsafe fn create_bind_group(
+        &mut self,
+        _kernel: &mut <Metal as Backend>::Kernel,
+        slices: &[crate::HalBufferSlice<Metal>],
+    ) -> Result<<Metal as Backend>::BindGroup, <Metal as Backend>::Error> {
+        let mut buffers = Vec::new();
+        for slice in slices {
+            buffers.push((
+                unsafe { slice.buffer.buffer.unsafe_clone() },
+                slice.offset,
+                slice.len,
+            ));
+        }
+        Ok(MetalBindGroup { buffers })
+    }
+    unsafe fn create_kernel_cache(
+        &mut self,
+        _initial_data: &[u8],
+    ) -> Result<<Metal as Backend>::KernelCache, <Metal as Backend>::Error> {
+        unreachable!("Metal doesn't support kernel caches")
+    }
+    unsafe fn submit_recorders(
+        &mut self,
+        infos: &mut [crate::RecorderSubmitInfo<Metal>],
+    ) -> Result<(), <Metal as Backend>::Error> {
+        for info in infos {
+            if let Some(wait_semaphore) = info.wait_semaphore {
+                let ptr = Retained::into_raw(wait_semaphore.event.0.clone())
+                    as *mut ProtocolObject<dyn MTLEvent>;
+                let as_event = unsafe { Retained::from_raw(ptr) }.unwrap();
+                info.command_recorder
+                    .command_buffer
+                    .encodeWaitForEvent_value(
+                        &as_event,
+                        *wait_semaphore.current_value.lock().unwrap(),
+                    );
+            }
+            if let Some(signal_semaphore) = info.signal_semaphore {
+                let ptr = Retained::into_raw(signal_semaphore.event.0.clone())
+                    as *mut ProtocolObject<dyn MTLEvent>;
+                let as_event = unsafe { Retained::from_raw(ptr) }.unwrap();
+                info.command_recorder
+                    .command_buffer
+                    .encodeSignalEvent_value(
+                        &as_event,
+                        *signal_semaphore.current_value.lock().unwrap() + 1,
+                    );
+            }
+            info.command_recorder.command_buffer.commit();
+        }
+        Ok(())
+    }
+    unsafe fn map_buffer(
+        &mut self,
+        buffer: &mut <Metal as Backend>::Buffer,
+    ) -> Result<*mut u8, <Metal as Backend>::Error> {
+        Ok(buffer.buffer.contents().as_ptr() as *mut u8)
+    }
+    unsafe fn read_buffer(
+        &mut self,
+        buffer: &mut <Metal as Backend>::Buffer,
+        offset: u64,
+        data: &mut [u8],
+    ) -> Result<(), <Metal as Backend>::Error> {
+        let ptr = buffer.buffer.contents().as_ptr() as *const u8;
+        let slice = unsafe { std::slice::from_raw_parts(ptr.add(offset as usize), data.len()) };
+        data.copy_from_slice(slice);
+        Ok(())
+    }
+    unsafe fn write_buffer(
+        &mut self,
+        buffer: &mut <Metal as Backend>::Buffer,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<(), <Metal as Backend>::Error> {
+        let ptr = buffer.buffer.contents().as_ptr() as *mut u8;
+        let slice = unsafe { std::slice::from_raw_parts_mut(ptr.add(offset as usize), data.len()) };
+        slice.copy_from_slice(data);
+        Ok(())
+    }
+    unsafe fn unmap_buffer(
+        &mut self,
+        _buffer: &mut <Metal as Backend>::Buffer,
+    ) -> Result<(), <Metal as Backend>::Error> {
+        Ok(())
+    }
+    unsafe fn update_bind_group(
+        &mut self,
+        bg: &mut <Metal as Backend>::BindGroup,
+        _kernel: &mut <Metal as Backend>::Kernel,
+        buffers: &[crate::HalBufferSlice<Metal>],
+    ) -> Result<(), <Metal as Backend>::Error> {
+        for (i, slice) in buffers.iter().enumerate() {
+            bg.buffers[i] = (
+                unsafe { slice.buffer.buffer.unsafe_clone() },
+                slice.offset,
+                slice.len,
+            );
+        }
+        Ok(())
+    }
+    unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Metal as Backend>::Error> {
+        Ok(())
+    }
+    unsafe fn wait_for_idle(&mut self) -> Result<(), <Metal as Backend>::Error> {
+        // Apparently this gets mostly abstracted away and has little penalty. I prefer
+        // it to having to unsafely clone a `UniqueObject`
+        let cb = self
+            .command_queue
+            .commandBuffer()
+            .ok_or(MetalError::ObjectCreate)?;
+        cb.commit();
+        unsafe {
+            cb.waitUntilCompleted();
+        }
+        Ok(())
+    }
+    unsafe fn destroy(self) -> Result<(), <Metal as Backend>::Error> {
+        Ok(())
+    }
+    unsafe fn destroy_bind_group(
+        &mut self,
+        _kernel: &mut <Metal as Backend>::Kernel,
+        _bind_group: <Metal as Backend>::BindGroup,
+    ) -> Result<(), <Metal as Backend>::Error> {
+        Ok(())
+    }
+    unsafe fn destroy_buffer(
+        &mut self,
+        _buffer: <Metal as Backend>::Buffer,
+    ) -> Result<(), <Metal as Backend>::Error> {
+        Ok(())
+    }
+    unsafe fn destroy_kernel(
+        &mut self,
+        _kernel: <Metal as Backend>::Kernel,
+    ) -> Result<(), <Metal as Backend>::Error> {
+        Ok(())
+    }
+    unsafe fn destroy_kernel_cache(
+        &mut self,
+        _cache: <Metal as Backend>::KernelCache,
+    ) -> Result<(), <Metal as Backend>::Error> {
+        Ok(())
+    }
+    unsafe fn destroy_recorder(
+        &mut self,
+        _recorder: <Metal as Backend>::CommandRecorder,
+    ) -> Result<(), <Metal as Backend>::Error> {
+        Ok(())
+    }
+    unsafe fn destroy_semaphore(
+        &mut self,
+        _semaphore: <Metal as Backend>::Semaphore,
+    ) -> Result<(), <Metal as Backend>::Error> {
+        Ok(())
+    }
+}
 
+#[must_use]
 #[derive(Error, Debug)]
-pub enum MetalError {}
+pub enum MetalError {
+    #[error("SupaSim requires metal version ")]
+    BadMetalVersion,
+    #[error("Failed to create metal device or queue. No other information.")]
+    DeviceCreate,
+    #[error("Failed to create a metal object. This should be reported if it ever arises.")]
+    ObjectCreate,
+    #[error("Internal metal error: {0}")]
+    MetalError(#[from] Retained<NSError>),
+    #[error("A nonexistent entry point name was provided in kernel reflection")]
+    WrongMslFunctionName,
+    #[error("A buffer failed to allocate")]
+    BufferAllocate,
+    #[error("An invalid utf8 string was passed to compile_kernel")]
+    NonUtf8KernelString,
+}
 impl crate::Error<Metal> for MetalError {
     fn is_out_of_device_memory(&self) -> bool {
         false
@@ -33,5 +372,96 @@ impl crate::Error<Metal> for MetalError {
     }
     fn is_timeout(&self) -> bool {
         false
+    }
+}
+
+pub struct MetalSemaphore {
+    event: UniqueObject<dyn MTLSharedEvent>,
+    current_value: Mutex<u64>,
+}
+impl Semaphore<Metal> for MetalSemaphore {
+    unsafe fn is_signalled(&self) -> Result<bool, <Metal as Backend>::Error> {
+        let value = unsafe { self.event.signaledValue() };
+        Ok(value == *self.current_value.lock().unwrap() + 1)
+    }
+    unsafe fn reset(&self) -> Result<(), <Metal as Backend>::Error> {
+        *self.current_value.lock().unwrap() += 1;
+        Ok(())
+    }
+    unsafe fn signal(&self) -> Result<(), <Metal as Backend>::Error> {
+        unsafe {
+            self.event
+                .setSignaledValue(*self.current_value.lock().unwrap() + 1);
+        }
+        Ok(())
+    }
+    unsafe fn wait(&self) -> Result<(), <Metal as Backend>::Error> {
+        let value = unsafe { self.event.signaledValue() };
+        unsafe {
+            self.event
+                .waitUntilSignaledValue_timeoutMS(value + 1, u64::MAX);
+        }
+        Ok(())
+    }
+}
+
+pub struct MetalBindGroup {
+    buffers: Vec<(UniqueObject<dyn MTLBuffer>, u64, u64)>,
+}
+impl BindGroup<Metal> for MetalBindGroup {}
+
+pub struct MetalKernel {
+    library: UniqueObject<dyn MTLLibrary>,
+    function: UniqueObject<dyn MTLFunction>,
+    pipeline: UniqueObject<dyn MTLComputePipelineState>,
+    reflection: KernelReflectionInfo,
+}
+impl Kernel<Metal> for MetalKernel {}
+
+pub struct MetalBuffer {
+    buffer: UniqueObject<dyn MTLBuffer>,
+}
+impl Buffer<Metal> for MetalBuffer {
+    unsafe fn export(
+        &mut self,
+        instance: &mut <Metal as Backend>::Instance,
+    ) -> Result<crate::ExternalMemoryObject, <Metal as Backend>::Error> {
+        unreachable!("Can't export metal buffers yet")
+    }
+    unsafe fn share_to_device(
+        &mut self,
+        instance: &mut <Metal as Backend>::Instance,
+        external_device: &dyn std::any::Any,
+    ) -> Result<Box<dyn std::any::Any>, <Metal as Backend>::Error> {
+        unreachable!("Can't export metal buffers yet")
+    }
+}
+
+pub struct MetalKernelCache {}
+impl KernelCache<Metal> for MetalKernelCache {}
+
+pub struct MetalCommandRecorder {
+    command_buffer: UniqueObject<dyn MTLCommandBuffer>,
+}
+impl CommandRecorder<Metal> for MetalCommandRecorder {
+    unsafe fn clear(
+        &mut self,
+        instance: &mut <Metal as Backend>::Instance,
+    ) -> Result<(), <Metal as Backend>::Error> {
+        todo!()
+    }
+    unsafe fn record_commands(
+        &mut self,
+        instance: &mut <Metal as Backend>::Instance,
+        commands: &mut [crate::BufferCommand<Metal>],
+    ) -> Result<(), <Metal as Backend>::Error> {
+        todo!()
+    }
+    unsafe fn record_dag(
+        &mut self,
+        instance: &mut <Metal as Backend>::Instance,
+        dag: &mut types::Dag<crate::BufferCommand<Metal>>,
+    ) -> Result<(), <Metal as Backend>::Error> {
+        todo!()
     }
 }

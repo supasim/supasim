@@ -526,6 +526,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89a09f22a6c6069a18470eb92d2298acf25463f14256d24778e1230d789a2aec"
 dependencies = [
  "bitflags 2.9.1",
+ "block2 0.6.1",
+ "libc",
  "objc2 0.6.1",
 ]
 
@@ -1263,7 +1265,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "900831247d2fe1a09a683278e5384cfb8c80c79fe6b166f9d14bfdde0ea1b03c"
 dependencies = [
  "bitflags 2.9.1",
+ "block2 0.6.1",
+ "libc",
  "objc2 0.6.1",
+ "objc2-core-foundation",
 ]
 
 [[package]]
@@ -1955,10 +1960,12 @@ version = "0.0.1"
 dependencies = [
  "ash",
  "bytemuck",
+ "dispatch2",
  "env_logger",
  "gpu-allocator 0.27.0 (git+https://github.com/supasim/gpu-allocator.git?branch=external-memory-vulkan)",
  "log",
  "objc2 0.6.1",
+ "objc2-foundation 0.3.1",
  "objc2-metal 0.3.1",
  "pollster",
  "scopeguard",

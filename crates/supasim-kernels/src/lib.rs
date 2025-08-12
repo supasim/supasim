@@ -406,12 +406,14 @@ impl GlobalState {
             } else {
                 unreachable!();
             }
-        } else if target == slang::CompileTarget::Metal || target == slang::CompileTarget::MetalLib
-        {
-            opt = opt.capability(
-                self.slang_session
-                    .find_capability(options.target.metal_version().unwrap().to_str()),
-            )
+        } else if target == slang::CompileTarget::Metal {
+            if let Some(n) = options.target.metal_version().unwrap().to_msl_str() {
+                opt = opt.capability(self.slang_session.find_capability(n))
+            }
+        } else if target == slang::CompileTarget::MetalLib {
+            if let Some(n) = options.target.metal_version().unwrap().to_metallib_str() {
+                opt = opt.capability(self.slang_session.find_capability(n))
+            }
         }
         if !profile.is_unknown() {
             opt = opt.profile(profile);

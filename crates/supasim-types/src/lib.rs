@@ -86,15 +86,28 @@ impl ShaderModel {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MetalVersion {
     #[default]
+    Prior,
     V2_3,
     V3_1,
+    V4_0,
 }
 impl MetalVersion {
-    pub fn to_str(&self) -> &str {
+    pub fn to_metallib_str(&self) -> Option<&str> {
         use MetalVersion::*;
         match self {
-            V2_3 => "metallib_2_3",
-            V3_1 => "metallib_3_1",
+            Prior => None,
+            V2_3 => Some("metallib_2_3"),
+            V3_1 => Some("metallib_3_1"),
+            V4_0 => Some("metallib_4_0"),
+        }
+    }
+    pub fn to_msl_str(&self) -> Option<&str> {
+        use MetalVersion::*;
+        match self {
+            Prior => None,
+            V2_3 => Some("METAL_2_3"),
+            V3_1 => Some("METAL_3_1"),
+            V4_0 => Some("METAL_4_0"),
         }
     }
 }
@@ -135,7 +148,7 @@ impl KernelTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SyncMode {
     VulkanStyle,
-    AlwaysSequential,
+    Dag,
     Automatic,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
