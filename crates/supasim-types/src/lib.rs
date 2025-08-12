@@ -135,7 +135,7 @@ impl KernelTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SyncMode {
     VulkanStyle,
-    Dag,
+    AlwaysSequential,
     Automatic,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,6 +190,7 @@ pub unsafe fn to_static_lifetime_mut<T>(r: &mut T) -> &'static mut T {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KernelReflectionInfo {
+    pub entry_point_name: String,
     pub workgroup_size: [u32; 3],
     pub subgroup_size: u32,
     /// bool is for whether it is writeable

@@ -171,6 +171,7 @@ impl<B: hal::Backend> AppState<B> {
                 })
                 .unwrap();
             let other = supasim::KernelReflectionInfo {
+                entry_point_name: entry.to_owned(),
                 workgroup_size,
                 buffers: vec![false, true, true],
                 subgroup_size: 0,

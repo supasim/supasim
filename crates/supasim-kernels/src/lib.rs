@@ -586,6 +586,7 @@ impl GlobalState {
             }
         }
         Ok(KernelReflectionInfo {
+            entry_point_name: options.entry.to_owned(),
             workgroup_size,
             subgroup_size,
             buffers: reflection_params,
