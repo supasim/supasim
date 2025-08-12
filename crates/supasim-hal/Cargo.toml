@@ -37,7 +37,13 @@ cuda = [
 wgpu = ["dep:wgpu", "pollster", "external_wgpu"]
 external_wgpu = ["dep:wgpu", "ash", "wgpu/wgsl"]
 vulkan = ["ash", "gpu-allocator"]
-metal = ["objc2", "objc2-metal", "dispatch2", "kernels/msl-stable-out", "kernels/opt-valid"]
+metal = [
+  "objc2",
+  "objc2-metal",
+  "dispatch2",
+  "kernels/msl-stable-out",
+  "kernels/opt-valid",
+]
 
 [dependencies]
 thiserror.workspace = true
@@ -72,7 +78,7 @@ objc2-metal = { version = "0.3", optional = true }
 # Required for "dispatch data" which is how you pass bytes in metal apparently
 dispatch2 = { version = "0.3", optional = true }
 # Needed for common types like NSString and NSError
-objc2-foundation = {version = "0.3"}
+objc2-foundation = { version = "0.3" }
 
 
 [dev-dependencies]
