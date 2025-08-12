@@ -34,7 +34,7 @@ use std::any::Any;
 pub use dummy::Dummy;
 #[cfg(feature = "external_wgpu")]
 pub use external_wgpu::{WgpuDeviceExportInfo, wgpu_adapter_supports_external};
-#[cfg(feature = "wgpu")]
+#[cfg(all(feature = "metal", target_vendor = "apple"))]
 pub use metal::Metal;
 #[cfg(feature = "vulkan")]
 pub use vulkan::Vulkan;

@@ -208,6 +208,7 @@ pub struct KernelReflectionInfo {
     pub subgroup_size: u32,
     /// bool is for whether it is writeable
     pub buffers: Vec<bool>,
+    pub push_constants_size: u64,
 }
 
 pub type Dag<T> = daggy::Dag<T, ()>;
@@ -223,4 +224,10 @@ pub struct InstanceDescriptor {
     pub max_device_memory: Option<u64>,
     pub force_embedded: Option<bool>,
     pub full_debug: bool,
+}
+
+pub enum Backend {
+    Vulkan,
+    Metal,
+    Wgpu,
 }

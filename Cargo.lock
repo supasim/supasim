@@ -134,9 +134,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.98"
+version = "1.0.99"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
+checksum = "b0674a1ddeecb70197781e945de4b3b8ffb61fa939a5597bcf48503737663100"
 
 [[package]]
 name = "arrayref"
@@ -675,9 +675,9 @@ dependencies = [
 
 [[package]]
 name = "glob"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
+checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "gpu-alloc"
@@ -721,7 +721,7 @@ dependencies = [
  "objc2-foundation 0.3.1",
  "objc2-metal 0.3.1",
  "presser",
- "thiserror 2.0.12",
+ "thiserror 2.0.14",
  "windows 0.61.3",
 ]
 
@@ -899,9 +899,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
-version = "0.2.174"
+version = "0.2.175"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
+checksum = "6a82ae493e598baaea5209805c49bbf2ea7de956d50d7da0da1164f9c6d28543"
 
 [[package]]
 name = "libloading"
@@ -1032,7 +1032,7 @@ dependencies = [
  "petgraph",
  "rustc-hash 1.1.0",
  "spirv",
- "thiserror 2.0.12",
+ "thiserror 2.0.14",
  "unicode-ident",
 ]
 
@@ -1571,9 +1571,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.95"
+version = "1.0.97"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02b3e5e68a3a1a02aad3ec490a98007cbc13c37cbe84a3cd7b8e406d76e7f778"
+checksum = "d61789d7719defeb74ea5fe81f2fdfdbd28a803847077cecce2ff14e1472f6f1"
 dependencies = [
  "unicode-ident",
 ]
@@ -1934,7 +1934,7 @@ dependencies = [
  "supasim-hal",
  "supasim-kernels",
  "supasim-types",
- "thiserror 2.0.12",
+ "thiserror 2.0.14",
  "thunderdome",
  "winit",
 ]
@@ -1972,7 +1972,7 @@ dependencies = [
  "supasim-dev-utils",
  "supasim-kernels",
  "supasim-types",
- "thiserror 2.0.12",
+ "thiserror 2.0.14",
  "tracing",
  "wgpu",
 ]
@@ -2002,8 +2002,7 @@ version = "0.0.1"
 [[package]]
 name = "supasim-spirv-cross-sys"
 version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "043ec4d6d3d19db48205292b680e13d08bca2bce6a59d2f8d370f3ae7e4f0014"
+source = "git+https://github.com/supasim/spirv-cross-sys.git#c5eec3cbdf2d04ebba394be3f2352f973ec13552"
 dependencies = [
  "bindgen",
  "cc",
@@ -2012,8 +2011,7 @@ dependencies = [
 [[package]]
 name = "supasim-spirv-tools-sys"
 version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "959d824e8d7eba7013c2c5b0e600e0c44e1614ffa89f0bb693affc6d5673f927"
+source = "git+https://github.com/supasim/spirv-tools-sys.git#145b436351ce0ebd3c05e0b3d3e26cd7b30865bd"
 dependencies = [
  "bindgen",
 ]
@@ -2082,11 +2080,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.12"
+version = "2.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "567b8a2dae586314f7be2a752ec7474332959c6460e02bde30d702a66d488708"
+checksum = "0b0949c3a6c842cbde3f1686d6eea5a010516deb7085f79db747562d4102f41e"
 dependencies = [
- "thiserror-impl 2.0.12",
+ "thiserror-impl 2.0.14",
 ]
 
 [[package]]
@@ -2102,9 +2100,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.12"
+version = "2.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f7cf42b4507d8ea322120659672cf1b9dbb93f8f2d4ecfd6e51350ff5b17a1d"
+checksum = "cc5b44b4ab9c2fdd0e0512e6bece8388e214c0749f5862b114cc5b7a25daf227"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2551,7 +2549,7 @@ dependencies = [
  "raw-window-handle",
  "rustc-hash 1.1.0",
  "smallvec",
- "thiserror 2.0.12",
+ "thiserror 2.0.14",
  "wgpu-core-deps-apple",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
@@ -2611,7 +2609,7 @@ dependencies = [
  "raw-window-handle",
  "renderdoc-sys",
  "smallvec",
- "thiserror 2.0.12",
+ "thiserror 2.0.14",
  "wgpu-types",
  "windows 0.58.0",
  "windows-core 0.58.0",
@@ -2627,7 +2625,7 @@ dependencies = [
  "bytemuck",
  "js-sys",
  "log",
- "thiserror 2.0.12",
+ "thiserror 2.0.14",
  "web-sys",
 ]
 

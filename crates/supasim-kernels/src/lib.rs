@@ -96,7 +96,6 @@ impl GlobalState {
     #[cfg(feature = "opt-valid")]
     fn validate_spv(module: &[u32], s: SpirvVersion) -> Result<()> {
         use std::{ffi::CStr, ptr::null_mut};
-
         unsafe {
             let env = Self::env_from_version(s);
             let options = spirv_tools_sys::spvValidatorOptionsCreate();
@@ -274,12 +273,16 @@ impl GlobalState {
     pub fn compile_kernel(&self, options: KernelCompileOptions) -> Result<KernelReflectionInfo> {
         let extra_optim = options.opt_level == OptimizationLevel::Maximal || options.minify;
         let extra_valid = options.stability == StabilityGuarantee::ExtraValidation;
-        let (target, needs_spirv_transpile) = match options.target {
-            KernelTarget::Ptx => (slang::CompileTarget::Ptx, false),
-            KernelTarget::CudaCpp => (slang::CompileTarget::CudaSource, false),
+        let (target, needs_spirv_transpile, result_name) = match options.target {
+            KernelTarget::Ptx => (slang::CompileTarget::Ptx, false, options.entry.to_owned()),
+            KernelTarget::CudaCpp => (
+                slang::CompileTarget::CudaSource,
+                false,
+                options.entry.to_owned(),
+            ),
             KernelTarget::Msl { .. } | KernelTarget::MetalLib { .. } => {
                 if extra_optim || options.stability != StabilityGuarantee::Experimental {
-                    (slang::CompileTarget::Spirv, true)
+                    (slang::CompileTarget::Spirv, true, "main0".to_owned())
                 } else {
                     (
                         if let KernelTarget::MetalLib { .. } = options.target {
@@ -288,20 +291,23 @@ impl GlobalState {
                             slang::CompileTarget::Metal
                         },
                         false,
+                        options.entry.to_owned(),
                     )
                 }
             }
-            KernelTarget::Spirv { .. } => (slang::CompileTarget::Spirv, false),
-            KernelTarget::Wgsl => (slang::CompileTarget::Spirv, true),
+            KernelTarget::Spirv { .. } => (slang::CompileTarget::Spirv, false, "main".to_owned()),
+            KernelTarget::Wgsl => (slang::CompileTarget::Spirv, true, "main".to_owned()),
             KernelTarget::Glsl => {
                 if extra_optim || extra_valid {
-                    (slang::CompileTarget::Spirv, true)
+                    (slang::CompileTarget::Spirv, true, "main".to_owned())
                 } else {
-                    (slang::CompileTarget::Glsl, false)
+                    (slang::CompileTarget::Glsl, false, options.entry.to_owned())
                 }
             }
-            KernelTarget::Hlsl => (slang::CompileTarget::Hlsl, false),
-            KernelTarget::Dxil { .. } => (slang::CompileTarget::Hlsl, false),
+            KernelTarget::Hlsl => (slang::CompileTarget::Hlsl, false, options.entry.to_owned()),
+            KernelTarget::Dxil { .. } => {
+                (slang::CompileTarget::Hlsl, false, options.entry.to_owned())
+            }
         };
         if options.target.metal_version().is_some() && needs_spirv_transpile {
             #[cfg(not(feature = "msl-stable-out"))]
@@ -588,10 +594,11 @@ impl GlobalState {
             }
         }
         Ok(KernelReflectionInfo {
-            entry_point_name: options.entry.to_owned(),
+            entry_point_name: result_name,
             workgroup_size,
             subgroup_size,
             buffers: reflection_params,
+            push_constants_size: 0,
         })
     }
 }

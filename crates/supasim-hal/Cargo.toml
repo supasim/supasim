@@ -37,7 +37,7 @@ cuda = [
 wgpu = ["dep:wgpu", "pollster", "external_wgpu"]
 external_wgpu = ["dep:wgpu", "ash", "wgpu/wgsl"]
 vulkan = ["ash", "gpu-allocator"]
-metal = ["objc2", "objc2-metal", "dispatch2"]
+metal = ["objc2", "objc2-metal", "dispatch2", "kernels/msl-stable-out", "kernels/opt-valid"]
 
 [dependencies]
 thiserror.workspace = true
@@ -77,7 +77,7 @@ objc2-foundation = {version = "0.3"}
 
 [dev-dependencies]
 dev-utils.workspace = true
-kernels.workspace = true
+kernels = { workspace = true }
 
 [[example]]
 name = "hal_buffer_copy"

@@ -1,18 +1,17 @@
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {}
 
-use std::{ops::Deref, sync::Mutex};
+use std::{ops::Deref, ptr::NonNull, sync::Mutex};
 
 use objc2::{
     rc::Retained,
     runtime::{NSObjectProtocol, ProtocolObject},
 };
-use objc2_foundation::{
-    NSError, NSString,
-};
+use objc2_foundation::{NSError, NSRange, NSString};
 use objc2_metal::{
-    MTLArgumentEncoder, MTLBuffer, MTLCommandBuffer,
-    MTLCommandQueue, MTLCompileOptions, MTLComputePipelineState, MTLDevice, MTLEvent, MTLFunction, MTLLibrary, MTLResourceOptions, MTLSharedEvent,
+    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
+    MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLEvent,
+    MTLFunction, MTLLibrary, MTLResourceOptions, MTLSharedEvent, MTLSize,
 };
 use thiserror::Error;
 use types::{
@@ -20,7 +19,8 @@ use types::{
 };
 
 use crate::{
-    Backend, BackendInstance, BindGroup, Buffer, CommandRecorder, Kernel, KernelCache, Semaphore,
+    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, Kernel,
+    KernelCache, Semaphore,
 };
 
 struct UniqueObject<T: ?Sized + NSObjectProtocol>(Retained<ProtocolObject<T>>);
@@ -29,6 +29,7 @@ impl<T: ?Sized + NSObjectProtocol> UniqueObject<T> {
     pub fn new(inner: Retained<ProtocolObject<T>>) -> Self {
         Self(inner)
     }
+    #[allow(dead_code)]
     pub fn into_inner(self) -> Retained<ProtocolObject<T>> {
         self.0
     }
@@ -86,7 +87,7 @@ impl BackendInstance<Metal> for MetalInstance {
         //let metal_version = MetalVersion::V2_3;
         //self.device.supportsFamily(MTLGPUFamily::Metal3);
         HalInstanceProperties {
-            sync_mode: types::SyncMode::VulkanStyle,
+            sync_mode: types::SyncMode::Automatic,
             pipeline_cache: false,
             kernel_lang: KernelTarget::Msl {
                 version: MetalVersion::Prior,
@@ -131,14 +132,12 @@ impl BackendInstance<Metal> for MetalInstance {
         _cache: Option<&mut <Metal as Backend>::KernelCache>,
     ) -> Result<<Metal as Backend>::Kernel, <Metal as Backend>::Error> {
         let library_options = MTLCompileOptions::new();
-        let library = unsafe {
-            self.device.newLibraryWithSource_options_error(
-                &NSString::from_str(
-                    std::str::from_utf8(binary).map_err(|_| MetalError::NonUtf8KernelString)?,
-                ),
-                Some(&library_options),
-            )?
-        };
+        let library = self.device.newLibraryWithSource_options_error(
+            &NSString::from_str(
+                std::str::from_utf8(binary).map_err(|_| MetalError::NonUtf8KernelString)?,
+            ),
+            Some(&library_options),
+        )?;
         let function = library
             .newFunctionWithName(&NSString::from_str(&reflection.entry_point_name))
             .ok_or(MetalError::WrongMslFunctionName)?;
@@ -146,8 +145,8 @@ impl BackendInstance<Metal> for MetalInstance {
             .device
             .newComputePipelineStateWithFunction_error(&function)?;
         Ok(MetalKernel {
-            library: UniqueObject::new(library),
-            function: UniqueObject::new(function),
+            _library: UniqueObject::new(library),
+            _function: UniqueObject::new(function),
             pipeline: UniqueObject::new(pipeline),
             reflection: reflection.clone(),
         })
@@ -198,7 +197,9 @@ impl BackendInstance<Metal> for MetalInstance {
                 slice.len,
             ));
         }
-        Ok(MetalBindGroup { buffers })
+        Ok(MetalBindGroup {
+            buffers: Mutex::new(buffers),
+        })
     }
     unsafe fn create_kernel_cache(
         &mut self,
@@ -277,8 +278,9 @@ impl BackendInstance<Metal> for MetalInstance {
         _kernel: &mut <Metal as Backend>::Kernel,
         buffers: &[crate::HalBufferSlice<Metal>],
     ) -> Result<(), <Metal as Backend>::Error> {
+        let mut buffers_lock = bg.buffers.lock().unwrap();
         for (i, slice) in buffers.iter().enumerate() {
-            bg.buffers[i] = (
+            buffers_lock[i] = (
                 unsafe { slice.buffer.buffer.unsafe_clone() },
                 slice.offset,
                 slice.len,
@@ -405,13 +407,14 @@ impl Semaphore<Metal> for MetalSemaphore {
 }
 
 pub struct MetalBindGroup {
-    buffers: Vec<(UniqueObject<dyn MTLBuffer>, u64, u64)>,
+    #[allow(clippy::type_complexity)]
+    buffers: Mutex<Vec<(UniqueObject<dyn MTLBuffer>, u64, u64)>>,
 }
 impl BindGroup<Metal> for MetalBindGroup {}
 
 pub struct MetalKernel {
-    library: UniqueObject<dyn MTLLibrary>,
-    function: UniqueObject<dyn MTLFunction>,
+    _library: UniqueObject<dyn MTLLibrary>,
+    _function: UniqueObject<dyn MTLFunction>,
     pipeline: UniqueObject<dyn MTLComputePipelineState>,
     reflection: KernelReflectionInfo,
 }
@@ -423,14 +426,14 @@ pub struct MetalBuffer {
 impl Buffer<Metal> for MetalBuffer {
     unsafe fn export(
         &mut self,
-        instance: &mut <Metal as Backend>::Instance,
+        _instance: &mut <Metal as Backend>::Instance,
     ) -> Result<crate::ExternalMemoryObject, <Metal as Backend>::Error> {
         unreachable!("Can't export metal buffers yet")
     }
     unsafe fn share_to_device(
         &mut self,
-        instance: &mut <Metal as Backend>::Instance,
-        external_device: &dyn std::any::Any,
+        _instance: &mut <Metal as Backend>::Instance,
+        _external_device: &dyn std::any::Any,
     ) -> Result<Box<dyn std::any::Any>, <Metal as Backend>::Error> {
         unreachable!("Can't export metal buffers yet")
     }
@@ -438,6 +441,57 @@ impl Buffer<Metal> for MetalBuffer {
 
 pub struct MetalKernelCache {}
 impl KernelCache<Metal> for MetalKernelCache {}
+
+enum CurrentEncoder {
+    None,
+    Blit(Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>),
+    Compute(Retained<ProtocolObject<dyn MTLComputeCommandEncoder>>),
+}
+impl CurrentEncoder {
+    fn blit(
+        &mut self,
+        cb: &ProtocolObject<dyn MTLCommandBuffer>,
+    ) -> Result<&ProtocolObject<dyn MTLBlitCommandEncoder>, MetalError> {
+        Ok(match self {
+            Self::Blit(b) => b,
+            _ => {
+                self.finish();
+                *self =
+                    CurrentEncoder::Blit(cb.blitCommandEncoder().ok_or(MetalError::ObjectCreate)?);
+                let Self::Blit(blit) = self else {
+                    unreachable!()
+                };
+                blit
+            }
+        })
+    }
+    fn compute(
+        &mut self,
+        cb: &ProtocolObject<dyn MTLCommandBuffer>,
+    ) -> Result<&ProtocolObject<dyn MTLComputeCommandEncoder>, MetalError> {
+        Ok(match self {
+            Self::Compute(c) => c,
+            _ => {
+                self.finish();
+                // We can configure it but that is unnecessary. None of the options are relevant.
+                *self = CurrentEncoder::Compute(
+                    cb.computeCommandEncoder().ok_or(MetalError::ObjectCreate)?,
+                );
+                let Self::Compute(compute) = self else {
+                    unreachable!()
+                };
+                compute
+            }
+        })
+    }
+    fn finish(&mut self) {
+        match self {
+            Self::Blit(b) => b.endEncoding(),
+            Self::Compute(c) => c.endEncoding(),
+            Self::None => (),
+        }
+    }
+}
 
 pub struct MetalCommandRecorder {
     command_buffer: UniqueObject<dyn MTLCommandBuffer>,
@@ -447,20 +501,111 @@ impl CommandRecorder<Metal> for MetalCommandRecorder {
         &mut self,
         instance: &mut <Metal as Backend>::Instance,
     ) -> Result<(), <Metal as Backend>::Error> {
-        todo!()
+        *self = unsafe { instance.create_recorder()? };
+        Ok(())
     }
     unsafe fn record_commands(
         &mut self,
-        instance: &mut <Metal as Backend>::Instance,
+        _instance: &mut <Metal as Backend>::Instance,
         commands: &mut [crate::BufferCommand<Metal>],
     ) -> Result<(), <Metal as Backend>::Error> {
-        todo!()
+        let mut encoder = CurrentEncoder::None;
+        for cmd in commands {
+            match *cmd {
+                BufferCommand::CopyBuffer {
+                    src_buffer,
+                    dst_buffer,
+                    src_offset,
+                    dst_offset,
+                    len,
+                } => {
+                    let blit = encoder.blit(&self.command_buffer)?;
+                    unsafe {
+                        blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                            &src_buffer.buffer,
+                            src_offset as usize,
+                            &dst_buffer.buffer,
+                            dst_offset as usize,
+                            len as usize,
+                        );
+                    }
+                }
+                BufferCommand::DispatchKernel {
+                    kernel,
+                    bind_group,
+                    push_constants,
+                    workgroup_dims,
+                } => {
+                    let comp = encoder.compute(&self.command_buffer)?;
+                    comp.setComputePipelineState(&kernel.pipeline);
+                    assert!(kernel.reflection.push_constants_size == push_constants.len() as u64);
+                    if !push_constants.is_empty() {
+                        unsafe {
+                            comp.setBytes_length_atIndex(
+                                NonNull::new_unchecked(
+                                    push_constants.as_ptr() as *const _ as *mut _
+                                ),
+                                kernel.reflection.push_constants_size as usize,
+                                kernel.reflection.buffers.len(),
+                            );
+                        }
+                    }
+                    let buffers_lock = bind_group.buffers.lock().unwrap();
+                    for (i, item) in buffers_lock.iter().enumerate() {
+                        unsafe {
+                            comp.setBuffer_offset_atIndex(Some(&item.0), item.1 as usize, i);
+                        }
+                    }
+                    drop(buffers_lock);
+                    let grid_size = MTLSize {
+                        width: workgroup_dims[0] as usize,
+                        height: workgroup_dims[1] as usize,
+                        depth: workgroup_dims[2] as usize,
+                    };
+                    let group_size = MTLSize {
+                        width: kernel.reflection.workgroup_size[0] as usize,
+                        height: kernel.reflection.workgroup_size[1] as usize,
+                        depth: kernel.reflection.workgroup_size[2] as usize,
+                    };
+                    comp.dispatchThreadgroups_threadsPerThreadgroup(grid_size, group_size);
+                }
+                BufferCommand::UpdateBindGroup {
+                    bg,
+                    kernel: _,
+                    buffers,
+                } => {
+                    let mut buffers_lock = bg.buffers.lock().unwrap();
+                    buffers_lock.clear();
+                    for b in buffers {
+                        buffers_lock.push((
+                            unsafe { b.buffer.buffer.unsafe_clone() },
+                            b.offset,
+                            b.len,
+                        ));
+                    }
+                }
+                BufferCommand::ZeroMemory { ref buffer } => {
+                    let blit = encoder.blit(&self.command_buffer)?;
+                    blit.fillBuffer_range_value(
+                        &buffer.buffer.buffer,
+                        NSRange {
+                            location: buffer.offset as usize,
+                            length: buffer.len as usize,
+                        },
+                        0,
+                    );
+                }
+                _ => (),
+            }
+        }
+        encoder.finish();
+        Ok(())
     }
     unsafe fn record_dag(
         &mut self,
-        instance: &mut <Metal as Backend>::Instance,
-        dag: &mut types::Dag<crate::BufferCommand<Metal>>,
+        _instance: &mut <Metal as Backend>::Instance,
+        _dag: &mut types::Dag<crate::BufferCommand<Metal>>,
     ) -> Result<(), <Metal as Backend>::Error> {
-        todo!()
+        unreachable!()
     }
 }

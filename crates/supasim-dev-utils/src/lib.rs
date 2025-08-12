@@ -99,7 +99,7 @@ macro_rules! all_backend_tests {
             }, $test_name, Vulkan);
 
             #[cfg(all(feature = "metal", target_vendor = "apple"))]
-            $crate::all_backend_tests_inner!([<test_name _metal>], "METAL", {
+            $crate::all_backend_tests_inner!([<$test_name _metal>], "METAL", {
                 hal::Metal::create_instance()
             }, $test_name, Metal);
 

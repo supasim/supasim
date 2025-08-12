@@ -61,4 +61,4 @@ rand.workspace = true
 [[example]]
 name = "buddhabrot"
 path = "examples/buddhabrot/buddhabrot.rs"
-required-features = ["wgpu", "vulkan"]
+required-features = ["wgpu", "vulkan", "metal"]

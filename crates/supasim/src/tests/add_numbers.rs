@@ -72,9 +72,7 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
     let mut spirv = Vec::new();
     let mut reflection_info = global_state
         .compile_kernel(kernels::KernelCompileOptions {
-            target: types::KernelTarget::Spirv {
-                version: kernels::SpirvVersion::V1_2,
-            },
+            target: instance.properties().unwrap().kernel_lang,
             source: kernels::KernelSource::Memory(include_bytes!(
                 "../../../../kernels/test_add.slang"
             )),

@@ -97,6 +97,6 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
     }
 }
 pub fn main() {
-    let instance = supasim_hal::Wgpu::create_instance(true, wgpu::Backends::PRIMARY, None).unwrap();
-    example::<supasim_hal::Wgpu>(instance);
+    let instance = supasim_hal::Metal::create_instance().unwrap();
+    example::<supasim_hal::Metal>(instance);
 }
