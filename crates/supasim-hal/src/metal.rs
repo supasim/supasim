@@ -4,16 +4,15 @@ unsafe extern "C" {}
 use std::{ops::Deref, sync::Mutex};
 
 use objc2::{
-    rc::{Retained, RetainedFromIterator},
-    runtime::{NSObjectProtocol, Protocol, ProtocolObject},
+    rc::Retained,
+    runtime::{NSObjectProtocol, ProtocolObject},
 };
 use objc2_foundation::{
-    NSArray, NSCopying, NSError, NSMutableArray, NSMutableCopying, NSString, ns_string,
+    NSError, NSString,
 };
 use objc2_metal::{
-    MTLArgumentAccess, MTLArgumentDescriptor, MTLArgumentEncoder, MTLBuffer, MTLCommandBuffer,
-    MTLCommandQueue, MTLCompileOptions, MTLComputePipelineState, MTLDataType, MTLDevice, MTLEvent,
-    MTLFeatureSet, MTLFunction, MTLGPUFamily, MTLLibrary, MTLResourceOptions, MTLSharedEvent,
+    MTLArgumentEncoder, MTLBuffer, MTLCommandBuffer,
+    MTLCommandQueue, MTLCompileOptions, MTLComputePipelineState, MTLDevice, MTLEvent, MTLFunction, MTLLibrary, MTLResourceOptions, MTLSharedEvent,
 };
 use thiserror::Error;
 use types::{
