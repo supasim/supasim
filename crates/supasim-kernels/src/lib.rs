@@ -598,22 +598,22 @@ impl GlobalState {
 
         #[allow(clippy::collapsible_if)]
         #[cfg(feature = "msl-out")]
-        if needs_spirv_transpile {
-            if options.target.metal_version().is_some() {
+        if needs_spirv_transpile && options.target.metal_version().is_some() {
+            {
                 let vec = bytecode.as_slice().to_owned();
                 _other_blob = Self::transpile_spirv(bytemuck::cast_slice(&vec), options.target)?;
                 //let res = Self::spirv_to_msl(bytemuck::cast_slice(&vec), version)?;
                 data = &_other_blob;
             }
-            #[cfg(target_os = "macos")]
-            if let KernelTarget::MetalLib { .. } = options.target {
-                if _tempdir.is_none() {
-                    _tempdir = Some(tempdir()?);
-                }
-                let res = Self::compile_metallib(data, _tempdir.unwrap().path())?;
-                _other_blob = res;
-                data = &_other_blob;
+        }
+        #[cfg(all(target_os = "macos", feature = "msl-out"))]
+        if let KernelTarget::MetalLib { .. } = options.target {
+            if _tempdir.is_none() {
+                _tempdir = Some(tempdir()?);
             }
+            let res = Self::compile_metallib(data, _tempdir.unwrap().path())?;
+            _other_blob = res;
+            data = &_other_blob;
         }
         #[cfg(feature = "wgsl-out")]
         if options.target == KernelTarget::Wgsl && needs_spirv_transpile {
