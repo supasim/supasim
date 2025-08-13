@@ -35,9 +35,9 @@ struct TempData
 
 struct Parameters
 {
-    StructuredBuffer<InputOptions> imageSize;
-    RWStructuredBuffer<Atomic<uint32_t>> buffer;
-    RWStructuredBuffer<TempData> tempBuffer;
+    [binding(0)] StructuredBuffer<InputOptions> imageSize;
+    [binding(1)] RWStructuredBuffer<Atomic<uint32_t>> buffer;
+    [binding(2)] RWStructuredBuffer<TempData> tempBuffer;
 }
 
 // Simple hash function to generate a uint from a seed and index
@@ -124,8 +124,11 @@ void Finalize(uint3 id: SV_DispatchThreadID, ParameterBlock<Parameters> paramete
         for (int i = 0; i < min(ITERATIONS_PER, data.numIterations - (int)options.skipLastPoints - ITERATIONS_PER * (int)options.iterationSetIndex); i++)
         {
             data.position = square(data.position) + data.c;
-            int pixelIndex = getPixelIndex(float2(data.position.y, data.position.x), parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
-            parameters.buffer[pixelIndex].add(1);
+            float2 pos = float2(data.position.y, data.position.x);
+            if(abs(pos.x) < 2.0 && abs(pos.y) < 2.0) {
+                int pixelIndex = getPixelIndex(pos, parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
+                parameters.buffer[pixelIndex].add(1);
+            }
         }
     }
     parameters.tempBuffer[index] = data;

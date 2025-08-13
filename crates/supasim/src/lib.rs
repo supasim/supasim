@@ -26,6 +26,8 @@ END LICENSE */
 
 #![allow(dead_code)]
 
+pub extern crate kernels;
+
 #[cfg(test)]
 mod tests;
 
@@ -48,9 +50,9 @@ use types::SyncMode;
 
 pub use bytemuck;
 pub use hal;
-pub use kernels;
 pub use types::{
-    HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel, SpirvVersion,
+    Backend, HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel,
+    SpirvVersion,
 };
 
 use crate::sync::{GpuSubmissionInfo, SyncThreadHandle, create_sync_thread};
