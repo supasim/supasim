@@ -110,6 +110,14 @@ impl MetalVersion {
             V4_0 => Some("METAL_4_0"),
         }
     }
+    pub fn to_tuple(&self) -> (u8, u8) {
+        match self {
+            Self::Prior => (2, 0),
+            Self::V2_3 => (2, 3),
+            Self::V3_1 => (3, 1),
+            Self::V4_0 => (4, 0),
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum KernelTarget {

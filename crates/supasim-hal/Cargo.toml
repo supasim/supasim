@@ -41,7 +41,7 @@ metal = [
   "objc2",
   "objc2-metal",
   "dispatch2",
-  "kernels/msl-stable-out",
+  "kernels/msl-out",
   "kernels/opt-valid",
 ]
 

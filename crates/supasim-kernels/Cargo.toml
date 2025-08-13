@@ -30,8 +30,8 @@ license.workspace = true
 homepage.workspace = true
 
 [features]
-msl-stable-out = ["spirv-cross"]
-wgsl-out = ["naga"]
+msl-out = ["spirv-cross"]
+wgsl-out = ["naga", "naga/wgsl-out"]
 dxil-out = ["hassle-rs"]
 opt-valid = ["spirv-tools-sys", "spirv-cross"]
 spirv-cross = ["spirv-cross-sys"]
@@ -39,7 +39,6 @@ spirv-cross = ["spirv-cross-sys"]
 [dependencies]
 naga = { version = "26.0", default-features = false, features = [
   "spv-in",
-  "wgsl-out",
 ], optional = true }
 anyhow.workspace = true
 slang = { package = "shader-slang", version = "0.1.0" }
@@ -57,7 +56,7 @@ types.workspace = true
 [[example]]
 name = "simple-kernels"
 path = "examples/simple-kernels.rs"
-required-features = ["msl-stable-out", "wgsl-out", "dxil-out", "opt-valid"]
+required-features = ["msl-out", "wgsl-out", "dxil-out", "opt-valid"]
 
 [dev-dependencies]
 serde_json.workspace = true

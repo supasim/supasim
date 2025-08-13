@@ -159,6 +159,42 @@ impl GlobalState {
             Ok(v)
         }
     }
+    /*#[cfg(feature = "msl-out")]
+    fn spirv_to_msl(
+        module: &[u32],
+        metal_version: types::MetalVersion,
+    ) -> Result<(Vec<u8>, String)> {
+        let module = naga::front::spv::parse_u8_slice(
+            bytemuck::cast_slice(module),
+            &naga::front::spv::Options {
+                adjust_coordinate_space: true,
+                strict_capabilities: false,
+                block_ctx_dump_prefix: None,
+            },
+        )?;
+        module.to_ctx();
+        let mut valid = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        let info = valid.validate(&module)?;
+        let out = naga::back::msl::write_string(
+            &module,
+            &info,
+            &naga::back::msl::Options {
+                lang_version: metal_version.to_tuple(),
+                force_loop_bounding: false,
+                zero_initialize_workgroup_memory: false,
+                ..Default::default()
+            },
+            &naga::back::msl::PipelineOptions::default(),
+        )?;
+
+        Ok((
+            out.0.into_bytes(),
+            out.1.entry_point_names.into_iter().next().unwrap()?,
+        ))
+    }*/
     #[cfg(feature = "spirv-cross")]
     fn transpile_spirv(module: &[u32], target: KernelTarget) -> Result<Vec<u8>> {
         use std::ptr::null;
@@ -186,6 +222,11 @@ impl GlobalState {
             );
             let mut options = null_mut();
             spvc::spvc_compiler_create_compiler_options(compiler, &mut options);
+            spvc::spvc_compiler_options_set_bool(
+                options,
+                spvc::spvc_compiler_option_SPVC_COMPILER_OPTION_MSL_ARGUMENT_BUFFERS,
+                false as _,
+            );
             spvc::spvc_compiler_install_compiler_options(compiler, options);
             let mut result = null();
             spvc::spvc_compiler_compile(compiler, &mut result);
@@ -195,7 +236,7 @@ impl GlobalState {
             Ok(result)
         }
     }
-    #[cfg(all(target_os = "macos", feature = "msl-stable-out"))]
+    #[cfg(all(target_os = "macos", feature = "msl-out"))]
     fn compile_metallib(module: &[u8], temp_dir: &Path) -> Result<Vec<u8>> {
         use std::process::Command;
         let inter_path = format!("{}/inter.ir", temp_dir.to_str().unwrap());
@@ -264,6 +305,7 @@ impl GlobalState {
                 Self::recurse_params_reflection(vec, field);
             }
         } else if ty.kind() == slang::TypeKind::ParameterBlock {
+            //panic!("ParameterBlock's are a bad idea, see kernels/readme.md");
             let a: &slang::reflection::TypeLayout = var.type_layout().element_type_layout();
             for field in a.fields() {
                 Self::recurse_params_reflection(vec, field);
@@ -273,7 +315,10 @@ impl GlobalState {
     pub fn compile_kernel(&self, options: KernelCompileOptions) -> Result<KernelReflectionInfo> {
         let extra_optim = options.opt_level == OptimizationLevel::Maximal || options.minify;
         let extra_valid = options.stability == StabilityGuarantee::ExtraValidation;
-        let (target, needs_spirv_transpile, result_name) = match options.target {
+        // Only naga spirv-> msl changes result_name, so if msl-out isn't enabled, rust will complain
+        // about this being mut
+        #[allow(unused_mut)]
+        let (target, needs_spirv_transpile, mut result_name) = match options.target {
             KernelTarget::Ptx => (slang::CompileTarget::Ptx, false, options.entry.to_owned()),
             KernelTarget::CudaCpp => (
                 slang::CompileTarget::CudaSource,
@@ -281,21 +326,14 @@ impl GlobalState {
                 options.entry.to_owned(),
             ),
             KernelTarget::Msl { .. } | KernelTarget::MetalLib { .. } => {
-                if extra_optim || options.stability != StabilityGuarantee::Experimental {
-                    (slang::CompileTarget::Spirv, true, "main0".to_owned())
-                } else {
-                    (
-                        if let KernelTarget::MetalLib { .. } = options.target {
-                            slang::CompileTarget::MetalLib
-                        } else {
-                            slang::CompileTarget::Metal
-                        },
-                        false,
-                        options.entry.to_owned(),
-                    )
-                }
+                (slang::CompileTarget::Spirv, true, "main0".to_owned())
             }
-            KernelTarget::Spirv { .. } => (slang::CompileTarget::Spirv, false, "main".to_owned()),
+
+            KernelTarget::Spirv { .. } => (
+                slang::CompileTarget::Spirv,
+                extra_optim || extra_valid,
+                "main".to_owned(),
+            ),
             KernelTarget::Wgsl => (slang::CompileTarget::Spirv, true, "main".to_owned()),
             KernelTarget::Glsl => {
                 if extra_optim || extra_valid {
@@ -309,8 +347,8 @@ impl GlobalState {
                 (slang::CompileTarget::Hlsl, false, options.entry.to_owned())
             }
         };
-        if options.target.metal_version().is_some() && needs_spirv_transpile {
-            #[cfg(not(feature = "msl-stable-out"))]
+        if options.target.metal_version().is_some() {
+            #[cfg(not(feature = "msl-out"))]
             {
                 return Err(anyhow!(
                     "Kernel compiler was not built with MSL or MetalLib support"
@@ -335,8 +373,8 @@ impl GlobalState {
                 ));
             }
         }
-        if needs_spirv_transpile {
-            #[cfg(not(feature = "spirv-cross"))]
+        if needs_spirv_transpile && options.target.metal_version().is_none() {
+            #[cfg(not(feature = "msl-out"))]
             {
                 return Err(anyhow!(
                     "Kernel compiler was not built with advanced cross compilation support"
@@ -517,15 +555,12 @@ impl GlobalState {
             Self::validate_spv(bytemuck::cast_slice(&vec), spirv_version)?;
         }
 
-        #[cfg(feature = "msl-stable-out")]
+        #[cfg(feature = "msl-out")]
         if needs_spirv_transpile {
-            if let Some(version) = options.target.metal_version() {
+            if options.target.metal_version().is_some() {
                 let vec = bytecode.as_slice().to_owned();
-                let res = Self::transpile_spirv(
-                    bytemuck::cast_slice(&vec),
-                    KernelTarget::Msl { version },
-                )?;
-                _other_blob = res;
+                _other_blob = Self::transpile_spirv(bytemuck::cast_slice(&vec), options.target)?;
+                //let res = Self::spirv_to_msl(bytemuck::cast_slice(&vec), version)?;
                 data = &_other_blob;
             }
             #[cfg(target_os = "macos")]

@@ -19,7 +19,7 @@ END LICENSE */
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {}
 
-use std::{ops::Deref, ptr::NonNull, sync::Mutex};
+use std::{ops::Deref, sync::Mutex};
 
 use objc2::{
     rc::Retained,
@@ -29,7 +29,7 @@ use objc2_foundation::{NSError, NSRange, NSString};
 use objc2_metal::{
     MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandEncoder, MTLCommandQueue,
     MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState, MTLDevice, MTLEvent,
-    MTLFunction, MTLLibrary, MTLResourceOptions, MTLSharedEvent, MTLSize,
+    MTLFunction, MTLLibrary, MTLResource, MTLResourceOptions, MTLSharedEvent, MTLSize,
 };
 use thiserror::Error;
 use types::{
@@ -149,13 +149,11 @@ impl BackendInstance<Metal> for MetalInstance {
         reflection: &types::KernelReflectionInfo,
         _cache: Option<&mut <Metal as Backend>::KernelCache>,
     ) -> Result<<Metal as Backend>::Kernel, <Metal as Backend>::Error> {
+        let str = std::str::from_utf8(binary).map_err(|_| MetalError::NonUtf8KernelString)?;
         let library_options = MTLCompileOptions::new();
-        let library = self.device.newLibraryWithSource_options_error(
-            &NSString::from_str(
-                std::str::from_utf8(binary).map_err(|_| MetalError::NonUtf8KernelString)?,
-            ),
-            Some(&library_options),
-        )?;
+        let library = self
+            .device
+            .newLibraryWithSource_options_error(&NSString::from_str(str), Some(&library_options))?;
         let function = library
             .newFunctionWithName(&NSString::from_str(&reflection.entry_point_name))
             .ok_or(MetalError::WrongMslFunctionName)?;
@@ -229,26 +227,22 @@ impl BackendInstance<Metal> for MetalInstance {
         &mut self,
         infos: &mut [crate::RecorderSubmitInfo<Metal>],
     ) -> Result<(), <Metal as Backend>::Error> {
-        for info in infos {
-            if let Some(wait_semaphore) = info.wait_semaphore {
-                let ptr = Retained::into_raw(wait_semaphore.event.0.clone())
-                    as *mut ProtocolObject<dyn MTLEvent>;
-                let as_event = unsafe { Retained::from_raw(ptr) }.unwrap();
+        for info in &*infos {
+            /*if let Some(wait_semaphore) = info.wait_semaphore {
+                let as_event: &ProtocolObject<dyn MTLEvent> = wait_semaphore.event.0.as_ref();
                 info.command_recorder
                     .command_buffer
                     .encodeWaitForEvent_value(
-                        &as_event,
+                        as_event,
                         *wait_semaphore.current_value.lock().unwrap(),
                     );
-            }
+            }*/
             if let Some(signal_semaphore) = info.signal_semaphore {
-                let ptr = Retained::into_raw(signal_semaphore.event.0.clone())
-                    as *mut ProtocolObject<dyn MTLEvent>;
-                let as_event = unsafe { Retained::from_raw(ptr) }.unwrap();
+                let as_event: &ProtocolObject<dyn MTLEvent> = signal_semaphore.event.0.as_ref();
                 info.command_recorder
                     .command_buffer
                     .encodeSignalEvent_value(
-                        &as_event,
+                        as_event,
                         *signal_semaphore.current_value.lock().unwrap() + 1,
                     );
             }
@@ -260,6 +254,7 @@ impl BackendInstance<Metal> for MetalInstance {
         &mut self,
         buffer: &mut <Metal as Backend>::Buffer,
     ) -> Result<*mut u8, <Metal as Backend>::Error> {
+        assert!((buffer.buffer.storageMode().0 & MTLResourceOptions::StorageModePrivate.0) == 0);
         Ok(buffer.buffer.contents().as_ptr() as *mut u8)
     }
     unsafe fn read_buffer(
@@ -268,6 +263,7 @@ impl BackendInstance<Metal> for MetalInstance {
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), <Metal as Backend>::Error> {
+        assert!((buffer.buffer.storageMode().0 & MTLResourceOptions::StorageModePrivate.0) == 0);
         let ptr = buffer.buffer.contents().as_ptr() as *const u8;
         let slice = unsafe { std::slice::from_raw_parts(ptr.add(offset as usize), data.len()) };
         data.copy_from_slice(slice);
@@ -279,6 +275,7 @@ impl BackendInstance<Metal> for MetalInstance {
         offset: u64,
         data: &[u8],
     ) -> Result<(), <Metal as Backend>::Error> {
+        assert!((buffer.buffer.storageMode().0 & MTLResourceOptions::StorageModePrivate.0) == 0);
         let ptr = buffer.buffer.contents().as_ptr() as *mut u8;
         let slice = unsafe { std::slice::from_raw_parts_mut(ptr.add(offset as usize), data.len()) };
         slice.copy_from_slice(data);
@@ -415,7 +412,7 @@ impl Semaphore<Metal> for MetalSemaphore {
         Ok(())
     }
     unsafe fn wait(&self) -> Result<(), <Metal as Backend>::Error> {
-        let value = unsafe { self.event.signaledValue() };
+        let value = *self.current_value.lock().unwrap();
         unsafe {
             self.event
                 .waitUntilSignaledValue_timeoutMS(value + 1, u64::MAX);
@@ -508,6 +505,7 @@ impl CurrentEncoder {
             Self::Compute(c) => c.endEncoding(),
             Self::None => (),
         }
+        *self = Self::None;
     }
 }
 
@@ -557,17 +555,6 @@ impl CommandRecorder<Metal> for MetalCommandRecorder {
                     let comp = encoder.compute(&self.command_buffer)?;
                     comp.setComputePipelineState(&kernel.pipeline);
                     assert!(kernel.reflection.push_constants_size == push_constants.len() as u64);
-                    if !push_constants.is_empty() {
-                        unsafe {
-                            comp.setBytes_length_atIndex(
-                                NonNull::new_unchecked(
-                                    push_constants.as_ptr() as *const _ as *mut _
-                                ),
-                                kernel.reflection.push_constants_size as usize,
-                                kernel.reflection.buffers.len(),
-                            );
-                        }
-                    }
                     let buffers_lock = bind_group.buffers.lock().unwrap();
                     for (i, item) in buffers_lock.iter().enumerate() {
                         unsafe {
