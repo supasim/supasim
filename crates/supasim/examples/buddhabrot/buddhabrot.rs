@@ -170,17 +170,13 @@ impl<B: hal::Backend> AppState<B> {
                     minify: true,
                 })
                 .unwrap();
-            dbg!();
             assert_eq!(reflection_info.buffers, vec![true, true, false]);
             instance
                 .compile_raw_kernel(&shader_binary, reflection_info, None)
                 .unwrap()
         };
-        dbg!();
         let run_kernel = compile_kernel("Run");
-        dbg!();
         let finalize_kernel = compile_kernel("Finalize");
-        dbg!();
 
         let width_height_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
