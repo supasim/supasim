@@ -18,9 +18,9 @@
 END LICENSE */
 struct Parameters
 {
-    StructuredBuffer<uint32_t> buffer0;
-    StructuredBuffer<uint32_t> buffer1;
-    RWStructuredBuffer<uint32_t> result;
+    [binding(0)] RWStructuredBuffer<uint32_t> result;
+    [binding(1)] StructuredBuffer<uint32_t> buffer0;
+    [binding(2)] StructuredBuffer<uint32_t> buffer1;
 }
 
 [shader("compute")]

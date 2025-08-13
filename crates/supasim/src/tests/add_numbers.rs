@@ -70,11 +70,9 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
     // Compile the kernels
     let global_state = kernels::GlobalState::new_from_env().unwrap();
     let mut spirv = Vec::new();
-    let mut reflection_info = global_state
+    let reflection_info = global_state
         .compile_kernel(kernels::KernelCompileOptions {
-            target: types::KernelTarget::Spirv {
-                version: kernels::SpirvVersion::V1_2,
-            },
+            target: instance.properties().unwrap().kernel_lang,
             source: kernels::KernelSource::Memory(include_bytes!(
                 "../../../../kernels/test_add.slang"
             )),
@@ -87,8 +85,7 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
             minify: false,
         })
         .unwrap();
-    // Reflection isn't working yet so this is a temporary workaround
-    reflection_info.buffers = vec![false, false, true];
+    assert!(reflection_info.buffers == vec![true, false, false]);
     let kernel = instance
         .compile_raw_kernel(&spirv, reflection_info, cache.as_ref())
         .unwrap();
@@ -115,9 +112,9 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
         .dispatch_kernel(
             &kernel,
             &[
+                &BufferSlice::entire_buffer(&buffer3, true).unwrap(),
                 &BufferSlice::entire_buffer(&buffer1, false).unwrap(),
                 &BufferSlice::entire_buffer(&buffer2, false).unwrap(),
-                &BufferSlice::entire_buffer(&buffer3, true).unwrap(),
             ],
             [4, 1, 1],
         )

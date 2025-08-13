@@ -31,11 +31,12 @@ homepage.workspace = true
 readme = "../../readme.md"
 
 [features]
-default = ["vulkan", "wgpu"]
+default = ["vulkan", "wgpu", "metal"]
 cuda = ["hal/cuda"]
 # The wgpu feature flag will enable both reexporting wgpu and the wgpu backend in hal
 wgpu = ["hal/wgpu", "hal/external_wgpu"]
 vulkan = ["hal/vulkan"]
+metal = ["hal/metal"]
 
 [dependencies]
 anyhow.workspace = true
@@ -45,8 +46,8 @@ thunderdome.workspace = true
 paste.workspace = true
 parking_lot = "0.12"
 
-kernels.workspace = true
 types.workspace = true
+kernels.workspace = true
 hal = { workspace = true, default-features = false }
 
 [dev-dependencies]
@@ -60,4 +61,4 @@ rand.workspace = true
 [[example]]
 name = "buddhabrot"
 path = "examples/buddhabrot/buddhabrot.rs"
-required-features = ["wgpu", "vulkan"]
+required-features = ["wgpu", "vulkan", "metal"]
