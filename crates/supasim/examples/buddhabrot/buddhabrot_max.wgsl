@@ -70,5 +70,6 @@ fn find_max(
     // Only one thread writes the result of this workgroup
     if (local_id.x == 0u) {
         atomicMax(&output, local_max[0]);
+        //atomicStore(&output, 1);
     }
 }

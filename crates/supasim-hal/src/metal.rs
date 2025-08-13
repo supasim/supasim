@@ -108,7 +108,8 @@ impl BackendInstance<Metal> for MetalInstance {
             sync_mode: types::SyncMode::Automatic,
             pipeline_cache: false,
             kernel_lang: KernelTarget::Msl {
-                version: MetalVersion::Prior,
+                // Required for ulong in buffers apparently
+                version: MetalVersion::V2_3,
             },
             easily_update_bind_groups: true,
             semaphore_signal: true,

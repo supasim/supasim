@@ -200,38 +200,79 @@ impl GlobalState {
         use std::ptr::null;
 
         use spirv_cross_sys as spvc;
+        fn map_result(result: spvc::spvc_result, ctx: *mut spvc::spvc_context_s) -> Result<()> {
+            if result == spvc::spvc_result_SPVC_SUCCESS {
+                Ok(())
+            } else {
+                unsafe {
+                    let ptr = spvc::spvc_context_get_last_error_string(ctx);
+                    let cstr = std::ffi::CStr::from_ptr(ptr);
+                    Err(anyhow::Error::msg(cstr.to_str().unwrap()))
+                }
+            }
+        }
         unsafe {
             let mut context = null_mut();
-            spvc::spvc_context_create(&mut context);
+            let res = spvc::spvc_context_create(&mut context);
+            map_result(res, context)?;
             let mut ir = null_mut();
-            spvc::spvc_context_parse_spirv(context, module.as_ptr(), module.len(), &mut ir);
-            let mut compiler = null_mut();
-            spvc::spvc_context_create_compiler(
+            map_result(
+                spvc::spvc_context_parse_spirv(context, module.as_ptr(), module.len(), &mut ir),
                 context,
-                match target {
-                    KernelTarget::Glsl => spvc::spvc_backend_SPVC_BACKEND_GLSL,
-                    KernelTarget::Msl { .. } | KernelTarget::MetalLib { .. } => {
-                        spvc::spvc_backend_SPVC_BACKEND_MSL
-                    }
-                    KernelTarget::Hlsl => spvc::spvc_backend_SPVC_BACKEND_HLSL,
-                    _ => panic!("Transpile spirv called on invalid target"),
-                },
-                ir,
-                spvc::spvc_capture_mode_SPVC_CAPTURE_MODE_TAKE_OWNERSHIP,
-                &mut compiler,
-            );
+            )?;
+            let mut compiler = null_mut();
+            map_result(
+                spvc::spvc_context_create_compiler(
+                    context,
+                    match target {
+                        KernelTarget::Glsl => spvc::spvc_backend_SPVC_BACKEND_GLSL,
+                        KernelTarget::Msl { .. } | KernelTarget::MetalLib { .. } => {
+                            spvc::spvc_backend_SPVC_BACKEND_MSL
+                        }
+                        KernelTarget::Hlsl => spvc::spvc_backend_SPVC_BACKEND_HLSL,
+                        _ => panic!("Transpile spirv called on invalid target"),
+                    },
+                    ir,
+                    spvc::spvc_capture_mode_SPVC_CAPTURE_MODE_TAKE_OWNERSHIP,
+                    &mut compiler,
+                ),
+                context,
+            )?;
             let mut options = null_mut();
-            spvc::spvc_compiler_create_compiler_options(compiler, &mut options);
-            spvc::spvc_compiler_options_set_bool(
-                options,
-                spvc::spvc_compiler_option_SPVC_COMPILER_OPTION_MSL_ARGUMENT_BUFFERS,
-                false as _,
-            );
-            spvc::spvc_compiler_install_compiler_options(compiler, options);
+            map_result(
+                spvc::spvc_compiler_create_compiler_options(compiler, &mut options),
+                context,
+            )?;
+            if let KernelTarget::Msl { version } | KernelTarget::MetalLib { version } = target {
+                map_result(
+                    spvc::spvc_compiler_options_set_bool(
+                        options,
+                        spvc::spvc_compiler_option_SPVC_COMPILER_OPTION_MSL_ARGUMENT_BUFFERS,
+                        false as _,
+                    ),
+                    context,
+                )?;
+                let version_tuple = version.to_tuple();
+                let version = ((version_tuple.0 as u32) << 16) + ((version_tuple.1 as u32) << 8);
+                map_result(
+                    spvc::spvc_compiler_options_set_uint(
+                        options,
+                        spvc::spvc_compiler_option_SPVC_COMPILER_OPTION_MSL_VERSION,
+                        version,
+                    ),
+                    context,
+                )?;
+            }
+            map_result(
+                spvc::spvc_compiler_install_compiler_options(compiler, options),
+                context,
+            )?;
             let mut result = null();
-            spvc::spvc_compiler_compile(compiler, &mut result);
-            let result =
-                String::from(std::ffi::CStr::from_ptr(result).to_str().unwrap()).into_bytes();
+            map_result(spvc::spvc_compiler_compile(compiler, &mut result), context)?;
+            assert!(!result.is_null());
+            let c_str = std::ffi::CStr::from_ptr(result);
+            let rust_str = c_str.to_str().unwrap();
+            let result = String::from(rust_str).into_bytes();
             spvc::spvc_context_destroy(context);
             Ok(result)
         }
@@ -373,11 +414,11 @@ impl GlobalState {
                 ));
             }
         }
-        if needs_spirv_transpile && options.target.metal_version().is_none() {
+        if needs_spirv_transpile && options.target.metal_version().is_some() {
             #[cfg(not(feature = "msl-out"))]
             {
                 return Err(anyhow!(
-                    "Kernel compiler was not built with advanced cross compilation support"
+                    "Kernel compiler was not built with MSL output support"
                 ));
             }
         }
