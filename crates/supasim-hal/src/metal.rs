@@ -161,11 +161,30 @@ impl BackendInstance<Metal> for MetalInstance {
         let pipeline = self
             .device
             .newComputePipelineStateWithFunction_error(&function)?;
+        let mut revised_layout = vec![0; reflection.buffers.len()];
+        {
+            let mut new_index = 0;
+            for (old_index, &is_writable) in reflection.buffers.iter().enumerate() {
+                if is_writable {
+                    revised_layout[old_index] = new_index;
+                    new_index += 1;
+                }
+            }
+
+            // Then, collect indices of readonly buffers
+            for (old_index, &is_writable) in reflection.buffers.iter().enumerate() {
+                if !is_writable {
+                    revised_layout[old_index] = new_index;
+                    new_index += 1;
+                }
+            }
+        }
         Ok(MetalKernel {
             _library: UniqueObject::new(library),
             _function: UniqueObject::new(function),
             pipeline: UniqueObject::new(pipeline),
             reflection: reflection.clone(),
+            revised_buffer_indices: revised_layout,
         })
     }
     unsafe fn create_buffer(
@@ -433,6 +452,9 @@ pub struct MetalKernel {
     _function: UniqueObject<dyn MTLFunction>,
     pipeline: UniqueObject<dyn MTLComputePipelineState>,
     reflection: KernelReflectionInfo,
+    /// For user passed buffer #i, `revised_buffer_indices[i]` is the index
+    /// in the kernel's reordered layout
+    revised_buffer_indices: Vec<usize>,
 }
 impl Kernel<Metal> for MetalKernel {}
 
@@ -559,7 +581,11 @@ impl CommandRecorder<Metal> for MetalCommandRecorder {
                     let buffers_lock = bind_group.buffers.lock().unwrap();
                     for (i, item) in buffers_lock.iter().enumerate() {
                         unsafe {
-                            comp.setBuffer_offset_atIndex(Some(&item.0), item.1 as usize, i);
+                            comp.setBuffer_offset_atIndex(
+                                Some(&item.0),
+                                item.1 as usize,
+                                kernel.revised_buffer_indices[i],
+                            );
                         }
                     }
                     drop(buffers_lock);

@@ -10,7 +10,7 @@ This folder is for kernels that may be used in examples or tests across multiple
 
 Anyway, on with the list:
 
-* Always try to put read-write buffers before readonly buffer. On Metal, buffers may be automatically reordered behind the scenes without supasim-kernels catching it.
+* On Metal, buffers may be automatically reordered behind the scenes without supasim-kernels catching it. Supasim tries to handle this, but I haven't spent that much time making sure its correct. So it probably will work fine, but if your code has weird bugs on the custom metal backend only, you know why :)
 * Non-static const's are reflected in the shader's interface, which is *never* intentional
 * Slang tries to determine which global variables are used, but depending on optimization level this can sometimes have surprising results.
   * Multiple bindings in the same struct/block get optimized away together or not at all. If you group all of the bindings for a function together in a struct, you can guarantee they will all be reflected in the interface.

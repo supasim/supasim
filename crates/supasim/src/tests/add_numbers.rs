@@ -85,7 +85,7 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
             minify: false,
         })
         .unwrap();
-    assert!(reflection_info.buffers == vec![true, false, false]);
+    assert!(reflection_info.buffers == vec![false, false, true]);
     let kernel = instance
         .compile_raw_kernel(&spirv, reflection_info, cache.as_ref())
         .unwrap();
@@ -112,9 +112,9 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
         .dispatch_kernel(
             &kernel,
             &[
-                &BufferSlice::entire_buffer(&buffer3, true).unwrap(),
                 &BufferSlice::entire_buffer(&buffer1, false).unwrap(),
                 &BufferSlice::entire_buffer(&buffer2, false).unwrap(),
+                &BufferSlice::entire_buffer(&buffer3, true).unwrap(),
             ],
             [4, 1, 1],
         )

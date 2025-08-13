@@ -97,10 +97,9 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
                 minify: false,
             })
             .unwrap();
-        assert_eq!(add_reflection.buffers, vec![true, false, false]);
+        assert_eq!(add_reflection.buffers, vec![false, false, true]);
         assert_eq!(double_reflection.buffers, vec![true]);
         drop(kernel_compiler);
-        std::fs::write("add.metal", &add_code).unwrap();
         info!("Constructing kernel objects");
         let mut kernel = instance.compile_kernel(&add_code, &add_reflection, cache.as_mut())?;
         let mut kernel2 =
@@ -130,17 +129,17 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             &mut kernel,
             &[
                 HalBufferSlice {
-                    buffer: &sbout,
-                    offset: 0,
-                    len: 16,
-                },
-                HalBufferSlice {
                     buffer: &sb1,
                     offset: 0,
                     len: 16,
                 },
                 HalBufferSlice {
                     buffer: &sb2,
+                    offset: 0,
+                    len: 16,
+                },
+                HalBufferSlice {
+                    buffer: &sbout,
                     offset: 0,
                     len: 16,
                 },

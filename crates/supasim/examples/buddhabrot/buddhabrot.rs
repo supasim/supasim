@@ -170,7 +170,7 @@ impl<B: hal::Backend> AppState<B> {
                     minify: true,
                 })
                 .unwrap();
-            assert_eq!(reflection_info.buffers, vec![true, true, false]);
+            assert_eq!(reflection_info.buffers, vec![false, true, true]);
             instance
                 .compile_raw_kernel(&shader_binary, reflection_info, None)
                 .unwrap()
@@ -484,9 +484,9 @@ impl<B: hal::Backend> AppState<B> {
 
         let workgroup_dims = [self.workgroup_dim, self.workgroup_dim, self.workgroup_dim];
         let buffers = [
+            &self.supasim_width_height_buffer.slice(.., false),
             &self.supasim_buffer.slice(.., true),
             &self.supasim_temp_buffer.slice(.., true),
-            &self.supasim_width_height_buffer.slice(.., false),
         ];
         let random_seed = random::<u64>();
         for i in 0..self.iterations {

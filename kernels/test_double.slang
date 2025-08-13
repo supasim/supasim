@@ -18,7 +18,7 @@
 END LICENSE */
 struct Parameters
 {
-    RWStructuredBuffer<uint32_t> buffer;
+    [binding(0)] RWStructuredBuffer<uint32_t> buffer;
 }
 
 [shader("compute")]
