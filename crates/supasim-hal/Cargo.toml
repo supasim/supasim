@@ -52,7 +52,7 @@ types.workspace = true
 # kernels/opt-valid for compiling without actually bringing in the dependencies,
 # which is probably a bug in cargo or something but it breaks my project. So for
 # now, supasim-hal is a little more bloated than it needs to be
-kernels.workspace = true
+kernels = { workspace = true, features = ["opt-valid"] }
 
 thiserror.workspace = true
 bytemuck.workspace = true

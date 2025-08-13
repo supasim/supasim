@@ -555,6 +555,7 @@ impl GlobalState {
             Self::validate_spv(bytemuck::cast_slice(&vec), spirv_version)?;
         }
 
+        #[allow(clippy::collapsible_if)]
         #[cfg(feature = "msl-out")]
         if needs_spirv_transpile {
             if options.target.metal_version().is_some() {
