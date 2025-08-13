@@ -654,14 +654,6 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
         Ok(())
     }
     #[tracing::instrument]
-    unsafe fn record_dag(
-        &mut self,
-        instance: &mut <Wgpu as Backend>::Instance,
-        dag: &mut Dag<BufferCommand<Wgpu>>,
-    ) -> Result<(), <Wgpu as Backend>::Error> {
-        unreachable!()
-    }
-    #[tracing::instrument]
     unsafe fn clear(
         &mut self,
         instance: &mut <Wgpu as Backend>::Instance,

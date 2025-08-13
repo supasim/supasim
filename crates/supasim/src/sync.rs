@@ -18,7 +18,7 @@
 END LICENSE */
 use hal::{BackendInstance, CommandRecorder, HalBufferSlice, RecorderSubmitInfo, Semaphore};
 use parking_lot::{Condvar, Mutex};
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::panic::UnwindSafe;
@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
 use thunderdome::Index;
-use types::{Dag, NodeIndex, SyncOperations, Walker};
+use types::SyncOperations;
 
 use crate::{
     Buffer, BufferCommand, BufferCommandInner, BufferRange, BufferSlice, BufferUserId,
@@ -34,11 +34,9 @@ use crate::{
     SendableUserBufferAccessClosure, SupaSimError, SupaSimInstance, SupaSimResult,
 };
 
-pub type CommandDag<B> = Dag<BufferCommand<B>>;
-
 pub struct SubmissionResources<B: hal::Backend> {
-    kernels: Vec<crate::Kernel<B>>,
-    buffers: Vec<crate::Buffer<B>>,
+    pub kernels: Vec<crate::Kernel<B>>,
+    pub buffers: Vec<crate::Buffer<B>>,
     pub temp_copy_buffer: Option<B::Buffer>,
 }
 impl<B: hal::Backend> Default for SubmissionResources<B> {
@@ -108,27 +106,25 @@ pub struct CommandStream {
     pub commands: Vec<HalCommandBuilder>,
 }
 /// These are split into multiple streams so that certain operations can be waited without waiting for all
-pub struct StreamingCommands {
+pub struct StreamingCommands<B: hal::Backend> {
     /// Contains the index of the kernel, the index of the buffer, and the range of the buffer
     pub bind_groups: Vec<BindGroupDesc>,
     pub streams: Vec<CommandStream>,
+    pub used_ranges: HashMap<Index, Vec<BufferRange>>,
+    pub resources: SubmissionResources<B>,
 }
 
-#[allow(clippy::type_complexity)]
-pub fn assemble_dag<B: hal::Backend>(
+pub fn assemble_streams<B: hal::Backend>(
     crs: &mut [&mut CommandRecorderInner<B>],
-    used_kernels: &mut Vec<Kernel<B>>,
     instance: &InstanceState<B>,
-) -> SupaSimResult<
-    B,
-    (
-        CommandDag<B>,
-        HashMap<Index, Vec<BufferRange>>,
-        SubmissionResources<B>,
-    ),
-> {
-    let mut buffers_tracker: HashMap<Index, Vec<(BufferRange, usize)>> = HashMap::new();
+    vulkan_style: bool,
+) -> SupaSimResult<B, StreamingCommands<B>> {
+    // The goal of the algorithm here is to minimize the number of barriers.
+    // It also tries to push as many things before barriers as possible
+    let mut buffers_tracker: HashMap<Index, Vec<BufferRange>> = HashMap::new();
     let mut resources = SubmissionResources::default();
+    let mut bind_groups = Vec::new();
+    let mut out_commands = Vec::new();
 
     let mut commands = Vec::new();
     let mut src_buffer_len = 0;
@@ -147,16 +143,53 @@ pub fn assemble_dag<B: hal::Backend>(
         src_buffer_len += cr.writes_slice.len() as u64;
     }
 
-    let mut dag = Dag::new();
-    for cmd in commands {
+    resources.temp_copy_buffer = if src_buffer_len > 0 {
+        let mut buf = unsafe {
+            instance
+                .inner
+                .lock()
+                .as_mut()
+                .unwrap()
+                .create_buffer(&types::HalBufferDescriptor {
+                    size: src_buffer_len,
+                    memory_type: types::HalBufferType::Upload,
+                    min_alignment: 16,
+                    can_export: false,
+                })
+                .map_supasim()?
+        };
+        let mut current_offset = 0;
+        for cr in crs.iter_mut() {
+            unsafe {
+                instance
+                    .inner
+                    .lock()
+                    .as_mut()
+                    .unwrap()
+                    .write_buffer(&mut buf, current_offset, &cr.writes_slice)
+                    .map_supasim()?;
+            }
+            current_offset += cr.writes_slice.len() as u64;
+        }
+        Some(buf)
+    } else {
+        None
+    };
+
+    for cmd in &commands {
         for b in &cmd.buffers {
             resources.buffers.push(b.buffer.clone());
         }
         if let BufferCommandInner::KernelDispatch { kernel, .. } = &cmd.inner {
             resources.kernels.push(kernel.clone());
         }
-        dag.add_node(cmd);
     }
+
+    let mut temp_buffers_tracker: HashMap<Index, Vec<BufferRange>> = HashMap::new();
+    let mut last_barrier_idx = 0;
+    for (i, cmd) in commands.into_iter().enumerate() {}
+
+    /*let mut dag = Dag::new();
 
     for i in 0..dag.node_count() {
         let mut work_on_buffer =
@@ -195,54 +228,19 @@ pub fn assemble_dag<B: hal::Backend>(
         dag.add_edge(NodeIndex::new(dag.node_count() - 1), NodeIndex::new(i), ())
             .unwrap();
     }
-    dag.transitive_reduce(vec![NodeIndex::new(dag.node_count() - 1)]);
-    let out_map = buffers_tracker
-        .into_iter()
-        .map(|(key, value)| (key, value.iter().map(|a| a.0).collect()))
-        .collect();
-    resources.temp_copy_buffer = if src_buffer_len > 0 {
-        let mut buf = unsafe {
-            instance
-                .inner
-                .lock()
-                .as_mut()
-                .unwrap()
-                .create_buffer(&types::HalBufferDescriptor {
-                    size: src_buffer_len,
-                    memory_type: types::HalBufferType::Upload,
-                    min_alignment: 16,
-                    can_export: false,
-                })
-                .map_supasim()?
-        };
-        let mut current_offset = 0;
-        for cr in crs.iter_mut() {
-            unsafe {
-                instance
-                    .inner
-                    .lock()
-                    .as_mut()
-                    .unwrap()
-                    .write_buffer(&mut buf, current_offset, &cr.writes_slice)
-                    .map_supasim()?;
-            }
-            current_offset += cr.writes_slice.len() as u64;
-        }
-        Some(buf)
-    } else {
-        None
+    dag.transitive_reduce(vec![NodeIndex::new(dag.node_count() - 1)]);*/
+
+    let stream = CommandStream {
+        commands: out_commands,
     };
-    Ok((dag, out_map, resources))
+    Ok(StreamingCommands {
+        bind_groups,
+        streams: vec![stream],
+        used_ranges: buffers_tracker,
+        resources,
+    })
 }
-#[allow(clippy::type_complexity)]
-pub fn record_dag<B: hal::Backend>(
-    _dag: &CommandDag<B>,
-    _cr: &mut B::CommandRecorder,
-) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
-    // TODO: work on this when cuda support lands
-    todo!()
-}
-pub fn dag_to_command_streams<B: hal::Backend>(
+/*pub fn dag_to_command_streams<B: hal::Backend>(
     dag: &CommandDag<B>,
     vulkan_style: bool,
 ) -> SupaSimResult<B, StreamingCommands> {
@@ -400,10 +398,10 @@ pub fn dag_to_command_streams<B: hal::Backend>(
         bind_groups,
         streams: vec![stream],
     })
-}
+}*/
 #[allow(clippy::type_complexity)]
 pub fn record_command_streams<B: hal::Backend>(
-    streams: &StreamingCommands,
+    streams: &StreamingCommands<B>,
     instance: SupaSimInstance<B>,
     recorder: &mut B::CommandRecorder,
     write_buffer: &Option<B::Buffer>,
@@ -671,7 +669,8 @@ pub fn record_command_streams<B: hal::Backend>(
     Ok(bindgroups)
 }
 pub struct GpuSubmissionInfo<B: hal::Backend> {
-    pub command_recorder: Option<B::CommandRecorder>,
+    /// There are no ordering guarantees between these recorders, but in practice they will execute in orders
+    pub command_recorders: Vec<B::CommandRecorder>,
     pub bind_groups: Vec<(B::BindGroup, Kernel<B>)>,
     pub used_buffer_ranges: Vec<(BufferUserId, Buffer<B>)>,
     pub used_buffers: Vec<Buffer<B>>,
@@ -1091,7 +1090,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                             used_semaphores.push(acquire_semaphore(&mut semaphores).unwrap());
                         }
                         prev_was_cpu = false;
-                        recorders.push(std::mem::take(&mut g.command_recorder).unwrap());
+                        recorders.push(std::mem::take(&mut g.command_recorders));
                     }
                 }
             }
@@ -1106,17 +1105,25 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                 match item {
                     Work::CpuWork(_) => prev_was_cpu = true,
                     Work::GpuSubmission(_) => {
-                        submits.push(RecorderSubmitInfo {
-                            command_recorder: recorders_iter.next().unwrap(),
-                            wait_semaphore: if prev_was_cpu {
-                                semaphore_idx += 1;
+                        let next = recorders_iter.next().unwrap();
+                        let count = next.len();
+                        for (i, r) in next.iter_mut().enumerate() {
+                            submits.push(RecorderSubmitInfo {
+                                command_recorder: r,
+                                wait_semaphore: if prev_was_cpu && i == 0 {
+                                    semaphore_idx += 1;
 
-                                Some(&used_semaphores[semaphore_idx])
-                            } else {
-                                None
-                            },
-                            signal_semaphore: Some(&used_semaphores[semaphore_idx]),
-                        });
+                                    Some(&used_semaphores[semaphore_idx])
+                                } else {
+                                    None
+                                },
+                                signal_semaphore: if i == count - 1 {
+                                    Some(&used_semaphores[semaphore_idx])
+                                } else {
+                                    None
+                                },
+                            });
+                        }
                         semaphore_idx += 1;
                         prev_was_cpu = false;
                     }
@@ -1222,10 +1229,9 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
             final_cpu.run(&logic.instance).unwrap();
         }
         semaphores.append(&mut used_semaphores);
-        logic
-            .instance
-            .hal_command_recorders
-            .lock()
-            .append(&mut recorders);
+        let mut hal_recorders_lock = logic.instance.hal_command_recorders.lock();
+        for r in &mut recorders {
+            hal_recorders_lock.append(r);
+        }
     }
 }

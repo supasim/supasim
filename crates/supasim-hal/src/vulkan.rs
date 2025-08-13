@@ -37,7 +37,7 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use types::{Dag, HalBufferType, HalInstanceProperties, KernelReflectionInfo, SyncOperations};
+use types::{HalBufferType, HalInstanceProperties, KernelReflectionInfo, SyncOperations};
 
 use scopeguard::defer;
 
@@ -1529,13 +1529,6 @@ impl VulkanCommandRecorder {
     }
 }
 impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
-    unsafe fn record_dag(
-        &mut self,
-        _instance: &mut <Vulkan as Backend>::Instance,
-        _dag: &mut Dag<crate::BufferCommand<Vulkan>>,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unreachable!()
-    }
     #[tracing::instrument]
     unsafe fn record_commands(
         &mut self,

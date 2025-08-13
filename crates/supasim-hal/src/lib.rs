@@ -213,15 +213,6 @@ pub struct CommandSynchronization<'a, B: Backend> {
 
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
     /// # Safety
-    /// * Must only be called on instances with `SyncMode::Dag`
-    /// * The recorder must not have had any record command since being created or cleared
-    /// * All commands must follow the corresponding safety section in BufferCommand
-    unsafe fn record_dag(
-        &mut self,
-        instance: &mut B::Instance,
-        dag: &mut Dag<BufferCommand<B>>,
-    ) -> Result<(), B::Error>;
-    /// # Safety
     /// * Must only be called on instances with `SyncMode` of `Automatic` or `VulkanStyle`
     /// * The recorder must not have had any record command since being created or cleared
     /// * All commands must follow the corresponding safety section in BufferCommand
