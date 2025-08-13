@@ -130,17 +130,17 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             &mut kernel,
             &[
                 HalBufferSlice {
+                    buffer: &sbout,
+                    offset: 0,
+                    len: 16,
+                },
+                HalBufferSlice {
                     buffer: &sb1,
                     offset: 0,
                     len: 16,
                 },
                 HalBufferSlice {
                     buffer: &sb2,
-                    offset: 0,
-                    len: 16,
-                },
-                HalBufferSlice {
-                    buffer: &sbout,
                     offset: 0,
                     len: 16,
                 },

@@ -35,9 +35,9 @@ struct TempData
 
 struct Parameters
 {
-    StructuredBuffer<InputOptions> imageSize;
     RWStructuredBuffer<Atomic<uint32_t>> buffer;
     RWStructuredBuffer<TempData> tempBuffer;
+    StructuredBuffer<InputOptions> imageSize;
 }
 
 // Simple hash function to generate a uint from a seed and index

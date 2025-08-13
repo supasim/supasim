@@ -112,9 +112,9 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
         .dispatch_kernel(
             &kernel,
             &[
+                &BufferSlice::entire_buffer(&buffer3, true).unwrap(),
                 &BufferSlice::entire_buffer(&buffer1, false).unwrap(),
                 &BufferSlice::entire_buffer(&buffer2, false).unwrap(),
-                &BufferSlice::entire_buffer(&buffer3, true).unwrap(),
             ],
             [4, 1, 1],
         )
