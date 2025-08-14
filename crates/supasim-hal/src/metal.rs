@@ -637,11 +637,4 @@ impl CommandRecorder<Metal> for MetalCommandRecorder {
         encoder.finish();
         Ok(())
     }
-    unsafe fn record_dag(
-        &mut self,
-        _instance: &mut <Metal as Backend>::Instance,
-        _dag: &mut types::Dag<crate::BufferCommand<Metal>>,
-    ) -> Result<(), <Metal as Backend>::Error> {
-        unreachable!()
-    }
 }
