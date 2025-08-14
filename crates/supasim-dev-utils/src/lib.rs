@@ -56,10 +56,10 @@ pub fn setup_trace_printer() {
         .try_init();
 }
 pub fn setup_trace_printer_if_env() {
-    if let Ok(a) = std::env::var("SUPASIM_LOG_FULL_TRACE") {
-        if &a != "0" {
-            setup_trace_printer();
-        }
+    if let Ok(a) = std::env::var("SUPASIM_LOG_FULL_TRACE")
+        && &a != "0"
+    {
+        setup_trace_printer();
     }
     let _ = env_logger::builder()
         .filter_level(log::LevelFilter::Info)

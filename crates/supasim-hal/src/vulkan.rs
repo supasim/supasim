@@ -226,12 +226,11 @@ impl Vulkan {
                 None
             };
             defer! {
-                if err.get() {
-                    if let Some(debug_callback) = debug_callback {
+                if err.get()
+                    && let Some(debug_callback) = debug_callback {
                         let debug_utils_loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
                         debug_utils_loader.destroy_debug_utils_messenger(debug_callback, None);
                     }
-                }
             }
             let ext = [
                 (khr::synchronization2::NAME, vk::API_VERSION_1_3),

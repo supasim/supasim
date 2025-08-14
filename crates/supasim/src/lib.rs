@@ -253,11 +253,11 @@ macro_rules! api_type {
                 pub(crate) fn from_inner(inner: [<$name Inner>]<B>) -> Self {
                     Self(Arc::new(RwLock::new(inner)))
                 }
-                pub(crate) fn inner(&self) -> SupaSimResult<B, InnerRef<[<$name Inner>]<B>>> {
+                pub(crate) fn inner(&'_ self) -> SupaSimResult<B, InnerRef<'_, [<$name Inner>]<B>>> {
                     let r = self.0.read();
                     Ok(InnerRef(r))
                 }
-                pub(crate) fn inner_mut(&self) -> SupaSimResult<B, InnerRefMut<[<$name Inner>]<B>>> {
+                pub(crate) fn inner_mut(&'_ self) -> SupaSimResult<B, InnerRefMut<'_, [<$name Inner>]<B>>> {
                     let r = self.0.write();
                     Ok(InnerRefMut(r))
                 }
@@ -830,13 +830,13 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
             println!("Instance attempting to shutdown gracefully despite sync thread error");
         }
         for (_, cr) in std::mem::take(&mut *self.command_recorders.lock()) {
-            if let Some(cr) = cr {
-                if let Ok(cr) = cr.upgrade() {
-                    if let Ok(mut cr2) = cr.inner_mut() {
-                        cr2.destroy(self);
-                    }
-                    let _ = cr._destroy();
+            if let Some(cr) = cr
+                && let Ok(cr) = cr.upgrade()
+            {
+                if let Ok(mut cr2) = cr.inner_mut() {
+                    cr2.destroy(self);
                 }
+                let _ = cr._destroy();
             }
         }
         for (_, wh) in std::mem::take(&mut *self.wait_handles.lock()) {
@@ -848,23 +848,23 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
             }
         }
         for (_, kc) in std::mem::take(&mut *self.kernel_caches.lock()) {
-            if let Some(kc) = kc {
-                if let Ok(kc) = kc.upgrade() {
-                    if let Ok(mut kc2) = kc.inner_mut() {
-                        kc2.destroy(self);
-                    }
-                    let _ = kc._destroy();
+            if let Some(kc) = kc
+                && let Ok(kc) = kc.upgrade()
+            {
+                if let Ok(mut kc2) = kc.inner_mut() {
+                    kc2.destroy(self);
                 }
+                let _ = kc._destroy();
             }
         }
         for (_, b) in std::mem::take(&mut *self.buffers.lock()) {
-            if let Some(b) = b {
-                if let Ok(b) = b.upgrade() {
-                    if let Ok(mut b2) = b.inner_mut() {
-                        b2.destroy(self);
-                    }
-                    let _ = b._destroy();
+            if let Some(b) = b
+                && let Ok(b) = b.upgrade()
+            {
+                if let Ok(mut b2) = b.inner_mut() {
+                    b2.destroy(self);
                 }
+                let _ = b._destroy();
             }
         }
         for (_, k) in std::mem::take(&mut *self.kernels.lock()) {
@@ -914,10 +914,10 @@ impl<B: hal::Backend> KernelInner<B> {
 }
 impl<B: hal::Backend> Drop for KernelInner<B> {
     fn drop(&mut self) {
-        if self.inner.is_some() {
-            if let Ok(instance) = self.instance.clone().inner() {
-                self.destroy(&instance);
-            }
+        if self.inner.is_some()
+            && let Ok(instance) = self.instance.clone().inner()
+        {
+            self.destroy(&instance);
         }
     }
 }
@@ -958,10 +958,10 @@ impl<B: hal::Backend> KernelCacheInner<B> {
 }
 impl<B: hal::Backend> Drop for KernelCacheInner<B> {
     fn drop(&mut self) {
-        if self.inner.is_some() {
-            if let Ok(instance) = self.instance.clone().inner() {
-                self.destroy(&instance);
-            }
+        if self.inner.is_some()
+            && let Ok(instance) = self.instance.clone().inner()
+        {
+            self.destroy(&instance);
         }
     }
 }
@@ -1157,10 +1157,10 @@ impl<B: hal::Backend> CommandRecorderInner<B> {
 }
 impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
     fn drop(&mut self) {
-        if self.is_alive {
-            if let Ok(instance) = self.instance.clone().inner() {
-                self.destroy(&instance);
-            }
+        if self.is_alive
+            && let Ok(instance) = self.instance.clone().inner()
+        {
+            self.destroy(&instance);
         }
     }
 }
@@ -1311,11 +1311,11 @@ impl<B: hal::Backend> Buffer<B> {
         Ok(())
     }
     pub fn access(
-        &self,
+        &'_ self,
         offset: u64,
         len: u64,
         needs_mut: bool,
-    ) -> SupaSimResult<B, MappedBuffer<B>> {
+    ) -> SupaSimResult<B, MappedBuffer<'_, B>> {
         let slice = BufferSlice {
             buffer: self.clone(),
             start: offset,
@@ -1465,10 +1465,10 @@ impl<B: hal::Backend> BufferInner<B> {
 }
 impl<B: hal::Backend> Drop for BufferInner<B> {
     fn drop(&mut self) {
-        if self.inner.is_some() {
-            if let Ok(instance) = self.instance.clone().inner() {
-                self.destroy(&instance);
-            }
+        if self.inner.is_some()
+            && let Ok(instance) = self.instance.clone().inner()
+        {
+            self.destroy(&instance);
         }
     }
 }
@@ -1570,10 +1570,10 @@ impl<B: hal::Backend> WaitHandleInner<B> {
 }
 impl<B: hal::Backend> Drop for WaitHandleInner<B> {
     fn drop(&mut self) {
-        if self.is_alive {
-            if let Ok(instance) = self.instance.clone().inner() {
-                self.destroy(&instance);
-            }
+        if self.is_alive
+            && let Ok(instance) = self.instance.clone().inner()
+        {
+            self.destroy(&instance);
         }
     }
 }

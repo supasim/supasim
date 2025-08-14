@@ -248,10 +248,10 @@ pub fn assemble_streams<B: hal::Backend>(
             for b in &cmd.buffers {
                 resources.buffers.push(b.buffer.clone());
             }
-            if let BufferCommandInner::KernelDispatch { kernel, .. } = &cmd.inner {
-                if !resources.kernels.contains(kernel) {
-                    resources.kernels.push(kernel.clone());
-                }
+            if let BufferCommandInner::KernelDispatch { kernel, .. } = &cmd.inner
+                && !resources.kernels.contains(kernel)
+            {
+                resources.kernels.push(kernel.clone());
             }
         }
         commands.extend(cmds);
@@ -1217,10 +1217,10 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                         }
                         if !map_buffer_while_gpu_use {
                             for b in item.used_buffers {
-                                if let Ok(b_inner) = b.inner() {
-                                    if b_inner.last_used == next_submission_idx {
-                                        b_inner.slice_tracker.release_cpu();
-                                    }
+                                if let Ok(b_inner) = b.inner()
+                                    && b_inner.last_used == next_submission_idx
+                                {
+                                    b_inner.slice_tracker.release_cpu();
                                 }
                             }
                         }
