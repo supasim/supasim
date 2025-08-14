@@ -50,6 +50,10 @@ use types::SyncMode;
 
 pub use bytemuck;
 pub use hal;
+#[cfg(feature = "wgpu")]
+pub use hal::WgpuDeviceExportInfo;
+#[cfg(feature = "wgpu")]
+pub use hal::wgpu_dep as wgpu;
 pub use types::{
     Backend, HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel,
     SpirvVersion,
@@ -1761,8 +1765,3 @@ impl BufferUser {
         }
     }
 }
-
-#[cfg(feature = "wgpu")]
-pub use hal::WgpuDeviceExportInfo;
-#[cfg(feature = "wgpu")]
-pub use hal::wgpu_dep as wgpu;
