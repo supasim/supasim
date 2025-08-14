@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 //! External memory overview
 //! * If the device and backend are the same, life is simple
 //! * Otherwise, due to wgpu limitations, we must manually check the hal device

@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 use crate::{
     Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, HalBufferSlice,
     Kernel, KernelCache, RecorderSubmitInfo, Semaphore,

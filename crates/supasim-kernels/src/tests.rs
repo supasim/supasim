@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 use std::path::PathBuf;
 
 pub fn should_skip(kernel_target: &str) -> bool {

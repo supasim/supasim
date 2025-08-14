@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 use supasim_hal::{Backend, BackendInstance, BufferCommand, CommandRecorder, RecorderSubmitInfo};
 use types::HalBufferDescriptor;
 

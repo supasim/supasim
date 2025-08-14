@@ -17,9 +17,9 @@
 #   You should have received a copy of the GNU General Public License
 #   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # END LICENSE
+
 import sys
 import os.path
-
 
 if __name__ == "__main__":
     header_file = ""
@@ -47,33 +47,52 @@ if __name__ == "__main__":
         else:
             header_toml.append("#\n")
     header_toml.append("# END LICENSE\n")
+
     for fname in files_to_update:
         print(f"Editing {fname}")
         extension = os.path.splitext(fname)[1]
-        header: list[str]
         if extension in [".rs", ".slang", ".wgsl"]:
             header = header_rust
         elif extension in [".toml", ".py", ".yml"]:
             header = header_toml
-        file = open(fname, "r")
-        lines: list[str] = file.readlines()
+        else:
+            continue
+
+        with open(fname, "r") as file:
+            lines: list[str] = file.readlines()
+
         out_parts = []
-        header_started = False
-        if len(lines) > 0 and lines[0].startswith("#!"):
-            out_parts.append(lines[0])
+        shebang = None
+        if lines and lines[0].startswith("#!"):
+            shebang = lines[0]
             lines = lines[1:]
-        if len(lines) > 0 and lines[0] == header[0]:
-            out_parts.extend(header)
+
+        # Remove existing license header if present
+        if lines and lines[0] == header[0]:
             header_ended = False
             for line in lines[1:]:
-                if header_ended:
+                if not header_ended:
+                    if line == header[-1]:
+                        header_ended = True
+                    continue
+                else:
                     out_parts.append(line)
-                if line == header[-1]:
-                    header_ended = True
+            # Remove blank lines immediately after old header
+            while out_parts and out_parts[0].strip() == "":
+                out_parts.pop(0)
         else:
-            out_parts.extend(header)
-            out_parts.extend(lines)
-        file.close()
-        file = open(fname, "w")
-        file.writelines(out_parts)
-        file.truncate()
+            out_parts = lines[:]
+
+        # Prepend shebang if it existed
+        if shebang:
+            final_parts = [shebang]
+        else:
+            final_parts = []
+
+        # Insert new header with exactly one blank line after
+        final_parts.extend(header)
+        final_parts.append("\n")
+        final_parts.extend(out_parts)
+
+        with open(fname, "w") as file:
+            file.writelines(final_parts)

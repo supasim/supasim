@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 // Courtesy of ChatGPT
 
 const WORKGROUP_SIZE: u32 = 256;
