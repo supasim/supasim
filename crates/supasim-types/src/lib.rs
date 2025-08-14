@@ -18,10 +18,6 @@
 END LICENSE */
 use serde::{Deserialize, Serialize};
 
-pub use daggy::Walker;
-pub use daggy::petgraph::algo::toposort;
-pub use daggy::petgraph::graph::NodeIndex;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum HalBufferType {
     /// Used for kernel access. Memory type on GPU that can be copied around on GPU but is optimized for local access.
@@ -156,7 +152,7 @@ impl KernelTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SyncMode {
     VulkanStyle,
-    Dag,
+    SerialStreams,
     Automatic,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,8 +214,6 @@ pub struct KernelReflectionInfo {
     pub buffers: Vec<bool>,
     pub push_constants_size: u64,
 }
-
-pub type Dag<T> = daggy::Dag<T, ()>;
 
 #[derive(Clone, Debug)]
 pub enum BackendOptions {

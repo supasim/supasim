@@ -18,7 +18,8 @@
 END LICENSE */
 use hal::{BackendInstance, CommandRecorder, HalBufferSlice, RecorderSubmitInfo, Semaphore};
 use parking_lot::{Condvar, Mutex};
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::panic::UnwindSafe;
@@ -26,7 +27,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
 use thunderdome::Index;
-use types::{Dag, NodeIndex, SyncOperations, Walker};
+use types::SyncOperations;
 
 use crate::{
     Buffer, BufferCommand, BufferCommandInner, BufferRange, BufferSlice, BufferUserId,
@@ -34,11 +35,9 @@ use crate::{
     SendableUserBufferAccessClosure, SupaSimError, SupaSimInstance, SupaSimResult,
 };
 
-pub type CommandDag<B> = Dag<BufferCommand<B>>;
-
 pub struct SubmissionResources<B: hal::Backend> {
-    kernels: Vec<crate::Kernel<B>>,
-    buffers: Vec<crate::Buffer<B>>,
+    pub kernels: Vec<crate::Kernel<B>>,
+    pub buffers: Vec<crate::Buffer<B>>,
     pub temp_copy_buffer: Option<B::Buffer>,
 }
 impl<B: hal::Backend> Default for SubmissionResources<B> {
@@ -100,43 +99,159 @@ pub enum HalCommandBuilder {
     },
     Dummy,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BindGroupDesc {
     kernel_idx: Index,
     items: Vec<(Index, BufferRange)>,
+}
+impl BindGroupDesc {
+    fn uninit() -> Self {
+        Self {
+            kernel_idx: Index::DANGLING,
+            items: vec![],
+        }
+    }
 }
 pub struct CommandStream {
     pub commands: Vec<HalCommandBuilder>,
 }
 /// These are split into multiple streams so that certain operations can be waited without waiting for all
-pub struct StreamingCommands {
+pub struct StreamingCommands<B: hal::Backend> {
     /// Contains the index of the kernel, the index of the buffer, and the range of the buffer
     pub bind_groups: Vec<BindGroupDesc>,
     pub streams: Vec<CommandStream>,
+    pub used_ranges: HashMap<Index, Vec<BufferRange>>,
+    pub resources: SubmissionResources<B>,
 }
 
-#[allow(clippy::type_complexity)]
-pub fn assemble_dag<B: hal::Backend>(
+struct StreamBlock<'a, B: hal::Backend> {
+    commands: Vec<&'a BufferCommand<B>>,
+    /// Indices of commands needing sync
+    needing_sync: BufferUsageTracker,
+}
+impl<'a, B: hal::Backend> StreamBlock<'a, B> {
+    pub fn new() -> Self {
+        Self {
+            commands: Vec::new(),
+            needing_sync: BufferUsageTracker::default(),
+        }
+    }
+    pub fn overlapping_buffers(&mut self, cmd: &BufferCommand<B>) -> Vec<BufferSlice<B>> {
+        let mut slices = Vec::new();
+        for &other_cmd in &self.commands {
+            for b1 in &cmd.buffers {
+                for b2 in &other_cmd.buffers {
+                    if b1.buffer == b2.buffer
+                        && let Some(intersection) = b1.range().intersection(&b2.range())
+                    {
+                        slices.push(BufferSlice {
+                            buffer: b1.buffer.clone(),
+                            start: intersection.start,
+                            len: intersection.len,
+                            needs_mut: true,
+                        });
+                    }
+                }
+            }
+        }
+        slices
+    }
+    pub fn append_command(&mut self, cmd: &'a BufferCommand<B>) {
+        self.commands.push(cmd);
+    }
+    pub fn remove_command(&mut self, index: usize) {
+        self.commands.remove(index);
+    }
+}
+
+#[derive(Default)]
+struct BufferUsageTracker {
+    inner: HashMap<Index, Vec<BufferRange>>,
+}
+impl BufferUsageTracker {
+    pub fn add<B: hal::Backend>(&mut self, b: &BufferSlice<B>) -> SupaSimResult<B, ()> {
+        let id = b.buffer.inner()?.id;
+        match self.inner.entry(id) {
+            Entry::Occupied(mut v) => {
+                v.get_mut().push(b.range());
+            }
+            Entry::Vacant(v) => {
+                v.insert(vec![b.range()]);
+            }
+        }
+        Ok(())
+    }
+    pub fn compact(&mut self) {
+        for v in self.inner.values_mut() {
+            // The idea here is to minimize the number of individual usage elements
+            let mut i = 0;
+            while i < v.len() {
+                let mut j = 0;
+                while j < v.len() {
+                    if i == j {
+                        j += 1;
+                        continue;
+                    }
+                    if let Some(joined) = v[i].try_join(&v[j]) {
+                        // This looks stupid, but the idea is that it may now be larger and able
+                        // to completely "contain" the smaller slice, even if the smaller slice is
+                        // immutable and this one is immutable, making the smaller one redundant.
+                        j = 0;
+                        v[i] = joined;
+                        v.remove(j);
+                        if j < i {
+                            i -= 1;
+                        }
+                    } else {
+                        j += 1;
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+}
+
+pub fn assemble_streams<B: hal::Backend>(
     crs: &mut [&mut CommandRecorderInner<B>],
-    used_kernels: &mut Vec<Kernel<B>>,
     instance: &InstanceState<B>,
-) -> SupaSimResult<
-    B,
-    (
-        CommandDag<B>,
-        HashMap<Index, Vec<BufferRange>>,
-        SubmissionResources<B>,
-    ),
-> {
-    let mut buffers_tracker: HashMap<Index, Vec<(BufferRange, usize)>> = HashMap::new();
+    vulkan_style: bool,
+) -> SupaSimResult<B, StreamingCommands<B>> {
+    // TODO: clean up stuff like .inner()? by possibly acquiring locks over all of the used buffers and stuff
+    if crs.iter().all(|a| a.commands.is_empty()) {
+        return Ok(StreamingCommands {
+            bind_groups: Vec::new(),
+            streams: vec![CommandStream {
+                commands: Vec::new(),
+            }],
+            used_ranges: HashMap::new(),
+            resources: SubmissionResources::default(),
+        });
+    }
+
     let mut resources = SubmissionResources::default();
+    let mut buffers_tracker = BufferUsageTracker::default();
+    let mut bind_groups: HashMap<BindGroupDesc, u32> = HashMap::new();
 
     let mut commands = Vec::new();
     let mut src_buffer_len = 0;
     for cr in crs.iter_mut() {
         let mut cmds = std::mem::take(&mut cr.commands);
         for cmd in &mut cmds {
+            for b in &cmd.buffers {
+                buffers_tracker.add(b)?;
+            }
             if let BufferCommandInner::CopyFromTemp { src_offset } = &mut cmd.inner {
                 *src_offset += src_buffer_len;
+            }
+            for b in &cmd.buffers {
+                resources.buffers.push(b.buffer.clone());
+            }
+            if let BufferCommandInner::KernelDispatch { kernel, .. } = &cmd.inner {
+                if !resources.kernels.contains(kernel) {
+                    resources.kernels.push(kernel.clone());
+                }
             }
         }
         commands.extend(cmds);
@@ -147,59 +262,6 @@ pub fn assemble_dag<B: hal::Backend>(
         src_buffer_len += cr.writes_slice.len() as u64;
     }
 
-    let mut dag = Dag::new();
-    for cmd in commands {
-        for b in &cmd.buffers {
-            resources.buffers.push(b.buffer.clone());
-        }
-        if let BufferCommandInner::KernelDispatch { kernel, .. } = &cmd.inner {
-            resources.kernels.push(kernel.clone());
-        }
-        dag.add_node(cmd);
-    }
-
-    for i in 0..dag.node_count() {
-        let mut work_on_buffer =
-            |buffer: &BufferSlice<B>, dag: &mut Dag<BufferCommand<B>>| -> SupaSimResult<B, ()> {
-                let range: BufferRange = buffer.into();
-                let id = buffer.buffer.inner()?.id;
-                match buffers_tracker.entry(id) {
-                    Entry::Occupied(mut entry) => {
-                        for (range2, j) in entry.get().iter() {
-                            if range.overlaps(range2) {
-                                dag.add_edge(NodeIndex::new(*j), NodeIndex::new(i), ())
-                                    .unwrap();
-                            }
-                        }
-                        entry.get_mut().push((range, i));
-                    }
-                    Entry::Vacant(entry) => {
-                        entry.insert(vec![(range, i)]);
-                    }
-                }
-                Ok(())
-            };
-        for bf_idx in 0..dag[NodeIndex::new(i)].buffers.len() {
-            let buffer = dag[NodeIndex::new(i)].buffers[bf_idx].clone();
-            work_on_buffer(&buffer, &mut dag)?;
-        }
-        if let BufferCommandInner::KernelDispatch { kernel, .. } = &dag[NodeIndex::new(i)].inner {
-            used_kernels.push(kernel.clone());
-        }
-    }
-    dag.add_node(BufferCommand {
-        inner: BufferCommandInner::Dummy,
-        buffers: vec![],
-    });
-    for i in 0..dag.node_count() - 1 {
-        dag.add_edge(NodeIndex::new(dag.node_count() - 1), NodeIndex::new(i), ())
-            .unwrap();
-    }
-    dag.transitive_reduce(vec![NodeIndex::new(dag.node_count() - 1)]);
-    let out_map = buffers_tracker
-        .into_iter()
-        .map(|(key, value)| (key, value.iter().map(|a| a.0).collect()))
-        .collect();
     resources.temp_copy_buffer = if src_buffer_len > 0 {
         let mut buf = unsafe {
             instance
@@ -232,178 +294,152 @@ pub fn assemble_dag<B: hal::Backend>(
     } else {
         None
     };
-    Ok((dag, out_map, resources))
-}
-#[allow(clippy::type_complexity)]
-pub fn record_dag<B: hal::Backend>(
-    _dag: &CommandDag<B>,
-    _cr: &mut B::CommandRecorder,
-) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
-    // TODO: work on this when cuda support lands
-    todo!()
-}
-pub fn dag_to_command_streams<B: hal::Backend>(
-    dag: &CommandDag<B>,
-    vulkan_style: bool,
-) -> SupaSimResult<B, StreamingCommands> {
-    let mut bind_groups = Vec::new();
-    let mut stream = CommandStream {
-        commands: Vec::new(),
-    };
-    {
-        // This algorithm fucking sucks. Its like topological sort but the layers are distinct, so that synchronization can be applied only at specific points
-        let mut already_in = Vec::new();
-        already_in.resize(dag.node_count(), false);
-        let mut layers = Vec::new();
-        layers.push(Vec::new());
-        // I think it looks nicer
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..dag.node_count() {
-            if dag.parents(NodeIndex::new(i)).walk_next(dag).is_none() {
-                layers[0].push(i);
-                already_in[i] = true;
-            }
-        }
-        // This next code is awful. But the idea is that we separate things into "layers" based on
-        // the highest parent layer plus 1. This way it always comes after each parent. So we loop
-        // over all newly exposed children of the previous layer, and if they have no incomplete
-        // parents, it can be added to the current layer.
-        while !layers.last().unwrap().is_empty() {
-            let mut next_layer = Vec::new();
-            let last_layer = layers.last().unwrap();
-            for &node in last_layer {
-                let mut walker = dag.children(NodeIndex::new(node));
-                while let Some((_, child)) = walker.walk_next(dag) {
-                    if !already_in[child.index()] {
-                        let mut walker2 = dag.parents(child);
-                        let mut can_complete = true;
-                        while let Some((_, parent)) = walker2.walk_next(dag) {
-                            if !already_in[parent.index()] {
-                                can_complete = false;
-                            }
-                        }
-                        if can_complete {
-                            next_layer.push(child.index());
-                            already_in[child.index()] = true;
-                        }
-                    }
-                }
-            }
-            layers.push(next_layer);
-        }
-        layers.pop();
-        let nodes = dag.raw_nodes();
-        for (i, layer) in layers.into_iter().enumerate() {
-            // No synchronization needed for the first layer
-            // This following code is bad. More barriers than needed are used, and the first layer isn't actually skipped.
-            // I suspect this is because the first layer has a kind of "root" dummy node
-            if vulkan_style && i != 0 {
-                stream.commands.push(HalCommandBuilder::PipelineBarrier {
-                    before: SyncOperations::Both,
-                    after: SyncOperations::Both,
-                });
-                for &idx in &layer {
-                    let cmd = &nodes[idx].weight;
-                    if let BufferCommandInner::CopyBufferToBuffer = &cmd.inner {
-                        stream.commands.push(HalCommandBuilder::MemoryBarrier {
-                            resource: cmd.buffers[0].buffer.inner()?.id,
-                            offset: cmd.buffers[0].start,
-                            len: cmd.buffers[0].len,
-                        });
-                        stream.commands.push(HalCommandBuilder::MemoryBarrier {
-                            resource: cmd.buffers[1].buffer.inner()?.id,
-                            offset: cmd.buffers[1].start,
-                            len: cmd.buffers[1].len,
-                        });
-                    } else {
-                        for buffer in &cmd.buffers {
-                            let id = buffer.buffer.inner()?.id;
-                            stream.commands.push(HalCommandBuilder::MemoryBarrier {
-                                resource: id,
-                                offset: buffer.start,
-                                len: buffer.len,
-                            });
-                        }
-                    }
-                }
-            }
-            for idx in layer {
-                let cmd = &nodes[idx].weight;
-                let hal = match &cmd.inner {
-                    BufferCommandInner::Dummy => continue,
-                    BufferCommandInner::CopyBufferToBuffer => HalCommandBuilder::CopyBuffer {
-                        src_buffer: cmd.buffers[0].buffer.inner()?.id,
-                        dst_buffer: cmd.buffers[1].buffer.inner()?.id,
-                        src_offset: cmd.buffers[0].start,
-                        dst_offset: cmd.buffers[1].start,
-                        len: cmd.buffers[0].len,
-                    },
-                    BufferCommandInner::KernelDispatch {
-                        kernel,
-                        workgroup_dims,
-                    } => {
-                        let bg_index = bind_groups.len() as u32;
-                        let bg = BindGroupDesc {
-                            kernel_idx: kernel.inner()?.id,
-                            items: cmd
-                                .buffers
-                                .iter()
-                                .map(|a| {
-                                    (
-                                        a.buffer.inner().unwrap().id,
-                                        BufferRange {
-                                            start: a.start,
-                                            len: a.len,
-                                            needs_mut: a.needs_mut,
-                                        },
-                                    )
-                                })
-                                .collect(),
-                        };
-                        bind_groups.push(bg);
-                        HalCommandBuilder::DispatchKernel {
-                            kernel: kernel.inner()?.id,
-                            bg: bg_index,
-                            push_constants: Vec::new(),
-                            workgroup_dims: *workgroup_dims,
-                        }
-                    }
-                    BufferCommandInner::CopyFromTemp { src_offset } => {
-                        HalCommandBuilder::CopyFromTemp {
-                            src_offset: *src_offset,
-                            dst_buffer: cmd.buffers[0].buffer.inner()?.id,
-                            dst_offset: cmd.buffers[0].start,
-                            len: cmd.buffers[0].len,
-                        }
-                    }
-                    BufferCommandInner::ZeroBuffer => HalCommandBuilder::ZeroBuffer {
-                        buffer: cmd.buffers[0].buffer.inner()?.id,
-                        offset: cmd.buffers[0].start,
-                        size: cmd.buffers[0].len,
-                    },
-                    BufferCommandInner::MemoryTransfer { import } => {
-                        HalCommandBuilder::MemoryTransfer {
-                            resource: cmd.buffers[0].buffer.inner()?.id,
-                            offset: cmd.buffers[0].start,
-                            len: cmd.buffers[0].len,
-                            import: *import,
-                        }
-                    }
 
-                    BufferCommandInner::CommandRecorderEnd => HalCommandBuilder::Dummy,
-                };
-                stream.commands.push(hal);
+    // Inspired by the greatest algorithm ever, bubble sort!
+    // The idea is that commands will "bubble up" to the earliest block possible
+
+    let mut blocks = vec![StreamBlock::new()];
+    for cmd in &commands {
+        let mut overlapping = blocks.last_mut().unwrap().overlapping_buffers(cmd);
+        if overlapping.is_empty() {
+            let mut last_supported = blocks.len() - 1;
+            while last_supported > 1 {
+                overlapping = blocks[last_supported - 1].overlapping_buffers(cmd);
+                if overlapping.is_empty() {
+                    last_supported -= 1;
+                } else {
+                    break;
+                }
             }
+            blocks[last_supported].append_command(cmd);
+            for a in &overlapping {
+                blocks[last_supported].needing_sync.add(a)?;
+            }
+        } else {
+            let mut block = StreamBlock::new();
+            block.append_command(cmd);
+            for s in &overlapping {
+                block.needing_sync.add(s)?;
+            }
+            blocks.push(block);
         }
     }
+    for block in &mut blocks {
+        // Metal backend may eventually allow parallelizing copies with other things
+        // so we want to start them first and let them run in the background
+        block.commands.sort_unstable_by_key(|a| match a.inner {
+            BufferCommandInner::CopyBufferToBuffer
+            | BufferCommandInner::CopyFromTemp { .. }
+            | BufferCommandInner::ZeroBuffer => 0,
+            _ => 1,
+        });
+    }
+
+    let mut out_commands = Vec::new();
+
+    for (block_idx, mut block) in blocks.into_iter().enumerate() {
+        if vulkan_style && block_idx != 0 {
+            out_commands.push(HalCommandBuilder::PipelineBarrier {
+                before: SyncOperations::Both,
+                after: SyncOperations::Both,
+            });
+            block.needing_sync.compact();
+            for (b, ranges) in block.needing_sync.inner {
+                for range in ranges {
+                    out_commands.push(HalCommandBuilder::MemoryBarrier {
+                        resource: b,
+                        offset: range.start,
+                        len: range.len,
+                    });
+                }
+            }
+        }
+        for cmd in block.commands {
+            let mut items = Vec::new();
+            for b in &cmd.buffers {
+                let id = b.buffer.inner()?.id;
+                items.push((id, b.range()));
+            }
+            let new_cmd = match &cmd.inner {
+                &BufferCommandInner::KernelDispatch {
+                    ref kernel,
+                    workgroup_dims,
+                    ..
+                } => {
+                    let kernel_idx = kernel.inner()?.id;
+                    let desc = BindGroupDesc {
+                        kernel_idx: kernel.inner()?.id,
+                        items,
+                    };
+                    let current_count = bind_groups.len() as u32;
+                    let bg_idx = match bind_groups.entry(desc) {
+                        Entry::Vacant(v) => {
+                            v.insert(current_count);
+                            current_count
+                        }
+                        Entry::Occupied(v) => *v.get(),
+                    };
+                    HalCommandBuilder::DispatchKernel {
+                        kernel: kernel_idx,
+                        bg: bg_idx,
+                        push_constants: vec![],
+                        workgroup_dims,
+                    }
+                }
+                BufferCommandInner::Dummy => continue,
+                BufferCommandInner::CopyBufferToBuffer => HalCommandBuilder::CopyBuffer {
+                    src_buffer: cmd.buffers[0].buffer.inner()?.id,
+                    dst_buffer: cmd.buffers[1].buffer.inner()?.id,
+                    src_offset: cmd.buffers[0].start,
+                    dst_offset: cmd.buffers[1].start,
+                    len: cmd.buffers[0].len,
+                },
+                &BufferCommandInner::CopyFromTemp { src_offset } => {
+                    HalCommandBuilder::CopyFromTemp {
+                        src_offset,
+                        dst_buffer: cmd.buffers[0].buffer.inner()?.id,
+                        dst_offset: cmd.buffers[0].start,
+                        len: cmd.buffers[0].len,
+                    }
+                }
+                BufferCommandInner::ZeroBuffer => HalCommandBuilder::ZeroBuffer {
+                    buffer: cmd.buffers[0].buffer.inner()?.id,
+                    offset: cmd.buffers[0].start,
+                    size: cmd.buffers[0].len,
+                },
+                BufferCommandInner::MemoryTransfer { import } => {
+                    HalCommandBuilder::MemoryTransfer {
+                        resource: cmd.buffers[0].buffer.inner()?.id,
+                        offset: cmd.buffers[0].start,
+                        len: cmd.buffers[0].len,
+                        import: *import,
+                    }
+                }
+
+                BufferCommandInner::CommandRecorderEnd => HalCommandBuilder::Dummy,
+            };
+            out_commands.push(new_cmd);
+        }
+    }
+
+    let stream = CommandStream {
+        commands: out_commands,
+    };
+    let mut bind_groups_out = vec![BindGroupDesc::uninit(); bind_groups.len()];
+    for (bg, idx) in bind_groups {
+        bind_groups_out[idx as usize] = bg;
+    }
+    buffers_tracker.compact();
     Ok(StreamingCommands {
-        bind_groups,
+        bind_groups: bind_groups_out,
         streams: vec![stream],
+        used_ranges: buffers_tracker.inner,
+        resources,
     })
 }
 #[allow(clippy::type_complexity)]
 pub fn record_command_streams<B: hal::Backend>(
-    streams: &StreamingCommands,
+    streams: &StreamingCommands<B>,
     instance: SupaSimInstance<B>,
     recorder: &mut B::CommandRecorder,
     write_buffer: &Option<B::Buffer>,
@@ -671,7 +707,8 @@ pub fn record_command_streams<B: hal::Backend>(
     Ok(bindgroups)
 }
 pub struct GpuSubmissionInfo<B: hal::Backend> {
-    pub command_recorder: Option<B::CommandRecorder>,
+    /// There are no ordering guarantees between these recorders, but in practice they will execute in orders
+    pub command_recorders: Vec<B::CommandRecorder>,
     pub bind_groups: Vec<(B::BindGroup, Kernel<B>)>,
     pub used_buffer_ranges: Vec<(BufferUserId, Buffer<B>)>,
     pub used_buffers: Vec<Buffer<B>>,
@@ -1091,7 +1128,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                             used_semaphores.push(acquire_semaphore(&mut semaphores).unwrap());
                         }
                         prev_was_cpu = false;
-                        recorders.push(std::mem::take(&mut g.command_recorder).unwrap());
+                        recorders.push(std::mem::take(&mut g.command_recorders));
                     }
                 }
             }
@@ -1106,17 +1143,25 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                 match item {
                     Work::CpuWork(_) => prev_was_cpu = true,
                     Work::GpuSubmission(_) => {
-                        submits.push(RecorderSubmitInfo {
-                            command_recorder: recorders_iter.next().unwrap(),
-                            wait_semaphore: if prev_was_cpu {
-                                semaphore_idx += 1;
+                        let next = recorders_iter.next().unwrap();
+                        let count = next.len();
+                        for (i, r) in next.iter_mut().enumerate() {
+                            submits.push(RecorderSubmitInfo {
+                                command_recorder: r,
+                                wait_semaphore: if prev_was_cpu && i == 0 {
+                                    semaphore_idx += 1;
 
-                                Some(&used_semaphores[semaphore_idx])
-                            } else {
-                                None
-                            },
-                            signal_semaphore: Some(&used_semaphores[semaphore_idx]),
-                        });
+                                    Some(&used_semaphores[semaphore_idx])
+                                } else {
+                                    None
+                                },
+                                signal_semaphore: if i == count - 1 {
+                                    Some(&used_semaphores[semaphore_idx])
+                                } else {
+                                    None
+                                },
+                            });
+                        }
                         semaphore_idx += 1;
                         prev_was_cpu = false;
                     }
@@ -1222,10 +1267,9 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
             final_cpu.run(&logic.instance).unwrap();
         }
         semaphores.append(&mut used_semaphores);
-        logic
-            .instance
-            .hal_command_recorders
-            .lock()
-            .append(&mut recorders);
+        let mut hal_recorders_lock = logic.instance.hal_command_recorders.lock();
+        for r in &mut recorders {
+            hal_recorders_lock.append(r);
+        }
     }
 }

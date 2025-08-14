@@ -242,13 +242,6 @@ impl CommandRecorder<Dummy> for DummyResource {
     ) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
     }
-    unsafe fn record_dag(
-        &mut self,
-        instance: &mut <Dummy as Backend>::Instance,
-        dag: &mut types::Dag<crate::BufferCommand<Dummy>>,
-    ) -> Result<(), <Dummy as Backend>::Error> {
-        unreachable!()
-    }
     unsafe fn clear(
         &mut self,
         instance: &mut <Dummy as Backend>::Instance,

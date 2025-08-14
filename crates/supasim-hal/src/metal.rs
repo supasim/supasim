@@ -105,6 +105,10 @@ impl BackendInstance<Metal> for MetalInstance {
         //let metal_version = MetalVersion::V2_3;
         //self.device.supportsFamily(MTLGPUFamily::Metal3);
         HalInstanceProperties {
+            // Technically it's serial streams, but because there is so little
+            // potential for overlap (at least on Apple silicon), I figured I would
+            // mark it as automatic and then have the backend possibly split
+            // transfers into separate streams behind the scenes
             sync_mode: types::SyncMode::Automatic,
             pipeline_cache: false,
             kernel_lang: KernelTarget::Msl {
@@ -632,12 +636,5 @@ impl CommandRecorder<Metal> for MetalCommandRecorder {
         }
         encoder.finish();
         Ok(())
-    }
-    unsafe fn record_dag(
-        &mut self,
-        _instance: &mut <Metal as Backend>::Instance,
-        _dag: &mut types::Dag<crate::BufferCommand<Metal>>,
-    ) -> Result<(), <Metal as Backend>::Error> {
-        unreachable!()
     }
 }

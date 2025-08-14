@@ -46,9 +46,14 @@ use std::{
 };
 use thiserror::Error;
 use thunderdome::{Arena, Index};
+use types::SyncMode;
 
 pub use bytemuck;
 pub use hal;
+#[cfg(feature = "wgpu")]
+pub use hal::WgpuDeviceExportInfo;
+#[cfg(feature = "wgpu")]
+pub use hal::wgpu_dep as wgpu;
 pub use types::{
     Backend, HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel,
     SpirvVersion,
@@ -206,6 +211,13 @@ impl<B: hal::Backend> BufferSlice<B> {
             id,
         });
         Ok(())
+    }
+    fn range(&self) -> BufferRange {
+        BufferRange {
+            start: self.start,
+            len: self.len,
+            needs_mut: self.needs_mut,
+        }
     }
 }
 
@@ -579,24 +591,26 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             };
             let mut used_buffers = HashSet::new();
             let mut used_buffer_ranges = Vec::new();
-            let mut used_kernels = Vec::new();
-            let (dag, sync_info, resources) =
-                sync::assemble_dag(&mut recorder_inners, &mut used_kernels, &s)?;
-            for (&buf_id, ranges) in &sync_info {
+            let streams = sync::assemble_streams(
+                &mut recorder_inners,
+                &s,
+                s.inner_properties.sync_mode == SyncMode::VulkanStyle,
+            )?;
+            for (buf_id, ranges) in &streams.used_ranges {
                 let b = s
                     .buffers
                     .lock()
-                    .get(buf_id)
+                    .get(*buf_id)
                     .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                     .as_ref()
                     .unwrap()
                     .upgrade()?;
                 let _b = b.clone();
                 let b_mut = _b.inner()?;
-                for &range in ranges {
+                for range in ranges {
                     let id = b_mut.slice_tracker.acquire(
                         &s,
-                        range,
+                        *range,
                         if b_mut.slice_tracker.mutex.lock().gpu_available {
                             BufferUser::Gpu(u64::MAX)
                         } else {
@@ -608,36 +622,20 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                 }
                 used_buffers.insert(buf_id);
             }
-            let sync_mode = s.inner_properties.sync_mode;
             drop(s);
-            let bind_groups = match sync_mode {
-                types::SyncMode::Dag => sync::record_dag(&dag, &mut recorder)?,
-                types::SyncMode::VulkanStyle => {
-                    let streams = sync::dag_to_command_streams(&dag, true)?;
-                    sync::record_command_streams(
-                        &streams,
-                        self.clone(),
-                        &mut recorder,
-                        &resources.temp_copy_buffer,
-                    )?
-                }
-                types::SyncMode::Automatic => {
-                    let streams = sync::dag_to_command_streams(&dag, false)?;
-                    sync::record_command_streams(
-                        &streams,
-                        self.clone(),
-                        &mut recorder,
-                        &resources.temp_copy_buffer,
-                    )?
-                }
-            };
+            let bind_groups = sync::record_command_streams(
+                &streams,
+                self.clone(),
+                &mut recorder,
+                &streams.resources.temp_copy_buffer,
+            )?;
             let s = self.inner()?;
             let used_buffers: Vec<_> = used_buffers
                 .iter()
                 .map(|a| {
                     s.buffers
                         .lock()
-                        .get(*a)
+                        .get(**a)
                         .unwrap()
                         .as_ref()
                         .unwrap()
@@ -645,18 +643,19 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                         .unwrap()
                 })
                 .collect();
+            let kernels = streams.resources.kernels.clone();
             submission_idx = s.sync_thread().submit_gpu(GpuSubmissionInfo {
-                command_recorder: Some(recorder),
+                command_recorders: vec![recorder],
                 bind_groups,
                 used_buffer_ranges: used_buffer_ranges.clone(),
                 used_buffers,
-                used_resources: resources,
+                used_resources: streams.resources,
             })?;
 
-            for kernel in &used_kernels {
+            for kernel in &kernels {
                 kernel.inner_mut()?.last_used = submission_idx;
             }
-            for &buf_id in sync_info.keys() {
+            for (buf_id, _) in streams.used_ranges {
                 let b = s
                     .buffers
                     .lock()
@@ -1189,6 +1188,49 @@ impl BufferRange {
         self.start < other.start + other.len
             && other.start < self.start + self.len
             && (self.needs_mut || other.needs_mut)
+    }
+    pub fn overlaps_ignore_mut(&self, other: &Self) -> bool {
+        self.start < other.start + other.len && other.start < self.start + self.len
+    }
+    pub fn contains(&self, other: &Self) -> bool {
+        self.start <= other.start
+            && self.start + self.len >= other.start + other.len
+            && (!other.needs_mut || self.needs_mut)
+    }
+    pub fn try_join(&self, other: &Self) -> Option<Self> {
+        if self.overlaps_ignore_mut(other) {
+            if self.needs_mut == other.needs_mut {
+                let start = self.start.min(other.start);
+                let end = (self.start + self.len).max(other.start + other.len);
+                let len = end - start;
+                Some(Self {
+                    needs_mut: self.needs_mut,
+                    start,
+                    len,
+                })
+            } else if self.contains(other) {
+                Some(*self)
+            } else if other.contains(self) {
+                Some(*other)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    pub fn intersection(&self, other: &Self) -> Option<Self> {
+        if self.overlaps(other) {
+            let start = self.start.min(other.start);
+            let end = (self.start + self.len).max(other.start + other.len);
+            Some(Self {
+                start,
+                len: end - start,
+                needs_mut: true,
+            })
+        } else {
+            None
+        }
     }
 }
 enum BufferBacking<B: hal::Backend> {
@@ -1723,8 +1765,3 @@ impl BufferUser {
         }
     }
 }
-
-#[cfg(feature = "wgpu")]
-pub use hal::WgpuDeviceExportInfo;
-#[cfg(feature = "wgpu")]
-pub use hal::wgpu_dep as wgpu;

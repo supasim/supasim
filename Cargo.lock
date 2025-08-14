@@ -505,15 +505,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
-name = "daggy"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "804169db156b21258a2545757336922d93dfa229892c75911a0ad141aa0ff241"
-dependencies = [
- "petgraph",
-]
-
-[[package]]
 name = "dispatch"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2020,7 +2011,6 @@ dependencies = [
 name = "supasim-types"
 version = "0.0.1"
 dependencies = [
- "daggy",
  "serde",
  "wgpu",
 ]
