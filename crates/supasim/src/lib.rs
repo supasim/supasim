@@ -208,6 +208,13 @@ impl<B: hal::Backend> BufferSlice<B> {
         });
         Ok(())
     }
+    fn range(&self) -> BufferRange {
+        BufferRange {
+            start: self.start,
+            len: self.len,
+            needs_mut: self.needs_mut,
+        }
+    }
 }
 
 trait AsId<T> {}
@@ -1177,6 +1184,49 @@ impl BufferRange {
         self.start < other.start + other.len
             && other.start < self.start + self.len
             && (self.needs_mut || other.needs_mut)
+    }
+    pub fn overlaps_ignore_mut(&self, other: &Self) -> bool {
+        self.start < other.start + other.len && other.start < self.start + self.len
+    }
+    pub fn contains(&self, other: &Self) -> bool {
+        self.start <= other.start
+            && self.start + self.len >= other.start + other.len
+            && (!other.needs_mut || self.needs_mut)
+    }
+    pub fn try_join(&self, other: &Self) -> Option<Self> {
+        if self.overlaps_ignore_mut(other) {
+            if self.needs_mut == other.needs_mut {
+                let start = self.start.min(other.start);
+                let end = (self.start + self.len).max(other.start + other.len);
+                let len = end - start;
+                Some(Self {
+                    needs_mut: self.needs_mut,
+                    start,
+                    len,
+                })
+            } else if self.contains(other) {
+                Some(*self)
+            } else if other.contains(self) {
+                Some(*other)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    pub fn intersection(&self, other: &Self) -> Option<Self> {
+        if self.overlaps(other) {
+            let start = self.start.min(other.start);
+            let end = (self.start + self.len).max(other.start + other.len);
+            Some(Self {
+                start,
+                len: end - start,
+                needs_mut: true,
+            })
+        } else {
+            None
+        }
     }
 }
 enum BufferBacking<B: hal::Backend> {
