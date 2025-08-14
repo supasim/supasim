@@ -91,7 +91,8 @@ if __name__ == "__main__":
 
         # Insert new header with exactly one blank line after
         final_parts.extend(header)
-        final_parts.append("\n")
+        if len(out_parts) != 0 and out_parts[0] != "":
+            final_parts.append("\n")
         final_parts.extend(out_parts)
 
         with open(fname, "w") as file:
