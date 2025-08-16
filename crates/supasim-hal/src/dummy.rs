@@ -55,15 +55,7 @@ impl BackendInstance<Dummy> for DummyResource {
             is_unified_memory: false,
             map_buffer_while_gpu_use: true,
             upload_download_buffers: true,
-            export_memory: false,
         }
-    }
-
-    unsafe fn can_share_memory_to_device(
-        &mut self,
-        device: &dyn Any,
-    ) -> Result<bool, <Dummy as Backend>::Error> {
-        Ok(false)
     }
 
     unsafe fn compile_kernel(
@@ -219,21 +211,7 @@ impl BackendInstance<Dummy> for DummyResource {
     }
 }
 impl Kernel<Dummy> for DummyResource {}
-impl Buffer<Dummy> for DummyResource {
-    unsafe fn share_to_device(
-        &mut self,
-        instance: &mut <Dummy as Backend>::Instance,
-        external_device: &dyn Any,
-    ) -> Result<Box<dyn Any>, <Dummy as Backend>::Error> {
-        Err(DummyResource)
-    }
-    unsafe fn export(
-        &mut self,
-        instance: &mut <Dummy as Backend>::Instance,
-    ) -> Result<ExternalMemoryObject, <Dummy as Backend>::Error> {
-        Err(DummyResource)
-    }
-}
+impl Buffer<Dummy> for DummyResource {}
 impl CommandRecorder<Dummy> for DummyResource {
     unsafe fn record_commands(
         &mut self,
