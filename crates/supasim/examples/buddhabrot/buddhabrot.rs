@@ -16,11 +16,10 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
-//! Lots of this code is just stolen from https://sotrh.github.io/learn-wgpu/ lol
 
 use rand::random;
 use std::sync::Arc;
-use supasim::{SupaSimInstance, wgpu};
+use supasim::{Backend, SupaSimInstance, wgpu};
 
 use winit::{
     application::ApplicationHandler,
@@ -153,16 +152,16 @@ impl<B: hal::Backend> AppState<B> {
         };
 
         let global_state = kernels::GlobalState::new_from_env().unwrap();
-        let mut spirv = Vec::new();
+        let mut shader_binary = Vec::new();
         let instance = SupaSimInstance::from_hal(hal_instance);
         let workgroup_size = [16, 16, 1];
         let mut compile_kernel = |entry: &str| {
-            spirv.clear();
-            global_state
+            shader_binary.clear();
+            let reflection_info = global_state
                 .compile_kernel(supasim::kernels::KernelCompileOptions {
                     target: instance.properties().unwrap().kernel_lang,
                     source: kernels::KernelSource::Memory(include_bytes!("buddhabrot.slang")),
-                    dest: kernels::KernelDest::Memory(&mut spirv),
+                    dest: kernels::KernelDest::Memory(&mut shader_binary),
                     entry,
                     include: None,
                     fp_mode: kernels::KernelFpMode::Precise,
@@ -171,16 +170,9 @@ impl<B: hal::Backend> AppState<B> {
                     minify: true,
                 })
                 .unwrap();
-
+            assert_eq!(reflection_info.buffers, vec![false, true, true]);
             instance
-                .compile_raw_kernel(
-                    &spirv,
-                    supasim::KernelReflectionInfo {
-                        workgroup_size,
-                        buffers: vec![false, true, true],
-                    },
-                    None,
-                )
+                .compile_raw_kernel(&shader_binary, reflection_info, None)
                 .unwrap()
         };
         let run_kernel = compile_kernel("Run");
@@ -556,11 +548,7 @@ impl<B: hal::Backend> AppState<B> {
                 self.config.width as u64 * self.config.height as u64 * 4,
             )
             .unwrap();
-        self.instance
-            .submit_commands(&mut [recorder])
-            .unwrap()
-            .wait()
-            .unwrap();
+        self.instance.submit_commands(&mut [recorder]).unwrap();
         {
             let access = download_buffer
                 .access(
@@ -696,29 +684,50 @@ impl<B: hal::Backend> ApplicationHandler<AppState<B>> for App<B> {
 
 pub fn main() {
     dev_utils::setup_trace_printer_if_env();
-    let use_vulkan = match std::env::var("BACKEND") {
-        Ok(e) => &e == "vulkan",
-        Err(_) => false,
+    let backend = match std::env::var("BACKEND") {
+        Ok(b) => match b.as_str() {
+            "vulkan" => Backend::Vulkan,
+            #[cfg(target_vendor = "apple")]
+            "metal" => Backend::Metal,
+            _ => Backend::Wgpu,
+        },
+        Err(_) => Backend::Wgpu,
     };
-    if use_vulkan {
-        println!("Selected vulkan backend");
-        let event_loop = EventLoop::with_user_event().build().unwrap();
-        event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-        let mut app = App::<hal::Vulkan> {
-            state: None,
-            instance: Some(hal::Vulkan::create_instance(true).unwrap()),
-        };
-        event_loop.run_app(&mut app).unwrap();
-    } else {
-        println!("Selected wgpu backend");
-        let event_loop = EventLoop::with_user_event().build().unwrap();
-        event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
-        let mut app = App::<hal::Wgpu> {
-            state: None,
-            instance: Some(
-                hal::Wgpu::create_instance(true, wgpu::Backends::PRIMARY, None).unwrap(),
-            ),
-        };
-        event_loop.run_app(&mut app).unwrap();
+    match backend {
+        Backend::Wgpu => {
+            println!("Selected wgpu backend");
+            let event_loop = EventLoop::with_user_event().build().unwrap();
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+            let mut app = App::<hal::Wgpu> {
+                state: None,
+                instance: Some(
+                    hal::Wgpu::create_instance(true, wgpu::Backends::PRIMARY, None).unwrap(),
+                ),
+            };
+            event_loop.run_app(&mut app).unwrap();
+        }
+        Backend::Vulkan => {
+            println!("Selected vulkan backend");
+            let event_loop = EventLoop::with_user_event().build().unwrap();
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+            let mut app = App::<hal::Vulkan> {
+                state: None,
+                instance: Some(hal::Vulkan::create_instance(true).unwrap()),
+            };
+            event_loop.run_app(&mut app).unwrap();
+        }
+        #[cfg(target_vendor = "apple")]
+        Backend::Metal => {
+            println!("Selected metal backend");
+            let event_loop = EventLoop::with_user_event().build().unwrap();
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
+            let mut app = App::<hal::Metal> {
+                state: None,
+                instance: Some(hal::Metal::create_instance().unwrap()),
+            };
+            event_loop.run_app(&mut app).unwrap();
+        }
+        #[cfg(not(target_vendor = "apple"))]
+        Backend::Metal => unreachable!(),
     }
 }

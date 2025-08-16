@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 use std::path::PathBuf;
 
 pub fn should_skip(kernel_target: &str) -> bool {
@@ -74,7 +75,7 @@ kernel_test!(
         version: types::SpirvVersion::V1_4
     }
 );
-#[cfg(feature = "opt-valid")]
+#[cfg(all(feature = "msl-out", feature = "opt-valid"))]
 kernel_test!(
     add_msl,
     "MSL",
@@ -83,7 +84,7 @@ kernel_test!(
         version: types::MetalVersion::V2_3
     }
 );
-#[cfg(all(target_os = "macos", feature = "opt-valid"))]
+#[cfg(all(target_os = "macos", feature = "msl-out", feature = "opt-valid"))]
 kernel_test!(
     add_metallib,
     "METALLIB",

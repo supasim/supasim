@@ -16,6 +16,7 @@
 #   You should have received a copy of the GNU General Public License
 #   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # END LICENSE
+
 [package]
 name = "supasim-hal"
 description = "A hardware abstraction layer allowing easy use of multiple GPU libraries, made for supasim."
@@ -30,17 +31,30 @@ license.workspace = true
 homepage.workspace = true
 
 [features]
-default = ["vulkan", "wgpu"]
+default = ["vulkan", "wgpu", "metal"]
 cuda = [
   # "cust"
 ] # Potential cuda libraries: cust, cudarc
 wgpu = ["dep:wgpu", "pollster"]
 vulkan = ["ash", "gpu-allocator"]
+metal = [
+  "objc2",
+  "objc2-metal",
+  "dispatch2",
+  "kernels/msl-out",
+  "kernels/opt-valid",
+]
 
 [dependencies]
-thiserror.workspace = true
 
 types.workspace = true
+# I'm putting this here for now. Otherwise, the metal feature tries to enable
+# kernels/opt-valid for compiling without actually bringing in the dependencies,
+# which is probably a bug in cargo or something but it breaks my project. So for
+# now, supasim-hal is a little more bloated than it needs to be
+kernels = { workspace = true, features = ["opt-valid"] }
+
+thiserror.workspace = true
 bytemuck.workspace = true
 log.workspace = true
 env_logger.workspace = true
@@ -60,9 +74,21 @@ pollster = { workspace = true, optional = true }
 # Cuda dependencies
 # cust = { version = "0.3", optional = true }
 
+[target.'cfg(target_vendor = "apple")'.dependencies]
+# Metal dependencies
+
+# Apple's programming model, like Windows's COM
+objc2 = { version = "0.6", optional = true }
+# Actual metal dependency
+objc2-metal = { version = "0.3", optional = true }
+# Required for "dispatch data" which is how you pass bytes in metal apparently
+dispatch2 = { version = "0.3", optional = true }
+# Needed for common types like NSString and NSError
+objc2-foundation = { version = "0.3" }
+
+
 [dev-dependencies]
 dev-utils.workspace = true
-kernels.workspace = true
 
 [[example]]
 name = "hal_buffer_copy"

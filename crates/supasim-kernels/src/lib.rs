@@ -96,7 +96,6 @@ impl GlobalState {
     #[cfg(feature = "opt-valid")]
     fn validate_spv(module: &[u32], s: SpirvVersion) -> Result<()> {
         use std::{ffi::CStr, ptr::null_mut};
-
         unsafe {
             let env = Self::env_from_version(s);
             let options = spirv_tools_sys::spvValidatorOptionsCreate();
@@ -160,43 +159,125 @@ impl GlobalState {
             Ok(v)
         }
     }
+    /*#[cfg(feature = "msl-out")]
+    fn spirv_to_msl(
+        module: &[u32],
+        metal_version: types::MetalVersion,
+    ) -> Result<(Vec<u8>, String)> {
+        let module = naga::front::spv::parse_u8_slice(
+            bytemuck::cast_slice(module),
+            &naga::front::spv::Options {
+                adjust_coordinate_space: true,
+                strict_capabilities: false,
+                block_ctx_dump_prefix: None,
+            },
+        )?;
+        module.to_ctx();
+        let mut valid = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        );
+        let info = valid.validate(&module)?;
+        let out = naga::back::msl::write_string(
+            &module,
+            &info,
+            &naga::back::msl::Options {
+                lang_version: metal_version.to_tuple(),
+                force_loop_bounding: false,
+                zero_initialize_workgroup_memory: false,
+                ..Default::default()
+            },
+            &naga::back::msl::PipelineOptions::default(),
+        )?;
+
+        Ok((
+            out.0.into_bytes(),
+            out.1.entry_point_names.into_iter().next().unwrap()?,
+        ))
+    }*/
     #[cfg(feature = "spirv-cross")]
     fn transpile_spirv(module: &[u32], target: KernelTarget) -> Result<Vec<u8>> {
         use std::ptr::null;
 
         use spirv_cross_sys as spvc;
+        fn map_result(result: spvc::spvc_result, ctx: *mut spvc::spvc_context_s) -> Result<()> {
+            if result == spvc::spvc_result_SPVC_SUCCESS {
+                Ok(())
+            } else {
+                unsafe {
+                    let ptr = spvc::spvc_context_get_last_error_string(ctx);
+                    let cstr = std::ffi::CStr::from_ptr(ptr);
+                    Err(anyhow::Error::msg(cstr.to_str().unwrap()))
+                }
+            }
+        }
         unsafe {
             let mut context = null_mut();
-            spvc::spvc_context_create(&mut context);
+            let res = spvc::spvc_context_create(&mut context);
+            map_result(res, context)?;
             let mut ir = null_mut();
-            spvc::spvc_context_parse_spirv(context, module.as_ptr(), module.len(), &mut ir);
-            let mut compiler = null_mut();
-            spvc::spvc_context_create_compiler(
+            map_result(
+                spvc::spvc_context_parse_spirv(context, module.as_ptr(), module.len(), &mut ir),
                 context,
-                match target {
-                    KernelTarget::Glsl => spvc::spvc_backend_SPVC_BACKEND_GLSL,
-                    KernelTarget::Msl { .. } | KernelTarget::MetalLib { .. } => {
-                        spvc::spvc_backend_SPVC_BACKEND_MSL
-                    }
-                    KernelTarget::Hlsl => spvc::spvc_backend_SPVC_BACKEND_HLSL,
-                    _ => panic!("Transpile spirv called on invalid target"),
-                },
-                ir,
-                spvc::spvc_capture_mode_SPVC_CAPTURE_MODE_TAKE_OWNERSHIP,
-                &mut compiler,
-            );
+            )?;
+            let mut compiler = null_mut();
+            map_result(
+                spvc::spvc_context_create_compiler(
+                    context,
+                    match target {
+                        KernelTarget::Glsl => spvc::spvc_backend_SPVC_BACKEND_GLSL,
+                        KernelTarget::Msl { .. } | KernelTarget::MetalLib { .. } => {
+                            spvc::spvc_backend_SPVC_BACKEND_MSL
+                        }
+                        KernelTarget::Hlsl => spvc::spvc_backend_SPVC_BACKEND_HLSL,
+                        _ => panic!("Transpile spirv called on invalid target"),
+                    },
+                    ir,
+                    spvc::spvc_capture_mode_SPVC_CAPTURE_MODE_TAKE_OWNERSHIP,
+                    &mut compiler,
+                ),
+                context,
+            )?;
             let mut options = null_mut();
-            spvc::spvc_compiler_create_compiler_options(compiler, &mut options);
-            spvc::spvc_compiler_install_compiler_options(compiler, options);
+            map_result(
+                spvc::spvc_compiler_create_compiler_options(compiler, &mut options),
+                context,
+            )?;
+            if let KernelTarget::Msl { version } | KernelTarget::MetalLib { version } = target {
+                map_result(
+                    spvc::spvc_compiler_options_set_bool(
+                        options,
+                        spvc::spvc_compiler_option_SPVC_COMPILER_OPTION_MSL_ARGUMENT_BUFFERS,
+                        false as _,
+                    ),
+                    context,
+                )?;
+                let version_tuple = version.to_tuple();
+                let version = ((version_tuple.0 as u32) << 16) + ((version_tuple.1 as u32) << 8);
+                map_result(
+                    spvc::spvc_compiler_options_set_uint(
+                        options,
+                        spvc::spvc_compiler_option_SPVC_COMPILER_OPTION_MSL_VERSION,
+                        version,
+                    ),
+                    context,
+                )?;
+            }
+            map_result(
+                spvc::spvc_compiler_install_compiler_options(compiler, options),
+                context,
+            )?;
             let mut result = null();
-            spvc::spvc_compiler_compile(compiler, &mut result);
-            let result =
-                String::from(std::ffi::CStr::from_ptr(result).to_str().unwrap()).into_bytes();
+            map_result(spvc::spvc_compiler_compile(compiler, &mut result), context)?;
+            assert!(!result.is_null());
+            let c_str = std::ffi::CStr::from_ptr(result);
+            let rust_str = c_str.to_str().unwrap();
+            let result = String::from(rust_str).into_bytes();
             spvc::spvc_context_destroy(context);
             Ok(result)
         }
     }
-    #[cfg(all(target_os = "macos", feature = "msl-stable-out"))]
+    #[cfg(all(target_os = "macos", feature = "msl-out"))]
     fn compile_metallib(module: &[u8], temp_dir: &Path) -> Result<Vec<u8>> {
         use std::process::Command;
         let inter_path = format!("{}/inter.ir", temp_dir.to_str().unwrap());
@@ -242,40 +323,73 @@ impl GlobalState {
             slang_session: global_session,
         })
     }
+    fn recurse_params_reflection(vec: &mut Vec<bool>, var: &slang::reflection::VariableLayout) {
+        let ty = var.ty().unwrap();
+        if ty.kind() == slang::TypeKind::Resource
+            && var.category() == slang::ParameterCategory::DescriptorTableSlot
+        {
+            let binding = var.binding_index();
+            assert!(var.binding_space() == 0);
+            let ty = var.ty().unwrap();
+            if ty.kind() == slang::TypeKind::Resource {
+                if vec.len() <= binding as usize {
+                    vec.resize(binding as usize + 1, false);
+                }
+                vec[binding as usize] |= match ty.resource_access() {
+                    slang::ResourceAccess::Read => false,
+                    slang::ResourceAccess::ReadWrite | slang::ResourceAccess::Write => true,
+                    other => panic!("Unexpected resource access: {other:?}"),
+                };
+            }
+        } else if ty.kind() == slang::TypeKind::Struct {
+            for field in var.type_layout().fields() {
+                Self::recurse_params_reflection(vec, field);
+            }
+        } else if ty.kind() == slang::TypeKind::ParameterBlock {
+            //panic!("ParameterBlock's are a bad idea, see kernels/readme.md");
+            let a: &slang::reflection::TypeLayout = var.type_layout().element_type_layout();
+            for field in a.fields() {
+                Self::recurse_params_reflection(vec, field);
+            }
+        }
+    }
     pub fn compile_kernel(&self, options: KernelCompileOptions) -> Result<KernelReflectionInfo> {
         let extra_optim = options.opt_level == OptimizationLevel::Maximal || options.minify;
         let extra_valid = options.stability == StabilityGuarantee::ExtraValidation;
-        let (target, needs_spirv_transpile) = match options.target {
-            KernelTarget::Ptx => (slang::CompileTarget::Ptx, false),
-            KernelTarget::CudaCpp => (slang::CompileTarget::CudaSource, false),
+        // Only naga spirv-> msl changes result_name, so if msl-out isn't enabled, rust will complain
+        // about this being mut
+        #[allow(unused_mut)]
+        let (target, needs_spirv_transpile, mut result_name) = match options.target {
+            KernelTarget::Ptx => (slang::CompileTarget::Ptx, false, options.entry.to_owned()),
+            KernelTarget::CudaCpp => (
+                slang::CompileTarget::CudaSource,
+                false,
+                options.entry.to_owned(),
+            ),
             KernelTarget::Msl { .. } | KernelTarget::MetalLib { .. } => {
-                if extra_optim || options.stability != StabilityGuarantee::Experimental {
-                    (slang::CompileTarget::Spirv, true)
-                } else {
-                    (
-                        if let KernelTarget::MetalLib { .. } = options.target {
-                            slang::CompileTarget::MetalLib
-                        } else {
-                            slang::CompileTarget::Metal
-                        },
-                        false,
-                    )
-                }
+                (slang::CompileTarget::Spirv, true, "main0".to_owned())
             }
-            KernelTarget::Spirv { .. } => (slang::CompileTarget::Spirv, false),
-            KernelTarget::Wgsl => (slang::CompileTarget::Spirv, true),
+
+            KernelTarget::Spirv { .. } => (
+                slang::CompileTarget::Spirv,
+                extra_optim || extra_valid,
+                "main".to_owned(),
+            ),
+            KernelTarget::Wgsl => (slang::CompileTarget::Spirv, true, "main".to_owned()),
             KernelTarget::Glsl => {
                 if extra_optim || extra_valid {
-                    (slang::CompileTarget::Spirv, true)
+                    (slang::CompileTarget::Spirv, true, "main".to_owned())
                 } else {
-                    (slang::CompileTarget::Glsl, false)
+                    (slang::CompileTarget::Glsl, false, options.entry.to_owned())
                 }
             }
-            KernelTarget::Hlsl => (slang::CompileTarget::Hlsl, false),
-            KernelTarget::Dxil { .. } => (slang::CompileTarget::Hlsl, false),
+            KernelTarget::Hlsl => (slang::CompileTarget::Hlsl, false, options.entry.to_owned()),
+            KernelTarget::Dxil { .. } => {
+                (slang::CompileTarget::Hlsl, false, options.entry.to_owned())
+            }
         };
-        if options.target.metal_version().is_some() && needs_spirv_transpile {
-            #[cfg(not(feature = "msl-stable-out"))]
+        if options.target.metal_version().is_some() {
+            #[cfg(not(feature = "msl-out"))]
             {
                 return Err(anyhow!(
                     "Kernel compiler was not built with MSL or MetalLib support"
@@ -300,11 +414,11 @@ impl GlobalState {
                 ));
             }
         }
-        if needs_spirv_transpile {
-            #[cfg(not(feature = "spirv-cross"))]
+        if needs_spirv_transpile && options.target.metal_version().is_some() {
+            #[cfg(not(feature = "msl-out"))]
             {
                 return Err(anyhow!(
-                    "Kernel compiler was not built with advanced cross compilation support"
+                    "Kernel compiler was not built with MSL output support"
                 ));
             }
         }
@@ -377,12 +491,14 @@ impl GlobalState {
             } else {
                 unreachable!();
             }
-        } else if target == slang::CompileTarget::Metal || target == slang::CompileTarget::MetalLib
+        } else if target == slang::CompileTarget::Metal {
+            if let Some(n) = options.target.metal_version().unwrap().to_msl_str() {
+                opt = opt.capability(self.slang_session.find_capability(n))
+            }
+        } else if target == slang::CompileTarget::MetalLib
+            && let Some(n) = options.target.metal_version().unwrap().to_metallib_str()
         {
-            opt = opt.capability(
-                self.slang_session
-                    .find_capability(options.target.metal_version().unwrap().to_str()),
-            )
+            opt = opt.capability(self.slang_session.find_capability(n))
         }
         if !profile.is_unknown() {
             opt = opt.profile(profile);
@@ -411,37 +527,42 @@ impl GlobalState {
 
         // TODO: get reflection info about params
 
+        let mut reflection_params = Vec::new();
         let mut workgroup_size = [0; 3];
+        let subgroup_size;
         let linked_program = program.link()?;
         {
             let layout = program.layout(0)?;
             //layout.global_params_type_layout();
             assert!(layout.entry_point_count() == 1);
             let ep = layout.entry_point_by_index(0).unwrap();
+            let ep_meta = program.entry_point_metadata(0, 0)?;
             let wgs = ep.compute_thread_group_size();
             for i in 0..3 {
                 workgroup_size[i] = wgs[i] as u32;
             }
-            /*for p in ep.parameters() {
-                println!(
-                    "Parameter: bind-index {} bind-space {} sem-name {:?} category {:?} var-name {:?}",
-                    p.binding_index(),
-                    p.binding_space(),
-                    p.semantic_name(),
-                    p.category(),
-                    p.variable().name()
-                )
+            subgroup_size = ep.compute_wave_size() as u32;
+            if ep.stage() != slang::Stage::Compute {
+                return Err(anyhow!(
+                    "Entry point has non-compute stage: {:?}",
+                    ep.stage()
+                ));
             }
-            for p in layout.global_params_type_layout().fields() {
-                println!(
-                    "Parameter: bind-index {} bind-space {} sem-name {:?} category {:?} var-name {:?}",
-                    p.binding_index(),
-                    p.binding_space(),
-                    p.semantic_name(),
+
+            let mut all_params: Vec<&slang::reflection::VariableLayout> = ep.parameters().collect();
+            for p in layout.parameters() {
+                if ep_meta.is_parameter_location_used(
                     p.category(),
-                    p.variable().name()
-                )
-            }*/
+                    p.binding_space() as u64,
+                    p.binding_index() as u64,
+                ) == Some(true)
+                {
+                    all_params.push(p);
+                }
+            }
+            for &p in &all_params {
+                Self::recurse_params_reflection(&mut reflection_params, p);
+            }
             /*
             As it stands:
             We need to find all global params, and filter out the ones unused for a given entry point
@@ -475,26 +596,24 @@ impl GlobalState {
             Self::validate_spv(bytemuck::cast_slice(&vec), spirv_version)?;
         }
 
-        #[cfg(feature = "msl-stable-out")]
-        if needs_spirv_transpile {
-            if let Some(version) = options.target.metal_version() {
+        #[allow(clippy::collapsible_if)]
+        #[cfg(feature = "msl-out")]
+        if needs_spirv_transpile && options.target.metal_version().is_some() {
+            {
                 let vec = bytecode.as_slice().to_owned();
-                let res = Self::transpile_spirv(
-                    bytemuck::cast_slice(&vec),
-                    KernelTarget::Msl { version },
-                )?;
-                _other_blob = res;
+                _other_blob = Self::transpile_spirv(bytemuck::cast_slice(&vec), options.target)?;
+                //let res = Self::spirv_to_msl(bytemuck::cast_slice(&vec), version)?;
                 data = &_other_blob;
             }
-            #[cfg(target_os = "macos")]
-            if let KernelTarget::MetalLib { .. } = options.target {
-                if _tempdir.is_none() {
-                    _tempdir = Some(tempdir()?);
-                }
-                let res = Self::compile_metallib(data, _tempdir.unwrap().path())?;
-                _other_blob = res;
-                data = &_other_blob;
+        }
+        #[cfg(all(target_os = "macos", feature = "msl-out"))]
+        if let KernelTarget::MetalLib { .. } = options.target {
+            if _tempdir.is_none() {
+                _tempdir = Some(tempdir()?);
             }
+            let res = Self::compile_metallib(data, _tempdir.unwrap().path())?;
+            _other_blob = res;
+            data = &_other_blob;
         }
         #[cfg(feature = "wgsl-out")]
         if options.target == KernelTarget::Wgsl && needs_spirv_transpile {
@@ -552,8 +671,11 @@ impl GlobalState {
             }
         }
         Ok(KernelReflectionInfo {
+            entry_point_name: result_name,
             workgroup_size,
-            buffers: Vec::new(),
+            subgroup_size,
+            buffers: reflection_params,
+            push_constants_size: 0,
         })
     }
 }

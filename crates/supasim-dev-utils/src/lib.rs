@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 pub use paste;
 use std::fmt::Write;
 use tracing_subscriber::{
@@ -56,10 +57,10 @@ pub fn setup_trace_printer() {
         .try_init();
 }
 pub fn setup_trace_printer_if_env() {
-    if let Ok(a) = std::env::var("SUPASIM_LOG_FULL_TRACE") {
-        if &a != "0" {
-            setup_trace_printer();
-        }
+    if let Ok(a) = std::env::var("SUPASIM_LOG_FULL_TRACE")
+        && &a != "0"
+    {
+        setup_trace_printer();
     }
     let _ = env_logger::builder()
         .filter_level(log::LevelFilter::Info)
@@ -97,6 +98,11 @@ macro_rules! all_backend_tests {
             $crate::all_backend_tests_inner!([<$test_name _vulkan>], "VULKAN", {
                 hal::Vulkan::create_instance(true)
             }, $test_name, Vulkan);
+
+            #[cfg(all(feature = "metal", target_vendor = "apple"))]
+            $crate::all_backend_tests_inner!([<$test_name _metal>], "METAL", {
+                hal::Metal::create_instance()
+            }, $test_name, Metal);
 
             #[cfg(feature = "wgpu")]
             $crate::all_backend_tests_inner!([<$test_name _wgpu_vulkan>], "WGPU_VULKAN", {

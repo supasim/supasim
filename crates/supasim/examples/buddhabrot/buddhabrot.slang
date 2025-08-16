@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 struct InputOptions
 {
     uint32_t imageWidth;
@@ -35,15 +36,10 @@ struct TempData
 
 struct Parameters
 {
-    [[vk::binding(0, 0)]]
-    StructuredBuffer<InputOptions> imageSize;
-    [[vk::binding(1, 0)]]
-    RWStructuredBuffer<Atomic<uint32_t>> buffer;
-    [[vk::binding(2, 0)]]
-    RWStructuredBuffer<TempData> tempBuffer;
+    [binding(0)] StructuredBuffer<InputOptions> imageSize;
+    [binding(1)] RWStructuredBuffer<Atomic<uint32_t>> buffer;
+    [binding(2)] RWStructuredBuffer<TempData> tempBuffer;
 }
-
-Parameters parameters;
 
 // Simple hash function to generate a uint from a seed and index
 uint Hash(uint seed, uint value)
@@ -69,7 +65,7 @@ static const int ITERATIONS_PER = 512;
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void Run(uint3 id: SV_DispatchThreadID)
+void Run(uint3 id: SV_DispatchThreadID, ParameterBlock<Parameters> parameters)
 {
     InputOptions options = parameters.imageSize[0];
     uint3 totalSize = uint3(16, 16, 1) * (uint)options.workgroupDim;
@@ -113,7 +109,7 @@ void Run(uint3 id: SV_DispatchThreadID)
 
 [shader("compute")]
 [numthreads(16, 16, 1)]
-void Finalize(uint3 id: SV_DispatchThreadID)
+void Finalize(uint3 id: SV_DispatchThreadID, ParameterBlock<Parameters> parameters)
 {
     InputOptions options = parameters.imageSize[0];
     uint3 totalSize = uint3(16, 16, 1) * (uint)options.workgroupDim;
@@ -129,8 +125,11 @@ void Finalize(uint3 id: SV_DispatchThreadID)
         for (int i = 0; i < min(ITERATIONS_PER, data.numIterations - (int)options.skipLastPoints - ITERATIONS_PER * (int)options.iterationSetIndex); i++)
         {
             data.position = square(data.position) + data.c;
-            int pixelIndex = getPixelIndex(float2(data.position.y, data.position.x), parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
-            parameters.buffer[pixelIndex].add(1);
+            float2 pos = float2(data.position.y, data.position.x);
+            if(abs(pos.x) < 2.0 && abs(pos.y) < 2.0) {
+                int pixelIndex = getPixelIndex(pos, parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
+                parameters.buffer[pixelIndex].add(1);
+            }
         }
     }
     parameters.tempBuffer[index] = data;

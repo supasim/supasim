@@ -16,11 +16,8 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
-use serde::{Deserialize, Serialize};
 
-pub use daggy::Walker;
-pub use daggy::petgraph::algo::toposort;
-pub use daggy::petgraph::graph::NodeIndex;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum HalBufferType {
@@ -85,15 +82,36 @@ impl ShaderModel {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MetalVersion {
     #[default]
+    Prior,
     V2_3,
     V3_1,
+    V4_0,
 }
 impl MetalVersion {
-    pub fn to_str(&self) -> &str {
+    pub fn to_metallib_str(&self) -> Option<&str> {
         use MetalVersion::*;
         match self {
-            V2_3 => "metallib_2_3",
-            V3_1 => "metallib_3_1",
+            Prior => None,
+            V2_3 => Some("metallib_2_3"),
+            V3_1 => Some("metallib_3_1"),
+            V4_0 => Some("metallib_4_0"),
+        }
+    }
+    pub fn to_msl_str(&self) -> Option<&str> {
+        use MetalVersion::*;
+        match self {
+            Prior => None,
+            V2_3 => Some("METAL_2_3"),
+            V3_1 => Some("METAL_3_1"),
+            V4_0 => Some("METAL_4_0"),
+        }
+    }
+    pub fn to_tuple(&self) -> (u8, u8) {
+        match self {
+            Self::Prior => (2, 0),
+            Self::V2_3 => (2, 3),
+            Self::V3_1 => (3, 1),
+            Self::V4_0 => (4, 0),
         }
     }
 }
@@ -134,7 +152,7 @@ impl KernelTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SyncMode {
     VulkanStyle,
-    Dag,
+    SerialStreams,
     Automatic,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,14 +203,15 @@ pub unsafe fn to_static_lifetime_mut<T>(r: &mut T) -> &'static mut T {
         &mut *r
     }
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KernelReflectionInfo {
+    pub entry_point_name: String,
     pub workgroup_size: [u32; 3],
+    pub subgroup_size: u32,
     /// bool is for whether it is writeable
     pub buffers: Vec<bool>,
+    pub push_constants_size: u64,
 }
-
-pub type Dag<T> = daggy::Dag<T, ()>;
 
 #[derive(Clone, Debug)]
 pub enum BackendOptions {
@@ -205,4 +224,10 @@ pub struct InstanceDescriptor {
     pub max_device_memory: Option<u64>,
     pub force_embedded: Option<bool>,
     pub full_debug: bool,
+}
+
+pub enum Backend {
+    Vulkan,
+    Metal,
+    Wgpu,
 }

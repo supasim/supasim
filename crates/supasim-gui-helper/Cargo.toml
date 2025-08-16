@@ -16,6 +16,7 @@
 #   You should have received a copy of the GNU General Public License
 #   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # END LICENSE
+
 [package]
 name = "supasim-gui-helper"
 description = "A GUI layer made to allow easy creation of visualizations for supasim."

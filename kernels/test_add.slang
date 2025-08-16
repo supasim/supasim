@@ -16,11 +16,12 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 struct Parameters
 {
-    StructuredBuffer<uint32_t> buffer0;
-    StructuredBuffer<uint32_t> buffer1;
-    RWStructuredBuffer<uint32_t> result;
+    [binding(0)] StructuredBuffer<uint32_t> buffer0;
+    [binding(1)] StructuredBuffer<uint32_t> buffer1;
+    [binding(2)] RWStructuredBuffer<uint32_t> result;
 }
 
 [shader("compute")]

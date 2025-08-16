@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 #![allow(unused_variables)]
 
 use crate::*;
@@ -219,13 +220,6 @@ impl CommandRecorder<Dummy> for DummyResource {
         commands: &mut [crate::BufferCommand<Dummy>],
     ) -> Result<(), <Dummy as Backend>::Error> {
         Ok(())
-    }
-    unsafe fn record_dag(
-        &mut self,
-        instance: &mut <Dummy as Backend>::Instance,
-        dag: &mut types::Dag<crate::BufferCommand<Dummy>>,
-    ) -> Result<(), <Dummy as Backend>::Error> {
-        unreachable!()
     }
     unsafe fn clear(
         &mut self,

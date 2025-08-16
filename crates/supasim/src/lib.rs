@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 //! Issues this must handle:
 //!
 //! * Sharing references/multithreading
@@ -25,6 +26,8 @@ END LICENSE */
 //! * Combine/optimize allocations and creation of things
 
 #![allow(dead_code)]
+
+pub extern crate kernels;
 
 #[cfg(test)]
 mod tests;
@@ -44,18 +47,25 @@ use std::{
 };
 use thiserror::Error;
 use thunderdome::{Arena, Index};
+use types::SyncMode;
 
 pub use bytemuck;
 pub use hal;
-pub use kernels;
+#[cfg(feature = "wgpu")]
+pub use hal::WgpuDeviceExportInfo;
+#[cfg(feature = "wgpu")]
+pub use hal::wgpu_dep as wgpu;
 pub use types::{
-    HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel, SpirvVersion,
+    Backend, HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel,
+    SpirvVersion,
 };
 
 use crate::sync::{GpuSubmissionInfo, SyncThreadHandle, create_sync_thread};
 
 pub type UserBufferAccessClosure<'a, B> =
     Box<dyn FnOnce(&mut [MappedBuffer<'a, B>]) -> anyhow::Result<()>>;
+pub type SendableUserBufferAccessClosure<B> =
+    Box<dyn Send + FnOnce(&mut [MappedBuffer<'_, B>]) -> anyhow::Result<()>>;
 
 struct InnerRef<'a, T>(RwLockReadGuard<'a, T>);
 impl<T> Deref for InnerRef<'_, T> {
@@ -179,7 +189,7 @@ impl<B: hal::Backend> BufferSlice<B> {
             needs_mut,
         })
     }
-    fn acquire(&self, user: BufferUser) -> SupaSimResult<B, BufferUserId> {
+    fn acquire(&self, user: BufferUser, bypass_gpu: bool) -> SupaSimResult<B, BufferUserId> {
         let s = self.buffer.inner()?;
         let instance = s.instance.clone();
 
@@ -191,6 +201,7 @@ impl<B: hal::Backend> BufferSlice<B> {
                 needs_mut: self.needs_mut,
             },
             user,
+            bypass_gpu,
         )
     }
     fn release(&self, id: u64) -> SupaSimResult<B, ()> {
@@ -201,6 +212,13 @@ impl<B: hal::Backend> BufferSlice<B> {
             id,
         });
         Ok(())
+    }
+    fn range(&self) -> BufferRange {
+        BufferRange {
+            start: self.start,
+            len: self.len,
+            needs_mut: self.needs_mut,
+        }
     }
 }
 
@@ -236,11 +254,11 @@ macro_rules! api_type {
                 pub(crate) fn from_inner(inner: [<$name Inner>]<B>) -> Self {
                     Self(Arc::new(RwLock::new(inner)))
                 }
-                pub(crate) fn inner(&self) -> SupaSimResult<B, InnerRef<[<$name Inner>]<B>>> {
+                pub(crate) fn inner(&'_ self) -> SupaSimResult<B, InnerRef<'_, [<$name Inner>]<B>>> {
                     let r = self.0.read();
                     Ok(InnerRef(r))
                 }
-                pub(crate) fn inner_mut(&self) -> SupaSimResult<B, InnerRefMut<[<$name Inner>]<B>>> {
+                pub(crate) fn inner_mut(&'_ self) -> SupaSimResult<B, InnerRefMut<'_, [<$name Inner>]<B>>> {
                     let r = self.0.write();
                     Ok(InnerRefMut(r))
                 }
@@ -574,64 +592,51 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             };
             let mut used_buffers = HashSet::new();
             let mut used_buffer_ranges = Vec::new();
-            let mut used_kernels = Vec::new();
-            let (dag, sync_info, resources) =
-                sync::assemble_dag(&mut recorder_inners, &mut used_kernels, &s)?;
-            for (&buf_id, ranges) in &sync_info {
+            let streams = sync::assemble_streams(
+                &mut recorder_inners,
+                &s,
+                s.inner_properties.sync_mode == SyncMode::VulkanStyle,
+            )?;
+            for (buf_id, ranges) in &streams.used_ranges {
                 let b = s
                     .buffers
                     .lock()
-                    .get(buf_id)
+                    .get(*buf_id)
                     .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                     .as_ref()
                     .unwrap()
                     .upgrade()?;
                 let _b = b.clone();
                 let b_mut = _b.inner()?;
-                for &range in ranges {
+                for range in ranges {
                     let id = b_mut.slice_tracker.acquire(
                         &s,
-                        range,
+                        *range,
                         if b_mut.slice_tracker.mutex.lock().gpu_available {
                             BufferUser::Gpu(u64::MAX)
                         } else {
                             BufferUser::Cross(u64::MAX)
                         },
+                        false,
                     )?;
                     used_buffer_ranges.push((id, b.clone()))
                 }
                 used_buffers.insert(buf_id);
             }
-            let sync_mode = s.inner_properties.sync_mode;
             drop(s);
-            let bind_groups = match sync_mode {
-                types::SyncMode::Dag => sync::record_dag(&dag, &mut recorder)?,
-                types::SyncMode::VulkanStyle => {
-                    let streams = sync::dag_to_command_streams(&dag, true)?;
-                    sync::record_command_streams(
-                        &streams,
-                        self.clone(),
-                        &mut recorder,
-                        &resources.temp_copy_buffer,
-                    )?
-                }
-                types::SyncMode::Automatic => {
-                    let streams = sync::dag_to_command_streams(&dag, false)?;
-                    sync::record_command_streams(
-                        &streams,
-                        self.clone(),
-                        &mut recorder,
-                        &resources.temp_copy_buffer,
-                    )?
-                }
-            };
+            let bind_groups = sync::record_command_streams(
+                &streams,
+                self.clone(),
+                &mut recorder,
+                &streams.resources.temp_copy_buffer,
+            )?;
             let s = self.inner()?;
             let used_buffers: Vec<_> = used_buffers
                 .iter()
                 .map(|a| {
                     s.buffers
                         .lock()
-                        .get(*a)
+                        .get(**a)
                         .unwrap()
                         .as_ref()
                         .unwrap()
@@ -639,18 +644,19 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                         .unwrap()
                 })
                 .collect();
+            let kernels = streams.resources.kernels.clone();
             submission_idx = s.sync_thread().submit_gpu(GpuSubmissionInfo {
-                command_recorder: Some(recorder),
+                command_recorders: vec![recorder],
                 bind_groups,
                 used_buffer_ranges: used_buffer_ranges.clone(),
                 used_buffers,
-                used_resources: resources,
+                used_resources: streams.resources,
             })?;
 
-            for kernel in &used_kernels {
+            for kernel in &kernels {
                 kernel.inner_mut()?.last_used = submission_idx;
             }
-            for &buf_id in sync_info.keys() {
+            for (buf_id, _) in streams.used_ranges {
                 let b = s
                     .buffers
                     .lock()
@@ -717,7 +723,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         let mut ids = Vec::new();
         for b in buffers {
             b.validate()?;
-            ids.push(b.acquire(BufferUser::Cpu)?.id);
+            ids.push(b.acquire(BufferUser::Cpu, false)?.id);
         }
         if properties.map_buffers {
             let instance = self.inner()?;
@@ -825,13 +831,13 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
             println!("Instance attempting to shutdown gracefully despite sync thread error");
         }
         for (_, cr) in std::mem::take(&mut *self.command_recorders.lock()) {
-            if let Some(cr) = cr {
-                if let Ok(cr) = cr.upgrade() {
-                    if let Ok(mut cr2) = cr.inner_mut() {
-                        cr2.destroy(self);
-                    }
-                    let _ = cr._destroy();
+            if let Some(cr) = cr
+                && let Ok(cr) = cr.upgrade()
+            {
+                if let Ok(mut cr2) = cr.inner_mut() {
+                    cr2.destroy(self);
                 }
+                let _ = cr._destroy();
             }
         }
         for (_, wh) in std::mem::take(&mut *self.wait_handles.lock()) {
@@ -843,23 +849,23 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
             }
         }
         for (_, kc) in std::mem::take(&mut *self.kernel_caches.lock()) {
-            if let Some(kc) = kc {
-                if let Ok(kc) = kc.upgrade() {
-                    if let Ok(mut kc2) = kc.inner_mut() {
-                        kc2.destroy(self);
-                    }
-                    let _ = kc._destroy();
+            if let Some(kc) = kc
+                && let Ok(kc) = kc.upgrade()
+            {
+                if let Ok(mut kc2) = kc.inner_mut() {
+                    kc2.destroy(self);
                 }
+                let _ = kc._destroy();
             }
         }
         for (_, b) in std::mem::take(&mut *self.buffers.lock()) {
-            if let Some(b) = b {
-                if let Ok(b) = b.upgrade() {
-                    if let Ok(mut b2) = b.inner_mut() {
-                        b2.destroy(self);
-                    }
-                    let _ = b._destroy();
+            if let Some(b) = b
+                && let Ok(b) = b.upgrade()
+            {
+                if let Ok(mut b2) = b.inner_mut() {
+                    b2.destroy(self);
                 }
+                let _ = b._destroy();
             }
         }
         for (_, k) in std::mem::take(&mut *self.kernels.lock()) {
@@ -909,10 +915,10 @@ impl<B: hal::Backend> KernelInner<B> {
 }
 impl<B: hal::Backend> Drop for KernelInner<B> {
     fn drop(&mut self) {
-        if self.inner.is_some() {
-            if let Ok(instance) = self.instance.clone().inner() {
-                self.destroy(&instance);
-            }
+        if self.inner.is_some()
+            && let Ok(instance) = self.instance.clone().inner()
+        {
+            self.destroy(&instance);
         }
     }
 }
@@ -953,10 +959,10 @@ impl<B: hal::Backend> KernelCacheInner<B> {
 }
 impl<B: hal::Backend> Drop for KernelCacheInner<B> {
     fn drop(&mut self) {
-        if self.inner.is_some() {
-            if let Ok(instance) = self.instance.clone().inner() {
-                self.destroy(&instance);
-            }
+        if self.inner.is_some()
+            && let Ok(instance) = self.instance.clone().inner()
+        {
+            self.destroy(&instance);
         }
     }
 }
@@ -1152,10 +1158,10 @@ impl<B: hal::Backend> CommandRecorderInner<B> {
 }
 impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
     fn drop(&mut self) {
-        if self.is_alive {
-            if let Ok(instance) = self.instance.clone().inner() {
-                self.destroy(&instance);
-            }
+        if self.is_alive
+            && let Ok(instance) = self.instance.clone().inner()
+        {
+            self.destroy(&instance);
         }
     }
 }
@@ -1183,6 +1189,49 @@ impl BufferRange {
         self.start < other.start + other.len
             && other.start < self.start + self.len
             && (self.needs_mut || other.needs_mut)
+    }
+    pub fn overlaps_ignore_mut(&self, other: &Self) -> bool {
+        self.start < other.start + other.len && other.start < self.start + self.len
+    }
+    pub fn contains(&self, other: &Self) -> bool {
+        self.start <= other.start
+            && self.start + self.len >= other.start + other.len
+            && (!other.needs_mut || self.needs_mut)
+    }
+    pub fn try_join(&self, other: &Self) -> Option<Self> {
+        if self.overlaps_ignore_mut(other) {
+            if self.needs_mut == other.needs_mut {
+                let start = self.start.min(other.start);
+                let end = (self.start + self.len).max(other.start + other.len);
+                let len = end - start;
+                Some(Self {
+                    needs_mut: self.needs_mut,
+                    start,
+                    len,
+                })
+            } else if self.contains(other) {
+                Some(*self)
+            } else if other.contains(self) {
+                Some(*other)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    pub fn intersection(&self, other: &Self) -> Option<Self> {
+        if self.overlaps(other) {
+            let start = self.start.min(other.start);
+            let end = (self.start + self.len).max(other.start + other.len);
+            Some(Self {
+                start,
+                len: end - start,
+                needs_mut: true,
+            })
+        } else {
+            None
+        }
     }
 }
 enum BufferBacking<B: hal::Backend> {
@@ -1218,7 +1267,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut: true,
         };
         buffer_slice.validate_with_align(size_of::<T>() as u64)?;
-        let id = buffer_slice.acquire(BufferUser::Cpu)?.id;
+        let id = buffer_slice.acquire(BufferUser::Cpu, false)?.id;
         let mut s = self.inner_mut()?;
         let _instance = s.instance.clone();
         let instance = _instance.inner()?;
@@ -1244,7 +1293,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut: false,
         };
         slice.validate_with_align(size_of::<T>() as u64)?;
-        let id = slice.acquire(BufferUser::Cpu)?;
+        let id = slice.acquire(BufferUser::Cpu, false)?;
         let mut s = self.inner_mut()?;
         let _instance = s.instance.clone();
         let instance = _instance.inner()?;
@@ -1263,11 +1312,11 @@ impl<B: hal::Backend> Buffer<B> {
         Ok(())
     }
     pub fn access(
-        &self,
+        &'_ self,
         offset: u64,
         len: u64,
         needs_mut: bool,
-    ) -> SupaSimResult<B, MappedBuffer<B>> {
+    ) -> SupaSimResult<B, MappedBuffer<'_, B>> {
         let slice = BufferSlice {
             buffer: self.clone(),
             start: offset,
@@ -1275,7 +1324,7 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut,
         };
         slice.validate()?;
-        let id = slice.acquire(BufferUser::Cpu)?.id;
+        let id = slice.acquire(BufferUser::Cpu, false)?.id;
         let _instance = self.inner()?.instance.clone();
         let instance = _instance.inner()?;
         let mut s = self.inner_mut()?;
@@ -1417,10 +1466,10 @@ impl<B: hal::Backend> BufferInner<B> {
 }
 impl<B: hal::Backend> Drop for BufferInner<B> {
     fn drop(&mut self) {
-        if self.inner.is_some() {
-            if let Ok(instance) = self.instance.clone().inner() {
-                self.destroy(&instance);
-            }
+        if self.inner.is_some()
+            && let Ok(instance) = self.instance.clone().inner()
+        {
+            self.destroy(&instance);
         }
     }
 }
@@ -1522,10 +1571,10 @@ impl<B: hal::Backend> WaitHandleInner<B> {
 }
 impl<B: hal::Backend> Drop for WaitHandleInner<B> {
     fn drop(&mut self) {
-        if self.is_alive {
-            if let Ok(instance) = self.instance.clone().inner() {
-                self.destroy(&instance);
-            }
+        if self.is_alive
+            && let Ok(instance) = self.instance.clone().inner()
+        {
+            self.destroy(&instance);
         }
     }
 }
@@ -1581,6 +1630,7 @@ impl SliceTracker {
         instance: &InstanceState<B>,
         range: BufferRange,
         user: BufferUser,
+        bypass_gpu: bool,
     ) -> SupaSimResult<B, BufferUserId> {
         let mut lock = self.mutex.lock();
         if match user {
@@ -1590,46 +1640,48 @@ impl SliceTracker {
         } {
             return Err(SupaSimError::BufferLocalityViolated);
         }
-        let mut cont = true;
-        let mut gpu_submissions = Vec::new();
-        while cont {
-            let mut has_cpu = false;
-            cont = false;
-            gpu_submissions.clear();
-            if user.submission_id().is_none() && lock.cpu_locked.is_some() {
-                cont = true;
-                gpu_submissions.push(lock.cpu_locked.unwrap());
-            }
-            for (&a, &submission) in &lock.uses {
-                if a.range.overlaps(&range) {
-                    // If this is part of the same GPU submission, don't try to wait
-                    if submission.submission_id() == user.submission_id()
-                        && submission.submission_id().is_some()
-                    {
-                        continue;
-                    }
+        if !bypass_gpu {
+            let mut cont = true;
+            let mut gpu_submissions = Vec::new();
+            while cont {
+                let mut has_cpu = false;
+                cont = false;
+                gpu_submissions.clear();
+                if user.submission_id().is_none() && lock.cpu_locked.is_some() {
                     cont = true;
-                    if let Some(sub) = submission.submission_id() {
-                        gpu_submissions.push(sub);
-                    } else {
-                        has_cpu = true;
+                    gpu_submissions.push(lock.cpu_locked.unwrap());
+                }
+                for (&a, &submission) in &lock.uses {
+                    if a.range.overlaps(&range) {
+                        // If this is part of the same GPU submission, don't try to wait
+                        if submission.submission_id() == user.submission_id()
+                            && submission.submission_id().is_some()
+                        {
+                            continue;
+                        }
+                        cont = true;
+                        if let Some(sub) = submission.submission_id() {
+                            gpu_submissions.push(sub);
+                        } else {
+                            has_cpu = true;
+                        }
+                        break;
                     }
+                }
+                if cont && has_cpu {
+                    self.condvar.wait(&mut lock);
+                } else if cont {
+                    let sub = *gpu_submissions.iter().min().unwrap();
+                    if sub == u64::MAX {
+                        self.condvar.wait(&mut lock);
+                    } else {
+                        drop(lock);
+                        instance.sync_thread().wait_for(sub, true)?;
+                        lock = self.mutex.lock();
+                    }
+                } else {
                     break;
                 }
-            }
-            if cont && has_cpu {
-                self.condvar.wait(&mut lock);
-            } else if cont {
-                let sub = *gpu_submissions.iter().min().unwrap();
-                if sub == u64::MAX {
-                    self.condvar.wait(&mut lock);
-                } else {
-                    drop(lock);
-                    instance.sync_thread().wait_for(sub, true)?;
-                    lock = self.mutex.lock();
-                }
-            } else {
-                break;
             }
         }
         let id = BufferUserId {
@@ -1714,8 +1766,3 @@ impl BufferUser {
         }
     }
 }
-
-#[cfg(feature = "wgpu")]
-pub use hal::WgpuDeviceExportInfo;
-#[cfg(feature = "wgpu")]
-pub use hal::wgpu_dep as wgpu;

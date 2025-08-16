@@ -16,6 +16,7 @@
 #   You should have received a copy of the GNU General Public License
 #   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # END LICENSE
+
 [package]
 name = "supasim-types"
 description = "A set of types for supasim crates for dependency graph purposes"
@@ -31,5 +32,4 @@ homepage.workspace = true
 
 [dependencies]
 serde.workspace = true
-daggy.workspace = true
 wgpu.workspace = true

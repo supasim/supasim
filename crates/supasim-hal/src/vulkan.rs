@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 use crate::{
     Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, HalBufferSlice,
     Kernel, KernelCache, RecorderSubmitInfo, Semaphore,
@@ -37,7 +38,7 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use types::{Dag, HalBufferType, HalInstanceProperties, KernelReflectionInfo, SyncOperations};
+use types::{HalBufferType, HalInstanceProperties, KernelReflectionInfo, SyncOperations};
 
 use scopeguard::defer;
 
@@ -1412,13 +1413,6 @@ impl VulkanCommandRecorder {
     }
 }
 impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
-    unsafe fn record_dag(
-        &mut self,
-        _instance: &mut <Vulkan as Backend>::Instance,
-        _dag: &mut Dag<crate::BufferCommand<Vulkan>>,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unreachable!()
-    }
     #[tracing::instrument]
     unsafe fn record_commands(
         &mut self,

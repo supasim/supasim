@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 // Courtesy of ChatGPT
 
 const WORKGROUP_SIZE: u32 = 256;
@@ -70,5 +71,6 @@ fn find_max(
     // Only one thread writes the result of this workgroup
     if (local_id.x == 0u) {
         atomicMax(&output, local_max[0]);
+        //atomicStore(&output, 1);
     }
 }

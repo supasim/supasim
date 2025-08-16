@@ -16,7 +16,10 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 pub mod dummy;
+#[cfg(all(feature = "metal", target_vendor = "apple"))]
+pub mod metal;
 #[cfg(feature = "vulkan")]
 pub mod vulkan;
 #[cfg(feature = "wgpu")]
@@ -26,6 +29,8 @@ pub mod wgpu;
 mod tests;
 
 pub use dummy::Dummy;
+#[cfg(all(feature = "metal", target_vendor = "apple"))]
+pub use metal::Metal;
 #[cfg(feature = "vulkan")]
 pub use vulkan::Vulkan;
 #[cfg(feature = "wgpu")]
@@ -51,7 +56,7 @@ pub trait Backend: Sized + std::fmt::Debug + Clone + Send + Sync + 'static {
     type Error: Error<Self>;
 }
 
-pub trait BackendInstance<B: Backend<Instance = Self>>: Send + Sync {
+pub trait BackendInstance<B: Backend<Instance = Self>>: Send {
     fn get_properties(&mut self) -> HalInstanceProperties;
     /// # Safety
     /// * The kernel code must be valid
@@ -199,16 +204,7 @@ pub struct CommandSynchronization<'a, B: Backend> {
     pub out_semaphore: Option<(&'a mut B::Semaphore, u64)>,
 }
 
-pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
-    /// # Safety
-    /// * Must only be called on instances with `SyncMode::Dag`
-    /// * The recorder must not have had any record command since being created or cleared
-    /// * All commands must follow the corresponding safety section in BufferCommand
-    unsafe fn record_dag(
-        &mut self,
-        instance: &mut B::Instance,
-        dag: &mut Dag<BufferCommand<B>>,
-    ) -> Result<(), B::Error>;
+pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send {
     /// # Safety
     /// * Must only be called on instances with `SyncMode` of `Automatic` or `VulkanStyle`
     /// * The recorder must not have had any record command since being created or cleared
@@ -223,15 +219,15 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send + Sync {
     unsafe fn clear(&mut self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
 
-pub trait Kernel<B: Backend<Kernel = Self>>: Send + Sync {}
+pub trait Kernel<B: Backend<Kernel = Self>>: Send {}
 
 pub trait Buffer<B: Backend<Buffer = Self>>: Send + Sync {}
 
-pub trait BindGroup<B: Backend<BindGroup = Self>>: Send + Sync {}
+pub trait BindGroup<B: Backend<BindGroup = Self>>: Send {}
 
-pub trait KernelCache<B: Backend<KernelCache = Self>>: Send + Sync {}
+pub trait KernelCache<B: Backend<KernelCache = Self>>: Send {}
 
-pub trait Semaphore<B: Backend<Semaphore = Self>>: Send + Sync {
+pub trait Semaphore<B: Backend<Semaphore = Self>>: Send {
     /// # Safety
     /// * The semaphore must be signalled by some already submitted command recorder
     unsafe fn wait(&self) -> Result<(), B::Error>;
@@ -256,7 +252,7 @@ pub struct RecorderSubmitInfo<'a, B: Backend> {
 }
 
 #[must_use]
-pub trait Error<B: Backend<Error = Self>>: std::error::Error + Send + Sync {
+pub trait Error<B: Backend<Error = Self>>: std::error::Error + Send {
     fn is_out_of_device_memory(&self) -> bool;
     fn is_out_of_host_memory(&self) -> bool;
     fn is_timeout(&self) -> bool;

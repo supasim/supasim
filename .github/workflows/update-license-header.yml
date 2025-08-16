@@ -16,6 +16,7 @@
 #   You should have received a copy of the GNU General Public License
 #   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 # END LICENSE
+
 name: Update License Header
 
 on:
@@ -37,7 +38,7 @@ jobs:
         shell: bash
         run: |
           shopt -s globstar
-          ./scripts/update-license-header.py -h LICENSE_HEADER ./**/*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml
+          ./scripts/update-license-header.py -h LICENSE_HEADER ./**/*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml ./**/*.slang ./**/*.wgsl
 
       - name: Commit and push changes
         shell: bash

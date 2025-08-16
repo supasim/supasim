@@ -16,6 +16,7 @@
   You should have received a copy of the GNU General Public License
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 END LICENSE */
+
 use crate::*;
 use std::any::TypeId;
 pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), ()> {
@@ -70,11 +71,9 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
     // Compile the kernels
     let global_state = kernels::GlobalState::new_from_env().unwrap();
     let mut spirv = Vec::new();
-    let mut reflection_info = global_state
+    let reflection_info = global_state
         .compile_kernel(kernels::KernelCompileOptions {
-            target: types::KernelTarget::Spirv {
-                version: kernels::SpirvVersion::V1_2,
-            },
+            target: instance.properties().unwrap().kernel_lang,
             source: kernels::KernelSource::Memory(include_bytes!(
                 "../../../../kernels/test_add.slang"
             )),
@@ -87,8 +86,7 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
             minify: false,
         })
         .unwrap();
-    // Reflection isn't working yet so this is a temporary workaround
-    reflection_info.buffers = vec![false, false, true];
+    assert!(reflection_info.buffers == vec![false, false, true]);
     let kernel = instance
         .compile_raw_kernel(&spirv, reflection_info, cache.as_ref())
         .unwrap();
