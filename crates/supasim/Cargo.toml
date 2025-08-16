@@ -58,7 +58,7 @@ pollster.workspace = true
 winit = "0.30"
 env_logger.workspace = true
 rand.workspace = true
-wgpu = {workspace = true, features = ["wgsl"]}
+wgpu = { workspace = true, features = ["wgsl"] }
 
 [[example]]
 name = "buddhabrot"
