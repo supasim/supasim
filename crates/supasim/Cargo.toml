@@ -35,7 +35,7 @@ readme = "../../readme.md"
 default = ["vulkan", "wgpu", "metal"]
 cuda = ["hal/cuda"]
 # The wgpu feature flag will enable both reexporting wgpu and the wgpu backend in hal
-wgpu = ["hal/wgpu"]
+wgpu = ["hal/wgpu", "hal/external_wgpu"]
 vulkan = ["hal/vulkan"]
 metal = ["hal/metal"]
 
@@ -58,7 +58,6 @@ pollster.workspace = true
 winit = "0.30"
 env_logger.workspace = true
 rand.workspace = true
-wgpu = { workspace = true, features = ["wgsl"] }
 
 [[example]]
 name = "buddhabrot"
