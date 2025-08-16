@@ -1897,7 +1897,7 @@ checksum = "6637bab7722d379c8b41ba849228d680cc12d0a45ba1fa2b48f2a30577a06731"
 
 [[package]]
 name = "supasim"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -1919,7 +1919,7 @@ dependencies = [
 
 [[package]]
 name = "supasim-dev-utils"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "env_logger",
  "log",
@@ -1930,11 +1930,11 @@ dependencies = [
 
 [[package]]
 name = "supasim-gui-helper"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "supasim-hal"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ash",
  "bytemuck",
@@ -1957,7 +1957,7 @@ dependencies = [
 
 [[package]]
 name = "supasim-kernels"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -1972,10 +1972,6 @@ dependencies = [
  "supasim-types",
  "tempfile",
 ]
-
-[[package]]
-name = "supasim-macros"
-version = "0.0.1"
 
 [[package]]
 name = "supasim-spirv-cross-sys"
@@ -1998,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "supasim-types"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "serde",
  "wgpu",

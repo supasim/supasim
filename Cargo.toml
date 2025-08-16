@@ -23,14 +23,12 @@ members = [
   "crates/supasim",
   "crates/supasim-dev-utils",
   "crates/supasim-hal",
-  "crates/supasim-macros",
   "crates/supasim-kernels",
   "crates/supasim-types",
   "crates/supasim-gui-helper",
 ]
 default-members = [
   "crates/supasim",
-  "crates/supasim-macros",
   "crates/supasim-dev-utils",
   "crates/supasim-types",
   "crates/supasim-kernels",
@@ -38,7 +36,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 authors = ["SupaMaggie70 <supamaggie70@gmail.com>"]
 repository = "https://github.com/supasim/supasim"
 edition = "2024"
@@ -83,8 +81,7 @@ wgpu = { version = "26.0", default-features = false, features = [
   "std",
 ] }
 
-hal = { package = "supasim-hal", path = "crates/supasim-hal", default-features = false, version = "0.0.1" }
-macros = { package = "supasim-macros", path = "crates/supasim-macros", version = "0.0.1" }
-kernels = { package = "supasim-kernels", path = "crates/supasim-kernels", version = "0.0.1" }
-types = { package = "supasim-types", path = "crates/supasim-types", version = "0.0.1" }
-dev-utils = { package = "supasim-dev-utils", path = "crates/supasim-dev-utils", version = "0.0.1" }
+hal = { package = "supasim-hal", path = "crates/supasim-hal", default-features = false, version = "0.0.2" }
+kernels = { package = "supasim-kernels", path = "crates/supasim-kernels", version = "0.0.2" }
+types = { package = "supasim-types", path = "crates/supasim-types", version = "0.0.2" }
+dev-utils = { package = "supasim-dev-utils", path = "crates/supasim-dev-utils", version = "0.0.2" }
