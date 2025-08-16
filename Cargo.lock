@@ -1979,8 +1979,9 @@ version = "0.0.1"
 
 [[package]]
 name = "supasim-spirv-cross-sys"
-version = "0.0.1"
-source = "git+https://github.com/supasim/spirv-cross-sys.git#c5eec3cbdf2d04ebba394be3f2352f973ec13552"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a3fef65f804cda9a016ad61858baf1f07c37f06e9e432a099cd0f793b2584f1"
 dependencies = [
  "bindgen",
  "cc",
@@ -1988,8 +1989,9 @@ dependencies = [
 
 [[package]]
 name = "supasim-spirv-tools-sys"
-version = "0.0.1"
-source = "git+https://github.com/supasim/spirv-tools-sys.git#145b436351ce0ebd3c05e0b3d3e26cd7b30865bd"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b80ef697aecd8903ee97f6353be533a0d2f986a6e3c50ac2c6b70d3966c9d05"
 dependencies = [
  "bindgen",
 ]
