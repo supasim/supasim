@@ -188,17 +188,9 @@ impl BufferUsageTracker {
             // The idea here is to minimize the number of individual usage elements
             let mut i = 0;
             while i < v.len() {
-                let mut j = 0;
+                let mut j = i + 1;
                 while j < v.len() {
-                    if i == j {
-                        j += 1;
-                        continue;
-                    }
                     if let Some(joined) = v[i].try_join(&v[j]) {
-                        // This looks stupid, but the idea is that it may now be larger and able
-                        // to completely "contain" the smaller slice, even if the smaller slice is
-                        // immutable and this one is immutable, making the smaller one redundant.
-                        j = 0;
                         v[i] = joined;
                         v.remove(j);
                         if j < i {
