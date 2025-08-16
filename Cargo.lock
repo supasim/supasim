@@ -1913,6 +1913,7 @@ dependencies = [
  "supasim-types",
  "thiserror 2.0.15",
  "thunderdome",
+ "wgpu",
  "winit",
 ]
 
