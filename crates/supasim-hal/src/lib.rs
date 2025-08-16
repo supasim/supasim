@@ -18,6 +18,8 @@
 END LICENSE */
 
 pub mod dummy;
+#[cfg(feature = "external_wgpu")]
+pub mod external_wgpu;
 #[cfg(all(feature = "metal", target_vendor = "apple"))]
 pub mod metal;
 #[cfg(feature = "vulkan")]
@@ -28,7 +30,11 @@ pub mod wgpu;
 #[cfg(test)]
 mod tests;
 
+use std::any::Any;
+
 pub use dummy::Dummy;
+#[cfg(feature = "external_wgpu")]
+pub use external_wgpu::{WgpuDeviceExportInfo, wgpu_adapter_supports_external};
 #[cfg(all(feature = "metal", target_vendor = "apple"))]
 pub use metal::Metal;
 #[cfg(feature = "vulkan")]
@@ -36,7 +42,7 @@ pub use vulkan::Vulkan;
 #[cfg(feature = "wgpu")]
 pub use wgpu::Wgpu;
 
-#[cfg(feature = "wgpu")]
+#[cfg(any(feature = "external_wgpu", feature = "wgpu"))]
 pub use ::wgpu as wgpu_dep;
 
 use types::*;
@@ -58,6 +64,12 @@ pub trait Backend: Sized + std::fmt::Debug + Clone + Send + Sync + 'static {
 
 pub trait BackendInstance<B: Backend<Instance = Self>>: Send {
     fn get_properties(&mut self) -> HalInstanceProperties;
+    /// Get whether or not memory can be shared to a certain device. Usually, this device would be a wgpu device. Note that using this
+    /// with wgpu devices will require the wgpu feature, even if the backend isn't used.
+    ///
+    /// # Safety
+    /// * Unknown safety requirements lol
+    unsafe fn can_share_memory_to_device(&mut self, device: &dyn Any) -> Result<bool, B::Error>;
     /// # Safety
     /// * The kernel code must be valid
     /// * The reflection info must match exactly with the shader
@@ -221,7 +233,24 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send {
 
 pub trait Kernel<B: Backend<Kernel = Self>>: Send {}
 
-pub trait Buffer<B: Backend<Buffer = Self>>: Send {}
+pub trait Buffer<B: Backend<Buffer = Self>>: Send {
+    /// # Safety
+    /// * Synchronization must be managed by the user
+    /// * The buffer must be of type `Storage`
+    unsafe fn export(
+        &mut self,
+        instance: &mut B::Instance,
+    ) -> Result<ExternalMemoryObject, B::Error>;
+    /// # Safety
+    /// * The instance must have had can_share_memory_to_device called on the same external device, and it must have returned true
+    /// * Synchronization must be managed by the user
+    /// * The buffer must be of type `Storage`
+    unsafe fn share_to_device(
+        &mut self,
+        instance: &mut B::Instance,
+        external_device: &dyn Any,
+    ) -> Result<Box<dyn Any>, B::Error>;
+}
 
 pub trait BindGroup<B: Backend<BindGroup = Self>>: Send {}
 

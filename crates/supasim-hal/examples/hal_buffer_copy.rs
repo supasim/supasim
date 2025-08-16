@@ -27,6 +27,7 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
                 size: 16,
                 memory_type: types::HalBufferType::Upload,
                 min_alignment: 16,
+                can_export: false,
             })
             .unwrap();
         let buffer2 = instance
@@ -34,6 +35,7 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
                 size: 16,
                 memory_type: types::HalBufferType::Storage,
                 min_alignment: 16,
+                can_export: false,
             })
             .unwrap();
         let mut buffer3 = instance
@@ -41,6 +43,7 @@ pub fn example<B: Backend>(mut instance: B::Instance) {
                 size: 16,
                 memory_type: types::HalBufferType::Download,
                 min_alignment: 16,
+                can_export: false,
             })
             .unwrap();
         instance

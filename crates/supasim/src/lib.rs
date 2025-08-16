@@ -52,6 +52,8 @@ use types::SyncMode;
 pub use bytemuck;
 pub use hal;
 #[cfg(feature = "wgpu")]
+pub use hal::WgpuDeviceExportInfo;
+#[cfg(feature = "wgpu")]
 pub use hal::wgpu_dep as wgpu;
 pub use types::{
     Backend, HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel,
@@ -144,6 +146,7 @@ impl From<BufferDescriptor> for types::HalBufferDescriptor {
                 BufferType::Automatic => types::HalBufferType::Storage,
             },
             min_alignment: 16,
+            can_export: false,
         }
     }
 }
@@ -336,6 +339,7 @@ pub struct InstanceProperties {
     pub supports_pipeline_cache: bool,
     pub kernel_lang: KernelTarget,
     pub is_unified_memory: bool,
+    pub export_buffers: bool,
 }
 struct InstanceState<B: hal::Backend> {
     /// The inner hal instance
@@ -421,6 +425,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             supports_pipeline_cache: v.pipeline_cache,
             kernel_lang: v.kernel_lang,
             is_unified_memory: v.is_unified_memory,
+            export_buffers: v.export_memory,
         })
     }
     pub fn compile_raw_kernel(
@@ -1376,6 +1381,49 @@ impl<B: hal::Backend> Buffer<B> {
             });
             std::mem::forget(data);
             out
+        }
+    }
+    /// # Safety
+    /// * The exported buffer must be destroyed before `external_wgpu` buffer is destroyed
+    /// * Synchronization must be guaranteed by the user.
+    #[cfg(feature = "wgpu")]
+    pub unsafe fn export_to_wgpu(
+        &self,
+        device: WgpuDeviceExportInfo,
+    ) -> SupaSimResult<B, hal::wgpu_dep::Buffer> {
+        if !self.inner()?.create_info.can_export {
+            return Err(SupaSimError::BufferExportError(
+                "Attempted to export buffer not made for exporting".to_string(),
+            ));
+        }
+        {
+            let mut buffer_inner = self.inner_mut()?;
+            let _instance = buffer_inner.instance.clone();
+            let instance_inner = _instance.inner()?;
+            let mut instance_lock = instance_inner.inner.lock();
+            unsafe {
+                if instance_lock
+                    .as_mut()
+                    .unwrap()
+                    .can_share_memory_to_device(&device)
+                    .map_supasim()?
+                {
+                    use hal::Buffer;
+                    let res = buffer_inner
+                        .inner
+                        .as_mut()
+                        .unwrap()
+                        .share_to_device(instance_lock.as_mut().unwrap(), &device)
+                        .map_supasim()?;
+                    Ok(*res
+                        .downcast::<hal::wgpu_dep::Buffer>()
+                        .expect("Hal error: backend didn't downcast to wgpu::Buffer"))
+                } else {
+                    Err(SupaSimError::BufferExportError(
+                        "Backend refused to export buffer".to_string(),
+                    ))
+                }
+            }
         }
     }
     pub fn slice(&self, range: impl std::ops::RangeBounds<u64>, needs_mut: bool) -> BufferSlice<B> {
