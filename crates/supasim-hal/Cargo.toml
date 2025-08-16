@@ -31,12 +31,11 @@ license.workspace = true
 homepage.workspace = true
 
 [features]
-default = ["vulkan", "wgpu", "metal", "external_wgpu"]
+default = ["vulkan", "wgpu", "metal"]
 cuda = [
   # "cust"
 ] # Potential cuda libraries: cust, cudarc
-wgpu = ["dep:wgpu", "pollster", "external_wgpu"]
-external_wgpu = ["dep:wgpu", "ash", "wgpu/wgsl"]
+wgpu = ["dep:wgpu", "pollster"]
 vulkan = ["ash", "gpu-allocator"]
 metal = [
   "objc2",
@@ -64,9 +63,7 @@ tracing.workspace = true
 
 # Vulkan dependencies
 ash = { version = "0.38", optional = true, features = ["debug"] }
-gpu-allocator = { git = "https://github.com/supasim/gpu-allocator.git", branch = "external-memory-vulkan", optional = true, features = [
-  "vulkan",
-] }
+gpu-allocator = { version = "0.27", optional = true, features = ["vulkan"] }
 
 # WGPU dependencies
 wgpu = { workspace = true, optional = true }

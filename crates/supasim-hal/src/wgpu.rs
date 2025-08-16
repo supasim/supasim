@@ -149,20 +149,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             map_buffers: true,
             map_buffer_while_gpu_use: false,
             upload_download_buffers: false,
-            export_memory: false,
         }
-    }
-
-    #[tracing::instrument]
-    unsafe fn can_share_memory_to_device(
-        &mut self,
-        device: &dyn Any,
-    ) -> Result<bool, <Wgpu as Backend>::Error> {
-        #[cfg(feature = "external_wgpu")]
-        if let Some(info) = device.downcast_ref::<crate::WgpuDeviceExportInfo>() {
-            return Ok(info.supports_external_memory() && self.get_properties().export_memory);
-        }
-        Ok(false)
     }
 
     #[tracing::instrument]
@@ -365,7 +352,6 @@ impl BackendInstance<Wgpu> for WgpuInstance {
                 HalBufferType::Upload => Some(true),
                 _ => None,
             },
-            create_info: *alloc_info,
         })
     }
 
@@ -565,32 +551,10 @@ pub struct WgpuBuffer {
     slice: Option<wgpu::BufferSlice<'static>>,
     mapped_slice: Option<wgpu::BufferViewMut<'static>>,
     map_mut: Option<bool>,
-    create_info: HalBufferDescriptor,
 }
 unsafe impl Send for WgpuBuffer {}
 unsafe impl Sync for WgpuBuffer {}
-impl Buffer<Wgpu> for WgpuBuffer {
-    unsafe fn share_to_device(
-        &mut self,
-        instance: &mut <Wgpu as Backend>::Instance,
-        external_device: &dyn Any,
-    ) -> Result<Box<dyn Any>, <Wgpu as Backend>::Error> {
-        #[cfg(feature = "external_wgpu")]
-        if let Some(info) = external_device.downcast_ref::<crate::WgpuDeviceExportInfo>() {
-            let memory_obj = unsafe { self.export(instance)? };
-            return Ok(Box::new(unsafe {
-                info.import_external_memory(memory_obj, self.create_info)
-            }));
-        }
-        Err(WgpuError::ExternalMemoryExport)
-    }
-    unsafe fn export(
-        &mut self,
-        _instance: &mut <Wgpu as Backend>::Instance,
-    ) -> Result<ExternalMemoryObject, <Wgpu as Backend>::Error> {
-        Err(WgpuError::ExternalMemoryExport)
-    }
-}
+impl Buffer<Wgpu> for WgpuBuffer {}
 #[derive(Debug)]
 pub struct WgpuCommandRecorder {
     inner: Option<wgpu::CommandEncoder>,

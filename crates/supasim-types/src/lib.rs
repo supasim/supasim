@@ -35,7 +35,6 @@ pub struct HalBufferDescriptor {
     pub size: u64,
     pub memory_type: HalBufferType,
     pub min_alignment: usize,
-    pub can_export: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord)]
@@ -184,8 +183,6 @@ pub struct HalInstanceProperties {
     pub map_buffer_while_gpu_use: bool,
     /// Whether it supports dual upload-download buffers
     pub upload_download_buffers: bool,
-    /// Whether it supports exporting buffers
-    pub export_memory: bool,
 }
 /// # Safety
 /// This is undefined behavior lol

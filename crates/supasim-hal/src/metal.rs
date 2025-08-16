@@ -122,14 +122,7 @@ impl BackendInstance<Metal> for MetalInstance {
             is_unified_memory: self.device.hasUnifiedMemory(),
             map_buffer_while_gpu_use: true,
             upload_download_buffers: true,
-            export_memory: false,
         }
-    }
-    unsafe fn can_share_memory_to_device(
-        &mut self,
-        _device: &dyn std::any::Any,
-    ) -> Result<bool, <Metal as Backend>::Error> {
-        Ok(false)
     }
     unsafe fn get_kernel_cache_data(
         &mut self,
@@ -466,21 +459,7 @@ impl Kernel<Metal> for MetalKernel {}
 pub struct MetalBuffer {
     buffer: UniqueObject<dyn MTLBuffer>,
 }
-impl Buffer<Metal> for MetalBuffer {
-    unsafe fn export(
-        &mut self,
-        _instance: &mut <Metal as Backend>::Instance,
-    ) -> Result<crate::ExternalMemoryObject, <Metal as Backend>::Error> {
-        unreachable!("Can't export metal buffers yet")
-    }
-    unsafe fn share_to_device(
-        &mut self,
-        _instance: &mut <Metal as Backend>::Instance,
-        _external_device: &dyn std::any::Any,
-    ) -> Result<Box<dyn std::any::Any>, <Metal as Backend>::Error> {
-        unreachable!("Can't export metal buffers yet")
-    }
-}
+impl Buffer<Metal> for MetalBuffer {}
 
 pub struct MetalKernelCache {}
 impl KernelCache<Metal> for MetalKernelCache {}
