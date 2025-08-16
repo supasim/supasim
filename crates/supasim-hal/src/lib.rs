@@ -221,7 +221,7 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send {
 
 pub trait Kernel<B: Backend<Kernel = Self>>: Send {}
 
-pub trait Buffer<B: Backend<Buffer = Self>>: Send + Sync {}
+pub trait Buffer<B: Backend<Buffer = Self>>: Send {}
 
 pub trait BindGroup<B: Backend<BindGroup = Self>>: Send {}
 
