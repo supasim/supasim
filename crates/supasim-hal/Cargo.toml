@@ -32,9 +32,9 @@ homepage.workspace = true
 
 [features]
 default = ["vulkan", "wgpu", "metal"]
-cuda = [
-  # "cust"
-] # Potential cuda libraries: cust, cudarc
+# cuda = [
+# "cust"
+# ] # Potential cuda libraries: cust, cudarc
 wgpu = ["dep:wgpu", "pollster"]
 vulkan = ["ash", "gpu-allocator"]
 metal = [

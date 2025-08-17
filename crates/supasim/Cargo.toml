@@ -33,7 +33,6 @@ readme = "../../readme.md"
 
 [features]
 default = ["vulkan", "wgpu", "metal"]
-cuda = ["hal/cuda"]
 # The wgpu feature flag will enable both reexporting wgpu and the wgpu backend in hal
 wgpu = ["hal/wgpu"]
 vulkan = ["hal/vulkan"]
