@@ -4,7 +4,6 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-pub mod dummy;
 #[cfg(all(feature = "metal", target_vendor = "apple"))]
 pub mod metal;
 #[cfg(feature = "vulkan")]
@@ -15,16 +14,12 @@ pub mod wgpu;
 #[cfg(test)]
 mod tests;
 
-pub use dummy::Dummy;
 #[cfg(all(feature = "metal", target_vendor = "apple"))]
 pub use metal::Metal;
 #[cfg(feature = "vulkan")]
 pub use vulkan::Vulkan;
 #[cfg(feature = "wgpu")]
 pub use wgpu::Wgpu;
-
-#[cfg(feature = "wgpu")]
-pub use ::wgpu as wgpu_dep;
 
 use types::*;
 
@@ -42,10 +37,13 @@ pub trait Backend: Sized + std::fmt::Debug + Clone + Send + Sync + 'static {
     type Stream: Stream<Self>;
 
     type Error: Error<Self>;
+
+    fn setup_default_descriptor() -> Result<InstanceDescriptor<Self>, Self::Error>;
 }
 
 pub trait BackendInstance<B: Backend<Instance = Self>>: Send {
     fn get_properties(&self) -> HalInstanceProperties;
+
     /// # Safety
     /// * The kernel code must be valid
     /// * The reflection info must match exactly with the shader
@@ -85,15 +83,15 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send {
     /// * All commands must follow the corresponding safety section in BufferCommand
     unsafe fn record_commands(
         &mut self,
-        instance: &B::Instance,
+        stream: &B::Stream,
         commands: &[BufferCommand<B>],
     ) -> Result<(), B::Error>;
     /// # Safety
     /// * The recorder must not be queued and incomplete on the GPU
-    unsafe fn clear(&mut self, instance: &B::Instance) -> Result<(), B::Error>;
+    unsafe fn clear(&mut self, stream: &B::Stream) -> Result<(), B::Error>;
     /// # Safety
     /// * All submissions using this recorder must have completed
-    unsafe fn destroy(self, instance: &B::Instance) -> Result<(), B::Error>;
+    unsafe fn destroy(self, stream: &B::Stream) -> Result<(), B::Error>;
 }
 
 pub trait Kernel<B: Backend<Kernel = Self>>: Send {
@@ -110,12 +108,7 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send {
     /// * No concurrent reads/writes are allowed, hence why it requires a mutable reference to buffer
     ///   * This is a limitation of wgpu and may be dealt with in the future
     /// * No mapped pointers may be used to access the same data ranges concurrently
-    unsafe fn write(
-        &self,
-        instance: &B::Instance,
-        offset: u64,
-        data: &[u8],
-    ) -> Result<(), B::Error>;
+    unsafe fn write(&self, instance: &B::Device, offset: u64, data: &[u8]) -> Result<(), B::Error>;
     /// # Safety
     /// * All submitted command recorders using this buffer mutably must have completed
     /// * The buffer must be of type `Download`
@@ -123,7 +116,7 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send {
     ///   * This is a limitation of wgpu and may be dealt with in the future
     unsafe fn read(
         &self,
-        buffer: &B::Instance,
+        instance: &B::Device,
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), B::Error>;
@@ -134,14 +127,14 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send {
     /// * Writing to a mapped upload buffer is illegal(except on unified memory systems)
     /// * If the device doesn't support `map_buffer_while_gpu_use`, the buffer must be unmapped before
     ///   any GPU work using the buffer is submitted
-    unsafe fn map(&mut self, instance: &B::Instance) -> Result<*mut u8, B::Error>;
+    unsafe fn map(&mut self, instance: &B::Device) -> Result<*mut u8, B::Error>;
     /// # Safety
     /// * All mapped pointers are invalidated
-    unsafe fn unmap(&mut self, instance: &B::Instance) -> Result<(), B::Error>;
+    unsafe fn unmap(&mut self, instance: &B::Device) -> Result<(), B::Error>;
     /// # Safety
     /// * All bind groups using this buffer must have been updated or destroyed
     /// * The buffer must not be mapped
-    unsafe fn destroy(self, instance: &B::Instance) -> Result<(), B::Error>;
+    unsafe fn destroy(self, instance: &B::Device) -> Result<(), B::Error>;
 }
 
 pub trait BindGroup<B: Backend<BindGroup = Self>>: Send {
@@ -149,50 +142,50 @@ pub trait BindGroup<B: Backend<BindGroup = Self>>: Send {
     /// * If the backend doesn't support easily updatable bind groups, all command recorders using this bind group must've been cleared
     unsafe fn update(
         &mut self,
-        instance: &B::Instance,
+        stream: &B::Stream,
         kernel: &B::Kernel,
         buffers: &[HalBufferSlice<B>],
     ) -> Result<(), B::Error>;
     /// # Safety
     /// * All command recorders using this bind group must've been cleared
-    unsafe fn destroy(self, instance: &B::Instance, kernel: &mut B::Kernel)
-    -> Result<(), B::Error>;
+    unsafe fn destroy(self, instance: &B::Stream, kernel: &mut B::Kernel) -> Result<(), B::Error>;
 }
 
 pub trait Semaphore<B: Backend<Semaphore = Self>>: Send {
     /// # Safety
     /// * The semaphore must be signalled by some already submitted command recorder
-    unsafe fn wait(&self, instance: &B::Instance) -> Result<(), B::Error>;
+    unsafe fn wait(&self, device: &B::Device) -> Result<(), B::Error>;
     /// # Safety
     /// Currently no safety requirements. This is subject to change
-    unsafe fn is_signalled(&self, instance: &B::Instance) -> Result<bool, B::Error>;
+    unsafe fn is_signalled(&self, device: &B::Device) -> Result<bool, B::Error>;
     /// # Safety
     /// * The semaphore must not be waited on by any CPU side wait command
-    unsafe fn signal(&mut self, instance: &B::Instance) -> Result<(), B::Error>;
+    unsafe fn signal(&mut self, device: &B::Device) -> Result<(), B::Error>;
     /// Note that in most implementations this won't actually result in any underlying API changes.
     /// # Safety
     /// * The semaphore must not be waited on by any CPU or GPU side wait command
     /// * The semaphore must not be signalled by any CPU or GPU side signal command
-    unsafe fn reset(&mut self, instance: &B::Instance) -> Result<(), B::Error>;
+    unsafe fn reset(&mut self, device: &B::Device) -> Result<(), B::Error>;
     /// # Safety
     /// * All command recorders using this semaphore must've been cleared
-    unsafe fn destroy(self, instance: &B::Instance) -> Result<(), B::Error>;
+    unsafe fn destroy(self, device: &B::Device) -> Result<(), B::Error>;
 }
 
 pub trait Device<B: Backend<Device = Self>> {
+    unsafe fn get_properties(&self, instance: &B::Instance) -> HalDeviceProperties {}
     /// # Safety
     /// Currently no safety requirements. This is subject to change
-    unsafe fn cleanup_cached_resources(&self) -> Result<(), B::Error>;
+    unsafe fn cleanup_cached_resources(&self, instance: &B::Instance) -> Result<(), B::Error>;
     /// # Safety
     /// * If the device doesn't support `upload_download_buffers`, `memory_type` cannot be `UploadDownload`
-    unsafe fn create_buffer(
-        &self,
-        instance: &B::Instance,
-        alloc_info: &HalBufferDescriptor,
-    ) -> Result<B::Buffer, B::Error>;
+    unsafe fn create_buffer(&self, alloc_info: &HalBufferDescriptor)
+    -> Result<B::Buffer, B::Error>;
     /// # Safety
     /// Currently no safety requirements. This is subject to change
     unsafe fn create_semaphore(&self) -> Result<B::Semaphore, B::Error>;
+    /// # Safety
+    /// * The number of created streams must be <= the device's properties `max_streams` value
+    unsafe fn create_stream(&mut self) -> Result<B::Stream, B::Error>;
 }
 pub trait Stream<B: Backend<Stream = Self>> {
     /// # Safety
@@ -200,7 +193,7 @@ pub trait Stream<B: Backend<Stream = Self>> {
     unsafe fn wait_for_idle(&mut self) -> Result<(), B::Error>;
     /// # Safety
     /// Currently no safety requirements. This is subject to change
-    unsafe fn create_recorder(&mut self) -> Result<B::CommandRecorder, B::Error>;
+    unsafe fn create_recorder(&self) -> Result<B::CommandRecorder, B::Error>;
     /// # Safety
     /// * For each recorder submitted, it must have had __exactly__ one record command called on it since being cleared or created
     /// * For each wait semaphore, the semaphore must be signalled at some point on the CPU side only
@@ -293,4 +286,15 @@ pub struct ExternalMemoryObject {
 pub struct KernelDescriptor<'a> {
     binary: &'a [u8],
     reflection: types::KernelReflectionInfo,
+}
+
+pub struct DeviceDescriptor<B: Backend> {
+    pub device: B::Device,
+    pub streams: Vec<B::Stream>,
+    /// Devices in the same group can share semaphores and such
+    pub group_idx: Option<u32>,
+}
+pub struct InstanceDescriptor<B: Backend> {
+    pub instance: B::Instance,
+    pub devices: Vec<DeviceDescriptor<B>>,
 }

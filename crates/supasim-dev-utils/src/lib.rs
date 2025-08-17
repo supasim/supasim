@@ -77,9 +77,6 @@ macro_rules! all_backend_tests_inner {
 macro_rules! all_backend_tests {
     ($test_name:ident) => {
         $crate::paste::paste! {
-            $crate::all_backend_tests_inner!([<$test_name _dummy>], "DUMMY", {
-                hal::Dummy::create_instance()
-            }, $test_name, Dummy);
 
             #[cfg(feature = "vulkan")]
             $crate::all_backend_tests_inner!([<$test_name _vulkan>], "VULKAN", {

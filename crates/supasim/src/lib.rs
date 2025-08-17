@@ -36,10 +36,8 @@ use thiserror::Error;
 use thunderdome::{Arena, Index};
 use types::SyncMode;
 
-pub use bytemuck;
 pub use hal;
-#[cfg(feature = "wgpu")]
-pub use hal::wgpu_dep as wgpu;
+pub use hal::{DeviceDescriptor, InstanceDescriptor};
 pub use types::{
     Backend, HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel,
     SpirvVersion,
@@ -320,9 +318,7 @@ pub type SupaSimResult<B, T> = Result<T, SupaSimError<B>>;
 
 #[derive(Clone, Copy, Debug)]
 pub struct InstanceProperties {
-    pub supports_pipeline_cache: bool,
     pub kernel_lang: KernelTarget,
-    pub is_unified_memory: bool,
 }
 struct InstanceState<B: hal::Backend> {
     /// The inner hal instance
@@ -331,8 +327,6 @@ struct InstanceState<B: hal::Backend> {
     inner_properties: types::HalInstanceProperties,
     /// All created kernels
     kernels: Mutex<Arena<KernelWeak<B>>>,
-    /// All created kernel caches
-    kernel_caches: Mutex<Arena<Option<KernelCacheWeak<B>>>>,
     /// All created buffers
     buffers: Mutex<Arena<Option<BufferWeak<B>>>>,
     /// All wait handles created
@@ -380,7 +374,6 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                 inner: Mutex::new(Some(hal)),
                 inner_properties,
                 kernels: Mutex::new(Arena::default()),
-                kernel_caches: Mutex::new(Arena::default()),
                 buffers: Mutex::new(Arena::default()),
                 wait_handles: Mutex::new(Arena::default()),
                 command_recorders: Mutex::new(Arena::default()),
@@ -405,16 +398,13 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         self.check_destroyed()?;
         let v = self.inner()?.inner_properties;
         Ok(InstanceProperties {
-            supports_pipeline_cache: v.pipeline_cache,
             kernel_lang: v.kernel_lang,
-            is_unified_memory: v.is_unified_memory,
         })
     }
     pub fn compile_raw_kernel(
         &self,
         binary: &[u8],
         reflection_info: types::KernelReflectionInfo,
-        cache: Option<&KernelCache<B>>,
     ) -> SupaSimResult<B, Kernel<B>> {
         self.check_destroyed()?;
         let s = self.inner()?;
@@ -448,12 +438,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         k.inner_mut()?.id = s.kernels.lock().insert(k.downgrade());
         Ok(k)
     }
-    pub fn compile_slang_kernel(
-        &self,
-        slang: &str,
-        entry: &str,
-        cache: Option<&KernelCache<B>>,
-    ) -> SupaSimResult<B, Kernel<B>> {
+    pub fn compile_slang_kernel(&self, slang: &str, entry: &str) -> SupaSimResult<B, Kernel<B>> {
         self.check_destroyed()?;
         let mut binary = Vec::new();
         let s = self.inner()?;
@@ -472,23 +457,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                     minify: true,
                 })?;
         drop(s);
-        self.compile_raw_kernel(&binary, reflection_info, cache)
-    }
-    pub fn create_kernel_cache(&self, data: &[u8]) -> SupaSimResult<B, KernelCache<B>> {
-        self.check_destroyed()?;
-        let s = self.inner()?;
-        let inner =
-            unsafe { s.inner.lock().as_mut().unwrap().create_kernel_cache(data) }.map_supasim()?;
-        let k = KernelCache::from_inner(KernelCacheInner {
-            _phantom: Default::default(),
-            _is_destroyed: false,
-            instance: self.clone(),
-            inner: Some(inner),
-            // Yes its UB, but id doesn't have any destructor and just contains two numbers
-            id: Index::DANGLING,
-        });
-        k.inner_mut()?.id = s.kernel_caches.lock().insert(Some(k.downgrade()));
-        Ok(k)
+        self.compile_raw_kernel(&binary, reflection_info)
     }
     pub fn create_recorder(&self) -> SupaSimResult<B, CommandRecorder<B>> {
         self.check_destroyed()?;
@@ -896,50 +865,6 @@ impl<B: hal::Backend> KernelInner<B> {
     }
 }
 impl<B: hal::Backend> Drop for KernelInner<B> {
-    fn drop(&mut self) {
-        if self.inner.is_some()
-            && let Ok(instance) = self.instance.clone().inner()
-        {
-            self.destroy(&instance);
-        }
-    }
-}
-api_type!(KernelCache, {
-    instance: SupaSimInstance<B>,
-    inner: Option<B::KernelCache>,
-    id: Index,
-},);
-impl<B: hal::Backend> KernelCache<B> {
-    pub fn get_data(self) -> SupaSimResult<B, Vec<u8>> {
-        let mut inner = self.inner_mut()?;
-        let instance = inner.instance.clone();
-        let data = unsafe {
-            instance
-                .inner()?
-                .inner
-                .lock()
-                .as_mut()
-                .unwrap()
-                .get_kernel_cache_data(inner.inner.as_mut().unwrap())
-        }
-        .map_supasim()?;
-        Ok(data)
-    }
-}
-impl<B: hal::Backend> KernelCacheInner<B> {
-    fn destroy(&mut self, instance: &InstanceState<B>) {
-        instance.kernel_caches.lock().remove(self.id);
-        let _ = unsafe {
-            instance
-                .inner
-                .lock()
-                .as_mut()
-                .unwrap()
-                .destroy_kernel_cache(std::mem::take(&mut self.inner).unwrap())
-        };
-    }
-}
-impl<B: hal::Backend> Drop for KernelCacheInner<B> {
     fn drop(&mut self) {
         if self.inner.is_some()
             && let Ok(instance) = self.instance.clone().inner()
@@ -1704,13 +1629,4 @@ impl BufferUser {
             Self::Cpu => panic!(),
         }
     }
-}
-
-pub struct DeviceDescriptor<B: hal::Backend> {
-    pub device: B::Device,
-    pub requested_stream_count: Option<u32>,
-}
-pub struct InstanceDescriptor<B: hal::Backend> {
-    pub instance: B::Instance,
-    pub devices: Vec<DeviceDescriptor<B>>,
 }
