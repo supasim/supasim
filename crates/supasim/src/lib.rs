@@ -1705,3 +1705,12 @@ impl BufferUser {
         }
     }
 }
+
+pub struct DeviceDescriptor<B: hal::Backend> {
+    pub device: B::Device,
+    pub requested_stream_count: Option<u32>,
+}
+pub struct InstanceDescriptor<B: hal::Backend> {
+    pub instance: B::Instance,
+    pub devices: Vec<DeviceDescriptor<B>>,
+}
