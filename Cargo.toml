@@ -30,7 +30,7 @@ edition = "2024"
 rust-version = "1.89"
 keywords = ["hpc", "simulation", "gpu"]
 categories = ["simulation", "science"]
-license = "GPL-3.0"
+license = "MIT OR Apache-2.0"
 homepage = "https://supasim.github.io/"
 
 
