@@ -71,11 +71,6 @@ pub struct HalBufferSlice<'a, B: Backend> {
     pub len: u64,
 }
 
-pub struct CommandSynchronization<'a, B: Backend> {
-    pub buffers_needing_sync: &'a mut [&'a mut HalBufferSlice<'a, B>],
-    pub out_semaphore: Option<(&'a mut B::Semaphore, u64)>,
-}
-
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send {
     /// # Safety
     /// * Must only be called on instances with `SyncMode` of `Automatic` or `VulkanStyle`
@@ -214,7 +209,7 @@ pub trait Stream<B: Backend<Stream = Self>> {
 #[derive(Debug)]
 pub struct RecorderSubmitInfo<'a, B: Backend> {
     pub command_recorder: &'a mut B::CommandRecorder,
-    pub wait_semaphore: Option<&'a B::Semaphore>,
+    pub wait_semaphores: &'a [&'a B::Semaphore],
     pub signal_semaphore: Option<&'a B::Semaphore>,
 }
 

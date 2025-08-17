@@ -245,7 +245,7 @@ fn hal_comprehensive<B: Backend>(
         info!("Recorded commands");
         stream.submit_recorders(std::slice::from_mut(&mut RecorderSubmitInfo {
             command_recorder: &mut recorder,
-            wait_semaphore: None,
+            wait_semaphores: &[],
             signal_semaphore: Some(&fun_semaphore),
         }))?;
         info!("Submitted recorders");
