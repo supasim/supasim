@@ -1009,7 +1009,7 @@ dependencies = [
  "petgraph",
  "rustc-hash 1.1.0",
  "spirv",
- "thiserror 2.0.15",
+ "thiserror 2.0.16",
  "unicode-ident",
 ]
 
@@ -1911,7 +1911,7 @@ dependencies = [
  "supasim-hal",
  "supasim-kernels",
  "supasim-types",
- "thiserror 2.0.15",
+ "thiserror 2.0.16",
  "thunderdome",
  "wgpu",
  "winit",
@@ -1950,7 +1950,7 @@ dependencies = [
  "supasim-dev-utils",
  "supasim-kernels",
  "supasim-types",
- "thiserror 2.0.15",
+ "thiserror 2.0.16",
  "tracing",
  "wgpu",
 ]
@@ -2055,11 +2055,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.15"
+version = "2.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80d76d3f064b981389ecb4b6b7f45a0bf9fdac1d5b9204c7bd6714fecc302850"
+checksum = "3467d614147380f2e4e374161426ff399c91084acd2363eaf549172b3d5e60c0"
 dependencies = [
- "thiserror-impl 2.0.15",
+ "thiserror-impl 2.0.16",
 ]
 
 [[package]]
@@ -2075,9 +2075,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.15"
+version = "2.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44d29feb33e986b6ea906bd9c3559a856983f92371b3eaa5e83782a351623de0"
+checksum = "6c5e1be1c48b9172ee610da68fd9cd2770e7a4056cb3fc98710ee6906f0c7960"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2524,7 +2524,7 @@ dependencies = [
  "raw-window-handle",
  "rustc-hash 1.1.0",
  "smallvec",
- "thiserror 2.0.15",
+ "thiserror 2.0.16",
  "wgpu-core-deps-apple",
  "wgpu-core-deps-windows-linux-android",
  "wgpu-hal",
@@ -2584,7 +2584,7 @@ dependencies = [
  "raw-window-handle",
  "renderdoc-sys",
  "smallvec",
- "thiserror 2.0.15",
+ "thiserror 2.0.16",
  "wgpu-types",
  "windows",
  "windows-core",
@@ -2600,7 +2600,7 @@ dependencies = [
  "bytemuck",
  "js-sys",
  "log",
- "thiserror 2.0.15",
+ "thiserror 2.0.16",
  "web-sys",
 ]
 
