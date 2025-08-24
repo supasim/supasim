@@ -36,8 +36,6 @@ impl Backend for Wgpu {
 
     type BindGroup = WgpuBindGroup;
 
-    type KernelCache = WgpuKernelCache;
-
     type Semaphore = WgpuSemaphore;
 
     type Error = WgpuError;
@@ -618,11 +616,6 @@ pub struct WgpuBindGroup {
     inner: wgpu::BindGroup,
 }
 impl BindGroup<Wgpu> for WgpuBindGroup {}
-#[derive(Debug)]
-pub struct WgpuKernelCache {
-    inner: wgpu::PipelineCache,
-}
-impl KernelCache<Wgpu> for WgpuKernelCache {}
 pub struct WgpuSemaphore {
     inner: Mutex<Option<wgpu::SubmissionIndex>>,
     device: wgpu::Device,

@@ -6,7 +6,7 @@ END LICENSE */
 
 use crate::{
     Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, HalBufferSlice,
-    Kernel, KernelCache, RecorderSubmitInfo, Semaphore,
+    Kernel, RecorderSubmitInfo, Semaphore,
 };
 use ash::{
     Entry, khr,
@@ -56,7 +56,6 @@ impl Backend for Vulkan {
     type CommandRecorder = VulkanCommandRecorder;
     type Instance = VulkanInstance;
     type Kernel = VulkanKernel;
-    type KernelCache = VulkanPipelineCache;
     type Semaphore = VulkanSemaphore;
 
     type Error = VulkanError;
@@ -1455,11 +1454,6 @@ pub struct VulkanBindGroup {
     pool_idx: u32,
 }
 impl BindGroup<Vulkan> for VulkanBindGroup {}
-#[derive(Debug)]
-pub struct VulkanPipelineCache {
-    inner: Mutex<vk::PipelineCache>,
-}
-impl KernelCache<Vulkan> for VulkanPipelineCache {}
 #[derive(Debug)]
 pub struct VulkanSemaphore {
     inner: vk::Semaphore,

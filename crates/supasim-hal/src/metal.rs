@@ -25,8 +25,7 @@ use types::{
 };
 
 use crate::{
-    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, Kernel,
-    KernelCache, Semaphore,
+    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, Kernel, Semaphore,
 };
 
 struct UniqueObject<T: ?Sized + NSObjectProtocol>(Retained<ProtocolObject<T>>);
@@ -76,7 +75,6 @@ impl Backend for Metal {
     type BindGroup = MetalBindGroup;
     type Kernel = MetalKernel;
     type Buffer = MetalBuffer;
-    type KernelCache = MetalKernelCache;
     type CommandRecorder = MetalCommandRecorder;
 }
 
@@ -447,9 +445,6 @@ pub struct MetalBuffer {
     buffer: UniqueObject<dyn MTLBuffer>,
 }
 impl Buffer<Metal> for MetalBuffer {}
-
-pub struct MetalKernelCache {}
-impl KernelCache<Metal> for MetalKernelCache {}
 
 enum CurrentEncoder {
     None,

@@ -153,8 +153,6 @@ pub enum SyncOperations {
 pub struct HalInstanceProperties {
     /// What synchronization requirements the backend has
     pub sync_mode: SyncMode,
-    /// Whether the backend supports pipeline caches
-    pub pipeline_cache: bool,
     /// What kernel langauge the backend takes
     pub kernel_lang: KernelTarget,
     /// Whether the backend supports bind groups that are updated while commands are already recorded. This makes bind groups far cheaper to use
@@ -170,6 +168,10 @@ pub struct HalInstanceProperties {
     pub map_buffer_while_gpu_use: bool,
     /// Whether it supports dual upload-download buffers
     pub upload_download_buffers: bool,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct HalDeviceProperties {
+    pub max_streams: u32,
 }
 /// # Safety
 /// This is undefined behavior lol
