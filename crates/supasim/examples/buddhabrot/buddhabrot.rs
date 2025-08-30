@@ -159,7 +159,7 @@ impl<B: hal::Backend> AppState<B> {
                 .unwrap();
             assert_eq!(reflection_info.buffers, vec![false, true, true]);
             instance
-                .compile_raw_kernel(&shader_binary, reflection_info, None)
+                .compile_raw_kernel(&shader_binary, reflection_info)
                 .unwrap()
         };
         let run_kernel = compile_kernel("Run");

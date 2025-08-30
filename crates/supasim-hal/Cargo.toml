@@ -31,6 +31,7 @@ metal = [
   "kernels/msl-out",
   "kernels/opt-valid",
 ]
+trace = ["dep:tracing"]
 
 [dependencies]
 
@@ -46,7 +47,7 @@ bytemuck.workspace = true
 log.workspace = true
 env_logger.workspace = true
 scopeguard.workspace = true
-tracing.workspace = true
+tracing = { workspace = true, optional = true }
 
 # Vulkan dependencies
 ash = { version = "0.38", optional = true, features = ["debug"] }

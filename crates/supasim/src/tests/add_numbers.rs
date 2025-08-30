@@ -5,13 +5,8 @@
 END LICENSE */
 
 use crate::*;
-use std::any::TypeId;
-pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), ()> {
+pub fn add_numbers<Backend: hal::Backend>(hal: hal::InstanceDescriptor<Backend>) -> Result<(), ()> {
     // Test specific stuff
-    if TypeId::of::<Backend>() == TypeId::of::<hal::Dummy>() {
-        // We don't want to "test" on the dummy backend, where nothing happens so the result will be wrong
-        return Ok(());
-    }
     println!("Hello, world!");
     dev_utils::setup_trace_printer_if_env();
 
@@ -48,12 +43,6 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
             ..Default::default()
         })
         .unwrap();
-    let cache: Option<KernelCache<Backend>> =
-        if instance.properties().unwrap().supports_pipeline_cache {
-            Some(instance.create_kernel_cache(&[]).unwrap())
-        } else {
-            None
-        };
 
     // Compile the kernels
     let global_state = kernels::GlobalState::new_from_env().unwrap();
@@ -75,7 +64,7 @@ pub fn add_numbers<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), 
         .unwrap();
     assert!(reflection_info.buffers == vec![false, false, true]);
     let kernel = instance
-        .compile_raw_kernel(&spirv, reflection_info, cache.as_ref())
+        .compile_raw_kernel(&spirv, reflection_info)
         .unwrap();
 
     // Record and submit commands

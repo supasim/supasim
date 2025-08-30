@@ -5,16 +5,15 @@
 END LICENSE */
 
 use crate::*;
-use std::any::TypeId;
 
-pub fn basic_buffer_copy<Backend: hal::Backend>(hal: Backend::Instance) -> Result<(), ()> {
+pub fn basic_buffer_copy<Backend: hal::Backend>(
+    hal: hal::InstanceDescriptor<Backend>,
+) -> Result<(), ()> {
     {
-        if TypeId::of::<Backend>() == TypeId::of::<hal::Dummy>() {
-            // We don't want to "test" on the dummy backend, where nothing happens so the result will be wrong
-            return Ok(());
-        }
+        // Test specific stuff
         println!("Hello, world!");
         dev_utils::setup_trace_printer_if_env();
+
         let instance = SupaSimInstance::<Backend>::from_hal(hal);
         let upload_buffer = instance
             .create_buffer(&BufferDescriptor {
