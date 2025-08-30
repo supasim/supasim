@@ -111,7 +111,9 @@ impl Device<Metal> for MetalDevice {
         })
     }
     unsafe fn get_properties(&self, _instance: &MetalInstance) -> types::HalDeviceProperties {
-        types::HalDeviceProperties {}
+        types::HalDeviceProperties {
+            is_unified_memory: self.device.hasUnifiedMemory(),
+        }
     }
 }
 
@@ -120,7 +122,8 @@ pub struct MetalStream {
 }
 impl Stream<Metal> for MetalStream {
     unsafe fn create_bind_group(
-        &mut self,
+        &self,
+        _device: &MetalDevice,
         _kernel: &mut <Metal as Backend>::Kernel,
         slices: &[crate::HalBufferSlice<Metal>],
     ) -> Result<<Metal as Backend>::BindGroup, <Metal as Backend>::Error> {
@@ -204,7 +207,10 @@ impl Backend for Metal {
             instance,
             devices: vec![crate::DeviceDescriptor {
                 device,
-                streams: vec![stream],
+                streams: vec![crate::StreamDescriptor {
+                    stream,
+                    stream_type: crate::StreamType::ComputeAndTransfer,
+                }],
                 group_idx: None,
             }],
         })
@@ -235,7 +241,6 @@ impl BackendInstance<Metal> for MetalInstance {
             easily_update_bind_groups: true,
             semaphore_signal: true,
             map_buffers: true,
-            is_unified_memory: self.device.hasUnifiedMemory(),
             map_buffer_while_gpu_use: true,
             upload_download_buffers: true,
         }
@@ -364,8 +369,9 @@ pub struct MetalBindGroup {
 impl BindGroup<Metal> for MetalBindGroup {
     unsafe fn update(
         &mut self,
+        _device: &MetalDevice,
         _stream: &<Metal as Backend>::Stream,
-        _kernel: &<Metal as Backend>::Kernel,
+        _kernel: &mut <Metal as Backend>::Kernel,
         buffers: &[crate::HalBufferSlice<Metal>],
     ) -> Result<(), <Metal as Backend>::Error> {
         let mut buffers_lock = self.buffers.lock().unwrap();
@@ -417,7 +423,7 @@ impl Buffer<Metal> for MetalBuffer {
         Ok(self.buffer.contents().as_ptr() as *mut u8)
     }
     unsafe fn read(
-        &self,
+        &mut self,
         _instance: &MetalDevice,
         offset: u64,
         data: &mut [u8],
@@ -429,7 +435,7 @@ impl Buffer<Metal> for MetalBuffer {
         Ok(())
     }
     unsafe fn write(
-        &self,
+        &mut self,
         _instance: &MetalDevice,
         offset: u64,
         data: &[u8],

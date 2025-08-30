@@ -162,15 +162,16 @@ pub struct HalInstanceProperties {
     /// Whether the backend supports directly mapping host memory on the CPU instead of just reads/writes.
     /// This is likely false only on some wgpu backends such as WebGPU itself. Currently it is true everywhere.
     pub map_buffers: bool,
-    /// Whether the system has unified memory, which provides opportunities for optimization, particularly on apple, mobile, or other devices with integrated GPUs
-    pub is_unified_memory: bool,
     /// Whether you can map buffers while they are in use on the GPU(even if the slices don't overlap)
     pub map_buffer_while_gpu_use: bool,
     /// Whether it supports dual upload-download buffers
     pub upload_download_buffers: bool,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub struct HalDeviceProperties {}
+pub struct HalDeviceProperties {
+    /// Whether the system has unified memory, which provides opportunities for optimization, particularly on apple, mobile, or other devices with integrated GPUs
+    pub is_unified_memory: bool,
+}
 /// # Safety
 /// This is undefined behavior lol
 pub unsafe fn to_static_lifetime<T>(r: &T) -> &'static T

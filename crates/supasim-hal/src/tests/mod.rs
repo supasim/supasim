@@ -15,11 +15,11 @@ use log::info;
 use types::{HalBufferDescriptor, SyncOperations};
 
 unsafe fn create_storage_buf<B: Backend>(
-    instance: &mut B::Instance,
+    device: &mut B::Device,
     size: u64,
 ) -> Result<B::Buffer, B::Error> {
     unsafe {
-        let buf = instance.create_buffer(&HalBufferDescriptor {
+        let buf = device.create_buffer(&HalBufferDescriptor {
             size,
             memory_type: types::HalBufferType::Storage,
             min_alignment: 16,
@@ -31,12 +31,17 @@ unsafe fn create_storage_buf<B: Backend>(
 static INSTANCE_CREATE_LOCK: LazyLock<std::sync::Mutex<()>> =
     LazyLock::new(|| std::sync::Mutex::new(()));
 
-fn hal_comprehensive<B: Backend>(
-    mut descriptor: crate::InstanceDescriptor<B>,
-) -> Result<(), B::Error> {
-    let mut instance = descriptor.instance;
-    let device = descriptor.devices[0];
-    let mut stream = device.streams.remove(0);
+fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Result<(), B::Error> {
+    let instance = descriptor.instance;
+    let device = descriptor.devices.into_iter().next().unwrap();
+    let crate::StreamDescriptor {
+        mut stream,
+        stream_type: crate::StreamType::ComputeAndTransfer,
+    } = device.streams.into_iter().next().unwrap()
+    else {
+        panic!("Expected compute and transfer queue to be first")
+    };
+
     let mut device = device.device;
     unsafe {
         let _lock = if let Ok(lock) = INSTANCE_CREATE_LOCK.lock() {
@@ -49,11 +54,6 @@ fn hal_comprehensive<B: Backend>(
             .try_init();
         dev_utils::setup_trace_printer_if_env();
         info!("Starting test");
-        let mut cache = if instance.get_properties().pipeline_cache {
-            Some(instance.create_kernel_cache(&[])?)
-        } else {
-            None
-        };
         let fun_semaphore = device.create_semaphore()?;
         let kernel_compiler = kernels::GlobalState::new_from_env().unwrap();
         let mut add_code = Vec::new();
@@ -113,11 +113,12 @@ fn hal_comprehensive<B: Backend>(
             memory_type: types::HalBufferType::Download,
             min_alignment: 16,
         })?;
-        let sb1 = create_storage_buf::<B>(&mut instance, 16)?;
-        let sb2 = create_storage_buf::<B>(&mut instance, 16)?;
-        let sbout = create_storage_buf::<B>(&mut instance, 16)?;
-        upload_buffer.write(&instance, 0, bytemuck::cast_slice(&[5u32, 8u32, 2u32, 0]))?;
+        let sb1 = create_storage_buf::<B>(&mut device, 16)?;
+        let sb2 = create_storage_buf::<B>(&mut device, 16)?;
+        let sbout = create_storage_buf::<B>(&mut device, 16)?;
+        upload_buffer.write(&device, 0, bytemuck::cast_slice(&[5u32, 8u32, 2u32, 0]))?;
         let bind_group = stream.create_bind_group(
+            &device,
             &mut kernel,
             &[
                 HalBufferSlice {
@@ -137,7 +138,8 @@ fn hal_comprehensive<B: Backend>(
                 },
             ],
         )?;
-        let bind_group2 = instance.create_bind_group(
+        let bind_group2 = stream.create_bind_group(
+            &device,
             &mut kernel2,
             &[HalBufferSlice {
                 buffer: &sbout,
@@ -151,8 +153,8 @@ fn hal_comprehensive<B: Backend>(
         info!("Created things");
 
         recorder.record_commands(
-            &mut instance,
-            &mut [
+            &stream,
+            &[
                 BufferCommand::CopyBuffer {
                     src_buffer: &upload_buffer,
                     dst_buffer: &sb1,
@@ -258,7 +260,6 @@ fn hal_comprehensive<B: Backend>(
         info!("Read buffers");
 
         recorder.destroy(&stream)?;
-        recorder.destroy(&stream)?;
         fun_semaphore.destroy(&device)?;
         bind_group.destroy(&stream, &mut kernel)?;
         bind_group2.destroy(&stream, &mut kernel2)?;
@@ -269,8 +270,8 @@ fn hal_comprehensive<B: Backend>(
         sbout.destroy(&device)?;
         upload_buffer.destroy(&device)?;
         download_buffer.destroy(&device)?;
-        drop(stream)?;
-        drop(device)?;
+        drop(stream);
+        drop(device);
         instance.destroy()?;
         info!("Destroyed");
         Ok(())

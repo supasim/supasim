@@ -104,14 +104,19 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send {
     /// * No concurrent reads/writes are allowed, hence why it requires a mutable reference to buffer
     ///   * This is a limitation of wgpu and may be dealt with in the future
     /// * No mapped pointers may be used to access the same data ranges concurrently
-    unsafe fn write(&self, instance: &B::Device, offset: u64, data: &[u8]) -> Result<(), B::Error>;
+    unsafe fn write(
+        &mut self,
+        instance: &B::Device,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<(), B::Error>;
     /// # Safety
     /// * All submitted command recorders using this buffer mutably must have completed
     /// * The buffer must be of type `Download`
     /// * No concurrent reads/writes are allowed, hence why it requires a mutable reference to buffer
     ///   * This is a limitation of wgpu and may be dealt with in the future
     unsafe fn read(
-        &self,
+        &mut self,
         instance: &B::Device,
         offset: u64,
         data: &mut [u8],
@@ -138,13 +143,15 @@ pub trait BindGroup<B: Backend<BindGroup = Self>>: Send {
     /// * If the backend doesn't support easily updatable bind groups, all command recorders using this bind group must've been cleared
     unsafe fn update(
         &mut self,
+        device: &B::Device,
         stream: &B::Stream,
-        kernel: &B::Kernel,
+        // TODO: figure out if this (and destroy, create) should take &Kernel or &mut Kernel
+        kernel: &mut B::Kernel,
         buffers: &[HalBufferSlice<B>],
     ) -> Result<(), B::Error>;
     /// # Safety
     /// * All command recorders using this bind group must've been cleared
-    unsafe fn destroy(self, instance: &B::Stream, kernel: &mut B::Kernel) -> Result<(), B::Error>;
+    unsafe fn destroy(self, stream: &B::Stream, kernel: &mut B::Kernel) -> Result<(), B::Error>;
 }
 
 pub trait Semaphore<B: Backend<Semaphore = Self>>: Send {
@@ -198,7 +205,8 @@ pub trait Stream<B: Backend<Stream = Self>> {
     /// # Safety
     /// * The resources must correspond with the kernel and its layout
     unsafe fn create_bind_group(
-        &mut self,
+        &self,
+        device: &B::Device,
         kernel: &mut B::Kernel,
         buffers: &[HalBufferSlice<B>],
     ) -> Result<B::BindGroup, B::Error>;
@@ -281,9 +289,14 @@ pub struct KernelDescriptor<'a> {
     reflection: types::KernelReflectionInfo,
 }
 
+pub struct StreamDescriptor<B: Backend> {
+    pub stream: B::Stream,
+    pub stream_type: StreamType,
+}
+
 pub struct DeviceDescriptor<B: Backend> {
     pub device: B::Device,
-    pub streams: Vec<B::Stream>,
+    pub streams: Vec<StreamDescriptor<B>>,
     /// Devices in the same group can share semaphores and such
     pub group_idx: Option<u32>,
 }
