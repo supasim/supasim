@@ -153,8 +153,6 @@ pub enum SyncOperations {
 pub struct HalInstanceProperties {
     /// What synchronization requirements the backend has
     pub sync_mode: SyncMode,
-    /// Whether the backend supports pipeline caches
-    pub pipeline_cache: bool,
     /// What kernel langauge the backend takes
     pub kernel_lang: KernelTarget,
     /// Whether the backend supports bind groups that are updated while commands are already recorded. This makes bind groups far cheaper to use
@@ -164,12 +162,17 @@ pub struct HalInstanceProperties {
     /// Whether the backend supports directly mapping host memory on the CPU instead of just reads/writes.
     /// This is likely false only on some wgpu backends such as WebGPU itself. Currently it is true everywhere.
     pub map_buffers: bool,
-    /// Whether the system has unified memory, which provides opportunities for optimization, particularly on apple, mobile, or other devices with integrated GPUs
-    pub is_unified_memory: bool,
     /// Whether you can map buffers while they are in use on the GPU(even if the slices don't overlap)
     pub map_buffer_while_gpu_use: bool,
     /// Whether it supports dual upload-download buffers
     pub upload_download_buffers: bool,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct HalDeviceProperties {
+    /// Whether the system has unified memory, which provides opportunities for optimization, particularly on apple, mobile, or other devices with integrated GPUs
+    pub is_unified_memory: bool,
+    /// Whether it supports buffers that live on device but can be mapped from host
+    pub host_mappable_buffers: bool,
 }
 /// # Safety
 /// This is undefined behavior lol

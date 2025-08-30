@@ -6,7 +6,7 @@ END LICENSE */
 
 use rand::random;
 use std::sync::Arc;
-use supasim::{Backend, SupaSimInstance, wgpu};
+use supasim::{Backend, SupaSimInstance};
 
 use winit::{
     application::ApplicationHandler,
@@ -56,7 +56,7 @@ pub struct AppState<B: hal::Backend> {
     skip_last_points: u32,
 }
 impl<B: hal::Backend> AppState<B> {
-    pub async fn new(window: Arc<Window>, hal_instance: B::Instance) -> Self {
+    pub async fn new(window: Arc<Window>, hal_desc: hal::InstanceDescriptor<B>) -> Self {
         const DEFAULT_WORKGROUP_DIM: u32 = 4;
         let workgroup_dim = match std::env::var("WORKGROUP_DIM") {
             Ok(w) => match w.parse::<u32>() {
@@ -140,7 +140,7 @@ impl<B: hal::Backend> AppState<B> {
 
         let global_state = kernels::GlobalState::new_from_env().unwrap();
         let mut shader_binary = Vec::new();
-        let instance = SupaSimInstance::from_hal(hal_instance);
+        let instance = SupaSimInstance::from_hal(hal_desc);
         let workgroup_size = [16, 16, 1];
         let mut compile_kernel = |entry: &str| {
             shader_binary.clear();
@@ -159,7 +159,7 @@ impl<B: hal::Backend> AppState<B> {
                 .unwrap();
             assert_eq!(reflection_info.buffers, vec![false, true, true]);
             instance
-                .compile_raw_kernel(&shader_binary, reflection_info, None)
+                .compile_raw_kernel(&shader_binary, reflection_info)
                 .unwrap()
         };
         let run_kernel = compile_kernel("Run");
@@ -629,7 +629,7 @@ impl<B: hal::Backend> AppState<B> {
 
 pub struct App<B: hal::Backend> {
     state: Option<AppState<B>>,
-    instance: Option<B::Instance>,
+    desc: Option<hal::InstanceDescriptor<B>>,
 }
 impl<B: hal::Backend> ApplicationHandler<AppState<B>> for App<B> {
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
@@ -637,7 +637,7 @@ impl<B: hal::Backend> ApplicationHandler<AppState<B>> for App<B> {
 
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
         window.set_title("SupaSim Buddhabrot Demo");
-        let i = std::mem::take(&mut self.instance).unwrap();
+        let i = std::mem::take(&mut self.desc).unwrap();
         self.state = Some(pollster::block_on(AppState::new(window, i)));
     }
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AppState<B>) {
@@ -687,7 +687,7 @@ pub fn main() {
             event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
             let mut app = App::<hal::Wgpu> {
                 state: None,
-                instance: Some(
+                desc: Some(
                     hal::Wgpu::create_instance(true, wgpu::Backends::PRIMARY, None).unwrap(),
                 ),
             };
@@ -699,18 +699,20 @@ pub fn main() {
             event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
             let mut app = App::<hal::Vulkan> {
                 state: None,
-                instance: Some(hal::Vulkan::create_instance(true).unwrap()),
+                desc: Some(hal::Vulkan::create_instance(true).unwrap()),
             };
             event_loop.run_app(&mut app).unwrap();
         }
         #[cfg(target_vendor = "apple")]
         Backend::Metal => {
+            use hal::Backend;
+
             println!("Selected metal backend");
             let event_loop = EventLoop::with_user_event().build().unwrap();
             event_loop.set_control_flow(winit::event_loop::ControlFlow::Poll);
             let mut app = App::<hal::Metal> {
                 state: None,
-                instance: Some(hal::Metal::create_instance().unwrap()),
+                desc: Some(hal::Metal::setup_default_descriptor().unwrap()),
             };
             event_loop.run_app(&mut app).unwrap();
         }

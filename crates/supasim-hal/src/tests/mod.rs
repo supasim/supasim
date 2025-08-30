@@ -4,23 +4,24 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-use std::any::TypeId;
+#![allow(unused)]
+
 use std::sync::LazyLock;
 
-use crate::{self as hal, HalBufferSlice};
+use crate::{self as hal, BindGroup, Buffer, Device, HalBufferSlice, Kernel};
 use crate::{
-    Backend, BackendInstance, BufferCommand, CommandRecorder, RecorderSubmitInfo, Semaphore,
+    Backend, BackendInstance, BufferCommand, CommandRecorder, RecorderSubmitInfo, Semaphore, Stream,
 };
 use kernels::KernelCompileOptions;
 use log::info;
 use types::{HalBufferDescriptor, SyncOperations};
 
 unsafe fn create_storage_buf<B: Backend>(
-    instance: &mut B::Instance,
+    device: &mut B::Device,
     size: u64,
 ) -> Result<B::Buffer, B::Error> {
     unsafe {
-        let buf = instance.create_buffer(&HalBufferDescriptor {
+        let buf = device.create_buffer(&HalBufferDescriptor {
             size,
             memory_type: types::HalBufferType::Storage,
             min_alignment: 16,
@@ -32,7 +33,18 @@ unsafe fn create_storage_buf<B: Backend>(
 static INSTANCE_CREATE_LOCK: LazyLock<std::sync::Mutex<()>> =
     LazyLock::new(|| std::sync::Mutex::new(()));
 
-fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Error> {
+fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Result<(), B::Error> {
+    let mut instance = descriptor.instance;
+    let device = descriptor.devices.into_iter().next().unwrap();
+    let crate::StreamDescriptor {
+        mut stream,
+        stream_type: crate::StreamType::ComputeAndTransfer,
+    } = device.streams.into_iter().next().unwrap()
+    else {
+        panic!("Expected compute and transfer queue to be first")
+    };
+
+    let mut device = device.device;
     unsafe {
         let _lock = if let Ok(lock) = INSTANCE_CREATE_LOCK.lock() {
             lock
@@ -44,12 +56,7 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             .try_init();
         dev_utils::setup_trace_printer_if_env();
         info!("Starting test");
-        let mut cache = if instance.get_properties().pipeline_cache {
-            Some(instance.create_kernel_cache(&[])?)
-        } else {
-            None
-        };
-        let fun_semaphore = instance.create_semaphore()?;
+        let fun_semaphore = device.create_semaphore()?;
         let kernel_compiler = kernels::GlobalState::new_from_env().unwrap();
         let mut add_code = Vec::new();
         let mut double_code = Vec::new();
@@ -88,30 +95,33 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
         assert_eq!(double_reflection.buffers, vec![true]);
         drop(kernel_compiler);
         info!("Constructing kernel objects");
-        let mut kernel = instance.compile_kernel(&add_code, &add_reflection, cache.as_mut())?;
-        let mut kernel2 =
-            instance.compile_kernel(&double_code, &double_reflection, cache.as_mut())?;
+
+        let kernel = instance.compile_kernel(super::KernelDescriptor {
+            reflection: add_reflection,
+            binary: &add_code,
+        })?;
+        let kernel2 = instance.compile_kernel(super::KernelDescriptor {
+            reflection: double_reflection,
+            binary: &double_code,
+        })?;
         info!("Kernels compiled");
-        let mut upload_buffer = instance.create_buffer(&HalBufferDescriptor {
+        let mut upload_buffer = device.create_buffer(&HalBufferDescriptor {
             size: 16,
             memory_type: types::HalBufferType::Upload,
             min_alignment: 16,
         })?;
-        let mut download_buffer = instance.create_buffer(&HalBufferDescriptor {
+        let mut download_buffer = device.create_buffer(&HalBufferDescriptor {
             size: 16,
             memory_type: types::HalBufferType::Download,
             min_alignment: 16,
         })?;
-        let sb1 = create_storage_buf::<B>(&mut instance, 16)?;
-        let sb2 = create_storage_buf::<B>(&mut instance, 16)?;
-        let sbout = create_storage_buf::<B>(&mut instance, 16)?;
-        instance.write_buffer(
-            &mut upload_buffer,
-            0,
-            bytemuck::cast_slice(&[5u32, 8u32, 2u32, 0]),
-        )?;
-        let bind_group = instance.create_bind_group(
-            &mut kernel,
+        let sb1 = create_storage_buf::<B>(&mut device, 16)?;
+        let sb2 = create_storage_buf::<B>(&mut device, 16)?;
+        let sbout = create_storage_buf::<B>(&mut device, 16)?;
+        upload_buffer.write(&device, 0, bytemuck::cast_slice(&[5u32, 8u32, 2u32, 0]))?;
+        let bind_group = stream.create_bind_group(
+            &device,
+            &kernel,
             &[
                 HalBufferSlice {
                     buffer: &sb1,
@@ -130,8 +140,9 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
                 },
             ],
         )?;
-        let bind_group2 = instance.create_bind_group(
-            &mut kernel2,
+        let bind_group2 = stream.create_bind_group(
+            &device,
+            &kernel2,
             &[HalBufferSlice {
                 buffer: &sbout,
                 offset: 0,
@@ -139,13 +150,13 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             }],
         )?;
 
-        let mut recorder = instance.create_recorder()?;
+        let mut recorder = stream.create_recorder()?;
 
         info!("Created things");
 
         recorder.record_commands(
-            &mut instance,
-            &mut [
+            &stream,
+            &[
                 BufferCommand::CopyBuffer {
                     src_buffer: &upload_buffer,
                     dst_buffer: &sb1,
@@ -236,37 +247,33 @@ fn hal_comprehensive<B: Backend>(mut instance: B::Instance) -> Result<(), B::Err
             ],
         )?;
         info!("Recorded commands");
-        instance.submit_recorders(std::slice::from_mut(&mut RecorderSubmitInfo {
+        stream.submit_recorders(std::slice::from_mut(&mut RecorderSubmitInfo {
             command_recorder: &mut recorder,
-            wait_semaphore: None,
+            wait_semaphores: &[],
             signal_semaphore: Some(&fun_semaphore),
         }))?;
         info!("Submitted recorders");
-        fun_semaphore.wait()?;
+        fun_semaphore.wait(&device)?;
 
         let mut res = [3u32, 0, 0, 0];
-        instance.read_buffer(&mut download_buffer, 0, bytemuck::cast_slice_mut(&mut res))?;
-        if TypeId::of::<B>() != TypeId::of::<crate::Dummy>() {
-            assert_eq!(res[0], 26);
-        }
+        download_buffer.read(&device, 0, bytemuck::cast_slice_mut(&mut res))?;
+        assert_eq!(res[0], 26);
 
         info!("Read buffers");
 
-        instance.destroy_recorder(recorder)?;
-
-        instance.destroy_semaphore(fun_semaphore)?;
-        instance.destroy_bind_group(&mut kernel, bind_group)?;
-        instance.destroy_bind_group(&mut kernel2, bind_group2)?;
-        instance.destroy_kernel(kernel)?;
-        instance.destroy_kernel(kernel2)?;
-        instance.destroy_buffer(sb1)?;
-        instance.destroy_buffer(sb2)?;
-        instance.destroy_buffer(sbout)?;
-        instance.destroy_buffer(upload_buffer)?;
-        instance.destroy_buffer(download_buffer)?;
-        if let Some(cache) = cache {
-            instance.destroy_kernel_cache(cache)?;
-        }
+        recorder.destroy(&stream)?;
+        fun_semaphore.destroy(&device)?;
+        bind_group.destroy(&stream, &kernel)?;
+        bind_group2.destroy(&stream, &kernel2)?;
+        kernel.destroy(&instance)?;
+        kernel2.destroy(&instance)?;
+        sb1.destroy(&device)?;
+        sb2.destroy(&device)?;
+        sbout.destroy(&device)?;
+        upload_buffer.destroy(&device)?;
+        download_buffer.destroy(&device)?;
+        stream.destroy(&mut device)?;
+        device.destroy(&mut instance)?;
         instance.destroy()?;
         info!("Destroyed");
         Ok(())
