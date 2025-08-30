@@ -125,10 +125,12 @@ impl Device<Metal> for MetalDevice {
     }
 }
 
+#[derive(Debug)]
 pub struct MetalStream {
     inner: UniqueObject<dyn MTLCommandQueue>,
 }
 impl Stream<Metal> for MetalStream {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_bind_group(
         &self,
         _device: &MetalDevice,
@@ -147,6 +149,7 @@ impl Stream<Metal> for MetalStream {
             buffers: Mutex::new(buffers),
         })
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_recorder(
         &self,
     ) -> Result<<Metal as Backend>::CommandRecorder, <Metal as Backend>::Error> {
@@ -156,6 +159,7 @@ impl Stream<Metal> for MetalStream {
             command_buffer: UniqueObject::new(command_buffer),
         })
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn submit_recorders(
         &mut self,
         infos: &mut [crate::RecorderSubmitInfo<Metal>],
@@ -212,6 +216,7 @@ impl Backend for Metal {
 
     type Error = MetalError;
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn setup_default_descriptor() -> Result<crate::InstanceDescriptor<Self>, Self::Error> {
         let instance = Metal::create_instance()?;
         let device = MetalDevice {
@@ -267,6 +272,7 @@ impl BackendInstance<Metal> for MetalInstance {
             upload_download_buffers: true,
         }
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn compile_kernel(
         &self,
         descriptor: KernelDescriptor,
@@ -347,11 +353,13 @@ impl crate::Error<Metal> for MetalError {
     }
 }
 
+#[derive(Debug)]
 pub struct MetalSemaphore {
     event: UniqueObject<dyn MTLSharedEvent>,
     current_value: u64,
 }
 impl Semaphore<Metal> for MetalSemaphore {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn is_signalled(
         &self,
         _device: &MetalDevice,
@@ -363,12 +371,14 @@ impl Semaphore<Metal> for MetalSemaphore {
         self.current_value += 1;
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn signal(&mut self, _device: &MetalDevice) -> Result<(), <Metal as Backend>::Error> {
         unsafe {
             self.event.setSignaledValue(self.current_value + 1);
         }
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn wait(&self, _device: &MetalDevice) -> Result<(), <Metal as Backend>::Error> {
         unsafe {
             self.event
@@ -384,11 +394,13 @@ impl Semaphore<Metal> for MetalSemaphore {
     }
 }
 
+#[derive(Debug)]
 pub struct MetalBindGroup {
     #[allow(clippy::type_complexity)]
     buffers: Mutex<Vec<(UniqueObject<dyn MTLBuffer>, u64, u64)>>,
 }
 impl BindGroup<Metal> for MetalBindGroup {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn update(
         &mut self,
         _device: &MetalDevice,
@@ -415,6 +427,7 @@ impl BindGroup<Metal> for MetalBindGroup {
     }
 }
 
+#[derive(Debug)]
 pub struct MetalKernel {
     _library: UniqueObject<dyn MTLLibrary>,
     _function: UniqueObject<dyn MTLFunction>,
@@ -433,10 +446,12 @@ impl Kernel<Metal> for MetalKernel {
     }
 }
 
+#[derive(Debug)]
 pub struct MetalBuffer {
     buffer: UniqueObject<dyn MTLBuffer>,
 }
 impl Buffer<Metal> for MetalBuffer {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn map(
         &mut self,
         _instance: &MetalDevice,
@@ -444,6 +459,7 @@ impl Buffer<Metal> for MetalBuffer {
         assert!((self.buffer.storageMode().0 & MTLResourceOptions::StorageModePrivate.0) == 0);
         Ok(self.buffer.contents().as_ptr() as *mut u8)
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn read(
         &mut self,
         _instance: &MetalDevice,
@@ -456,6 +472,7 @@ impl Buffer<Metal> for MetalBuffer {
         data.copy_from_slice(slice);
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn write(
         &mut self,
         _instance: &MetalDevice,
@@ -482,6 +499,7 @@ impl Buffer<Metal> for MetalBuffer {
     }
 }
 
+#[derive(Debug)]
 enum CurrentEncoder {
     None,
     Blit(Retained<ProtocolObject<dyn MTLBlitCommandEncoder>>),
@@ -534,14 +552,17 @@ impl CurrentEncoder {
     }
 }
 
+#[derive(Debug)]
 pub struct MetalCommandRecorder {
     command_buffer: UniqueObject<dyn MTLCommandBuffer>,
 }
 impl CommandRecorder<Metal> for MetalCommandRecorder {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn clear(&mut self, stream: &MetalStream) -> Result<(), <Metal as Backend>::Error> {
         *self = unsafe { stream.create_recorder()? };
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn record_commands(
         &mut self,
         _stream: &MetalStream,

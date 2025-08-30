@@ -931,7 +931,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             upload_download_buffers: true,
         }
     }
-    #[cfg_attr(feature = "trace", tracing::instrument(skip(binary)))]
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn compile_kernel(
         &self,
         desc: KernelDescriptor,
