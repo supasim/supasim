@@ -4,6 +4,8 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
+#![allow(unused)]
+
 use std::sync::LazyLock;
 
 use crate::{self as hal, BindGroup, Buffer, Device, HalBufferSlice, Kernel};
