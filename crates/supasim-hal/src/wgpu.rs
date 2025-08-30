@@ -39,9 +39,23 @@ impl Backend for Wgpu {
     type Error = WgpuError;
 
     fn setup_default_descriptor() -> Result<InstanceDescriptor<Self>, Self::Error> {
+        Self::create_instance(true, wgpu::Backends::PRIMARY, None)
+    }
+}
+impl Wgpu {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    pub fn create_instance(
+        advanced_dbg: bool,
+        backends: wgpu::Backends,
+        preset_unified_memory: Option<bool>,
+    ) -> Result<InstanceDescriptor<Wgpu>, WgpuError> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            flags: wgpu::InstanceFlags::advanced_debugging(),
-            backends: wgpu::Backends::PRIMARY,
+            flags: if advanced_dbg {
+                wgpu::InstanceFlags::advanced_debugging()
+            } else {
+                wgpu::InstanceFlags::empty()
+            },
+            backends,
             backend_options: wgpu::BackendOptions {
                 dx12: wgpu::Dx12BackendOptions {
                     shader_compiler: wgpu::Dx12Compiler::default_dynamic_dxc(),
@@ -56,7 +70,7 @@ impl Backend for Wgpu {
             compatible_surface: None,
         }))
         .map_err(WgpuError::NoSuitableAdapters)?;
-        let unified_memory = false;
+        let unified_memory = preset_unified_memory.unwrap_or(false);
 
         let mut features = wgpu::Features::SHADER_INT64;
         if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
@@ -91,22 +105,6 @@ impl Backend for Wgpu {
             }],
         })
     }
-}
-impl Wgpu {
-    /*#[cfg_attr(feature = "trace", tracing::instrument)]
-    pub fn create_instance(
-        advanced_dbg: bool,
-        backends: wgpu::Backends,
-        preset_unified_memory: Option<bool>,
-    ) -> Result<WgpuInstance, WgpuError> {
-        Ok(WgpuInstance {
-            instance: instance,
-            adapter,
-            device,
-            queue,
-            unified_memory,
-        })
-    }*/
 }
 
 #[derive(Debug)]
