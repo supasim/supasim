@@ -94,11 +94,11 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
         drop(kernel_compiler);
         info!("Constructing kernel objects");
 
-        let mut kernel = instance.compile_kernel(super::KernelDescriptor {
+        let kernel = instance.compile_kernel(super::KernelDescriptor {
             reflection: add_reflection,
             binary: &add_code,
         })?;
-        let mut kernel2 = instance.compile_kernel(super::KernelDescriptor {
+        let kernel2 = instance.compile_kernel(super::KernelDescriptor {
             reflection: double_reflection,
             binary: &double_code,
         })?;
@@ -119,7 +119,7 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
         upload_buffer.write(&device, 0, bytemuck::cast_slice(&[5u32, 8u32, 2u32, 0]))?;
         let bind_group = stream.create_bind_group(
             &device,
-            &mut kernel,
+            &kernel,
             &[
                 HalBufferSlice {
                     buffer: &sb1,
@@ -140,7 +140,7 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
         )?;
         let bind_group2 = stream.create_bind_group(
             &device,
-            &mut kernel2,
+            &kernel2,
             &[HalBufferSlice {
                 buffer: &sbout,
                 offset: 0,
@@ -261,8 +261,8 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
 
         recorder.destroy(&stream)?;
         fun_semaphore.destroy(&device)?;
-        bind_group.destroy(&stream, &mut kernel)?;
-        bind_group2.destroy(&stream, &mut kernel2)?;
+        bind_group.destroy(&stream, &kernel)?;
+        bind_group2.destroy(&stream, &kernel2)?;
         kernel.destroy(&instance)?;
         kernel2.destroy(&instance)?;
         sb1.destroy(&device)?;

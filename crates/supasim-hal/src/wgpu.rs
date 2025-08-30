@@ -222,7 +222,7 @@ impl Stream<Wgpu> for WgpuStream {
     unsafe fn create_bind_group(
         &self,
         _device: &WgpuDevice,
-        kernel: &mut <Wgpu as Backend>::Kernel,
+        kernel: &<Wgpu as Backend>::Kernel,
         resources: &[HalBufferSlice<Wgpu>],
     ) -> Result<<Wgpu as Backend>::BindGroup, <Wgpu as Backend>::Error> {
         let entries: Vec<wgpu::BindGroupEntry<'_>> = resources
@@ -561,7 +561,7 @@ impl BindGroup<Wgpu> for WgpuBindGroup {
         &mut self,
         device: &WgpuDevice,
         stream: &<Wgpu as Backend>::Stream,
-        kernel: &mut <Wgpu as Backend>::Kernel,
+        kernel: &<Wgpu as Backend>::Kernel,
         buffers: &[HalBufferSlice<Wgpu>],
     ) -> Result<(), <Wgpu as Backend>::Error> {
         unsafe {
@@ -574,7 +574,7 @@ impl BindGroup<Wgpu> for WgpuBindGroup {
     unsafe fn destroy(
         self,
         _stream: &<Wgpu as Backend>::Stream,
-        _kernel: &mut <Wgpu as Backend>::Kernel,
+        _kernel: &<Wgpu as Backend>::Kernel,
     ) -> Result<(), <Wgpu as Backend>::Error> {
         Ok(())
     }

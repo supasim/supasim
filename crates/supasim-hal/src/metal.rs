@@ -134,7 +134,7 @@ impl Stream<Metal> for MetalStream {
     unsafe fn create_bind_group(
         &self,
         _device: &MetalDevice,
-        _kernel: &mut <Metal as Backend>::Kernel,
+        _kernel: &<Metal as Backend>::Kernel,
         slices: &[crate::HalBufferSlice<Metal>],
     ) -> Result<<Metal as Backend>::BindGroup, <Metal as Backend>::Error> {
         let mut buffers = Vec::new();
@@ -405,7 +405,7 @@ impl BindGroup<Metal> for MetalBindGroup {
         &mut self,
         _device: &MetalDevice,
         _stream: &<Metal as Backend>::Stream,
-        _kernel: &mut <Metal as Backend>::Kernel,
+        _kernel: &<Metal as Backend>::Kernel,
         buffers: &[crate::HalBufferSlice<Metal>],
     ) -> Result<(), <Metal as Backend>::Error> {
         let mut buffers_lock = self.buffers.lock().unwrap();
@@ -421,7 +421,7 @@ impl BindGroup<Metal> for MetalBindGroup {
     unsafe fn destroy(
         self,
         _instance: &<Metal as Backend>::Stream,
-        _kernel: &mut <Metal as Backend>::Kernel,
+        _kernel: &<Metal as Backend>::Kernel,
     ) -> Result<(), <Metal as Backend>::Error> {
         Ok(())
     }

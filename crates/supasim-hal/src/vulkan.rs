@@ -762,20 +762,26 @@ impl Stream<Vulkan> for VulkanStream {
     unsafe fn create_bind_group(
         &self,
         device: &VulkanDevice,
-        kernel: &mut VulkanKernel,
+        kernel: &VulkanKernel,
         resources: &[crate::HalBufferSlice<Vulkan>],
     ) -> Result<VulkanBindGroup, VulkanError> {
+        let mut lock = kernel.descriptor_pools.lock().unwrap();
         let mut pool_idx = None;
-        for (i, pool) in kernel.descriptor_pools.iter_mut().enumerate() {
+        for (i, pool) in kernel
+            .descriptor_pools
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
             if pool.max_size > pool.current_size {
                 pool_idx = Some(i);
                 break;
             }
         }
         if pool_idx.is_none() {
-            pool_idx = Some(kernel.descriptor_pools.len());
-            let next_size = kernel
-                .descriptor_pools
+            pool_idx = Some(lock.len());
+            let next_size = lock
                 .last()
                 .map(|s| s.max_size * 2)
                 .unwrap_or(8)
@@ -798,7 +804,7 @@ impl Stream<Vulkan> for VulkanStream {
                     .shared
                     .functions
                     .create_descriptor_pool(&create_info, None)?;
-                kernel.descriptor_pools.push(DescriptorPoolData {
+                lock.push(DescriptorPoolData {
                     pool,
                     max_size: next_size,
                     current_size: 0,
@@ -806,9 +812,13 @@ impl Stream<Vulkan> for VulkanStream {
             }
         }
         let pool_idx = pool_idx.unwrap();
+        let pool = lock[pool_idx].pool;
+        lock[pool_idx].current_size += 1;
+        drop(lock);
+
         unsafe {
             let alloc_info = vk::DescriptorSetAllocateInfo::default()
-                .descriptor_pool(kernel.descriptor_pools[pool_idx].pool)
+                .descriptor_pool(pool)
                 .set_layouts(std::slice::from_ref(&kernel.descriptor_set_layout));
             let descriptor_set = self
                 .shared
@@ -821,13 +831,13 @@ impl Stream<Vulkan> for VulkanStream {
             };
 
             if let Err(e) = bg.update(device, self, kernel, resources) {
-                let _ = self.shared.functions.free_descriptor_sets(
-                    kernel.descriptor_pools[pool_idx].pool,
-                    &[descriptor_set],
-                );
+                let _ = self
+                    .shared
+                    .functions
+                    .free_descriptor_sets(pool, &[descriptor_set]);
+                kernel.descriptor_pools.lock().unwrap()[pool_idx].current_size -= 1;
                 Err(e)
             } else {
-                kernel.descriptor_pools[pool_idx].current_size += 1;
                 Ok(bg)
             }
         }
@@ -1008,7 +1018,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 pipeline,
                 pipeline_layout,
                 descriptor_set_layout,
-                descriptor_pools: Vec::new(),
+                descriptor_pools: Mutex::new(Vec::new()),
             })
         }
     }
@@ -1023,13 +1033,16 @@ pub struct VulkanKernel {
     pub pipeline: vk::Pipeline,
     pub descriptor_set_layout: vk::DescriptorSetLayout,
     pub pipeline_layout: vk::PipelineLayout,
-    pub descriptor_pools: Vec<DescriptorPoolData>,
+    pub descriptor_pools: Mutex<Vec<DescriptorPoolData>>,
 }
 impl Kernel<Vulkan> for VulkanKernel {
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn destroy(self, instance: &VulkanInstance) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn destroy(
+        mut self,
+        instance: &VulkanInstance,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            for pool in self.descriptor_pools {
+            for pool in self.descriptor_pools.get_mut().unwrap() {
                 instance
                     .shared
                     .functions
@@ -1450,7 +1463,7 @@ impl BindGroup<Vulkan> for VulkanBindGroup {
         &mut self,
         device: &VulkanDevice,
         _stream: &VulkanStream,
-        _kernel: &mut <Vulkan as Backend>::Kernel,
+        _kernel: &<Vulkan as Backend>::Kernel,
         resources: &[HalBufferSlice<Vulkan>],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         let mut writes = Vec::with_capacity(resources.len());
@@ -1482,11 +1495,11 @@ impl BindGroup<Vulkan> for VulkanBindGroup {
     unsafe fn destroy(
         self,
         stream: &VulkanStream,
-        kernel: &mut <Vulkan as Backend>::Kernel,
+        kernel: &<Vulkan as Backend>::Kernel,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             stream.shared.functions.free_descriptor_sets(
-                kernel.descriptor_pools[self.pool_idx as usize].pool,
+                kernel.descriptor_pools.lock().unwrap()[self.pool_idx as usize].pool,
                 &[self.inner],
             )?;
         }

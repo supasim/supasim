@@ -145,13 +145,12 @@ pub trait BindGroup<B: Backend<BindGroup = Self>>: Send {
         &mut self,
         device: &B::Device,
         stream: &B::Stream,
-        // TODO: figure out if this (and destroy, create) should take &Kernel or &mut Kernel
-        kernel: &mut B::Kernel,
+        kernel: &B::Kernel,
         buffers: &[HalBufferSlice<B>],
     ) -> Result<(), B::Error>;
     /// # Safety
     /// * All command recorders using this bind group must've been cleared
-    unsafe fn destroy(self, stream: &B::Stream, kernel: &mut B::Kernel) -> Result<(), B::Error>;
+    unsafe fn destroy(self, stream: &B::Stream, kernel: &B::Kernel) -> Result<(), B::Error>;
 }
 
 pub trait Semaphore<B: Backend<Semaphore = Self>>: Send {
@@ -211,7 +210,7 @@ pub trait Stream<B: Backend<Stream = Self>> {
     unsafe fn create_bind_group(
         &self,
         device: &B::Device,
-        kernel: &mut B::Kernel,
+        kernel: &B::Kernel,
         buffers: &[HalBufferSlice<B>],
     ) -> Result<B::BindGroup, B::Error>;
     /// # Safety
