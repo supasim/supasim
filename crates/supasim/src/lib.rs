@@ -365,7 +365,7 @@ impl<B: hal::Backend> Deref for SupaSimInstanceInner<B> {
     }
 }
 impl<B: hal::Backend> SupaSimInstance<B> {
-    pub fn from_hal(mut hal: B::Instance) -> Self {
+    pub fn from_hal(hal: hal::InstanceDescriptor<B>) -> Self {
         let inner_properties = hal.get_properties();
         let s = Self::from_inner(SupaSimInstanceInner {
             _phantom: Default::default(),
