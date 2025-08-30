@@ -5,8 +5,9 @@
 END LICENSE */
 
 use crate::{
-    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, HalBufferSlice,
-    Kernel, RecorderSubmitInfo, Semaphore,
+    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, Device,
+    DeviceDescriptor, HalBufferSlice, InstanceDescriptor, Kernel, KernelDescriptor,
+    RecorderSubmitInfo, Semaphore, Stream, StreamDescriptor,
 };
 use ash::{
     Entry, khr,
@@ -25,7 +26,7 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use types::{HalBufferType, HalInstanceProperties, KernelReflectionInfo, SyncOperations};
+use types::{HalBufferType, HalInstanceProperties, SyncOperations};
 
 use scopeguard::defer;
 
@@ -51,14 +52,21 @@ use scopeguard::defer;
 #[derive(Debug, Clone)]
 pub struct Vulkan;
 impl Backend for Vulkan {
+    type Instance = VulkanInstance;
+    type Device = VulkanDevice;
+    type Stream = VulkanStream;
+
     type Buffer = VulkanBuffer;
     type BindGroup = VulkanBindGroup;
     type CommandRecorder = VulkanCommandRecorder;
-    type Instance = VulkanInstance;
     type Kernel = VulkanKernel;
     type Semaphore = VulkanSemaphore;
 
     type Error = VulkanError;
+
+    fn setup_default_descriptor() -> Result<crate::InstanceDescriptor<Self>, Self::Error> {
+        todo!()
+    }
 }
 impl Vulkan {
     unsafe extern "system" fn vulkan_debug_callback(
@@ -102,7 +110,7 @@ impl Vulkan {
 
         vk::FALSE
     }
-    pub fn create_instance(debug: bool) -> Result<VulkanInstance, VulkanError> {
+    pub fn create_instance(debug: bool) -> Result<InstanceDescriptor<Vulkan>, VulkanError> {
         unsafe {
             let err = Cell::new(true);
             let entry = Entry::load()?;
@@ -399,7 +407,7 @@ impl Vulkan {
         spirv_version: types::SpirvVersion,
         api_version: u32,
         force_is_unified_memory: Option<bool>,
-    ) -> Result<VulkanInstance, VulkanError> {
+    ) -> Result<InstanceDescriptor<Vulkan>, VulkanError> {
         unsafe {
             let mut debug_settings = AllocatorDebugSettings::default();
             if debug {
@@ -415,7 +423,7 @@ impl Vulkan {
                 buffer_device_address: false,
                 allocation_sizes: AllocationSizes::default(),
             })?;
-            let pool = device.create_command_pool(
+            let command_pool = device.create_command_pool(
                 &vk::CommandPoolCreateInfo::default()
                     .queue_family_index(queue_family_idx)
                     .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
@@ -444,26 +452,45 @@ impl Vulkan {
                         .flags
                         .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
             };
-            let s = VulkanInstance {
+            let instance = VulkanInstance {
                 entry,
                 instance,
                 _phyd: phyd,
-                alloc: Mutex::new(alloc),
-                queue,
-                queue_family_idx,
-                command_pool: pool,
-                unused_command_buffers: Vec::new(),
                 debug: debug_callback,
-                device: Arc::new(DeviceFunctions {
-                    device,
-                    sync2_device,
-                    timeline_device,
+                shared: Arc::new(SharedDeviceInfo {
+                    functions: DeviceFunctions {
+                        device,
+                        sync2_device,
+                        timeline_device,
+                    },
+                    queue_family_indices: vec![queue_family_idx, vk::QUEUE_FAMILY_EXTERNAL],
                 }),
                 spirv_version,
-                is_unified_memory,
                 _api_version: api_version,
             };
-            Ok(s)
+            let device = VulkanDevice {
+                shared: instance.shared.clone(),
+                alloc: Mutex::new(alloc),
+                is_unified_memory,
+            };
+            let stream = VulkanStream {
+                shared: instance.shared.clone(),
+                queue,
+                queue_family_idx,
+                command_pool,
+                unused_command_buffers: Mutex::new(Vec::new()),
+            };
+            Ok(InstanceDescriptor {
+                instance,
+                devices: vec![DeviceDescriptor {
+                    device,
+                    streams: vec![StreamDescriptor {
+                        stream,
+                        stream_type: crate::StreamType::ComputeAndTransfer,
+                    }],
+                    group_idx: None,
+                }],
+            })
         }
     }
 }
@@ -521,206 +548,36 @@ impl crate::Error<Vulkan> for VulkanError {
         }
     }
 }
-pub struct VulkanInstance {
-    entry: ash::Entry,
-    instance: ash::Instance,
-    _phyd: vk::PhysicalDevice,
+
+pub struct VulkanDevice {
+    shared: Arc<SharedDeviceInfo>,
     alloc: Mutex<Allocator>,
-    queue: vk::Queue,
-    queue_family_idx: u32,
-    command_pool: vk::CommandPool,
-    unused_command_buffers: Vec<vk::CommandBuffer>,
-    debug: Option<vk::DebugUtilsMessengerEXT>,
-    device: Arc<DeviceFunctions>,
-    spirv_version: types::SpirvVersion,
     is_unified_memory: bool,
-    _api_version: u32,
 }
-impl Debug for VulkanInstance {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("VulkanInstance")
-    }
-}
-impl Display for VulkanInstance {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "VulkanInstance({})", self.device.handle().as_raw())
-    }
-}
-impl VulkanInstance {
-    #[tracing::instrument]
-    pub fn get_command_buffer(&mut self) -> Result<vk::CommandBuffer, VulkanError> {
-        match self.unused_command_buffers.pop() {
-            Some(c) => Ok(c),
-            None => unsafe {
-                Ok(self
-                    .device
-                    .allocate_command_buffers(
-                        &vk::CommandBufferAllocateInfo::default()
-                            .command_pool(self.command_pool)
-                            .level(vk::CommandBufferLevel::PRIMARY)
-                            .command_buffer_count(1),
-                    )?
-                    .into_iter()
-                    .next()
-                    .unwrap())
-            },
+
+impl Device<Vulkan> for VulkanDevice {
+    fn get_properties(
+        &self,
+        _instance: &<Vulkan as Backend>::Instance,
+    ) -> types::HalDeviceProperties {
+        types::HalDeviceProperties {
+            is_unified_memory: self.is_unified_memory,
+            host_mappable_buffers: self.is_unified_memory,
         }
     }
-}
-impl BackendInstance<Vulkan> for VulkanInstance {
-    #[tracing::instrument]
-    unsafe fn destroy(mut self) -> Result<(), VulkanError> {
-        unsafe {
-            self.alloc
-                .get_mut()
-                .unwrap()
-                .report_memory_leaks(log::Level::Error);
-            drop(self.alloc);
-            self.device.destroy_command_pool(self.command_pool, None);
-            self.device.destroy_device(None);
-            if let Some(debug) = self.debug {
-                ash::ext::debug_utils::Instance::new(&self.entry, &self.instance)
-                    .destroy_debug_utils_messenger(debug, None);
-            }
-            self.instance.destroy_instance(None);
-        }
+    unsafe fn cleanup_cached_resources(
+        &self,
+        _instance: &<Vulkan as Backend>::Instance,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
         Ok(())
     }
-    #[tracing::instrument]
-    fn get_properties(&mut self) -> HalInstanceProperties {
-        HalInstanceProperties {
-            sync_mode: types::SyncMode::VulkanStyle,
-            pipeline_cache: true,
-            kernel_lang: types::KernelTarget::Spirv {
-                version: self.spirv_version,
-            },
-            easily_update_bind_groups: false,
-            semaphore_signal: true,
-            map_buffers: true,
-            is_unified_memory: self.is_unified_memory,
-            map_buffer_while_gpu_use: true,
-            upload_download_buffers: true,
-        }
-    }
-    #[tracing::instrument(skip(binary))]
-    unsafe fn compile_kernel(
-        &mut self,
-        binary: &[u8],
-        reflection: &KernelReflectionInfo,
-        cache: Option<&mut VulkanPipelineCache>,
-    ) -> Result<<Vulkan as Backend>::Kernel, <Vulkan as Backend>::Error> {
-        unsafe {
-            let err = Cell::new(true);
-            let kernel_create_info = &vk::ShaderModuleCreateInfo::default();
-            let ptr = binary.as_ptr() as *const u32;
-            assert!(binary.len() % 4 == 0);
-            let kernel = if ptr.is_aligned() {
-                self.device.create_shader_module(
-                    &kernel_create_info.code(std::slice::from_raw_parts(ptr, binary.len() / 4)),
-                    None,
-                )?
-            } else {
-                let mut v = Vec::<u32>::with_capacity(binary.len() / 4);
-                #[allow(clippy::uninit_vec)]
-                v.set_len(binary.len() / 4);
-                binary
-                    .as_ptr()
-                    .copy_to(v.as_mut_ptr() as *mut u8, binary.len());
-                self.device
-                    .create_shader_module(&kernel_create_info.code(&v), None)?
-            };
-            defer! {
-                if err.get() {
-                    self.device.destroy_shader_module(kernel, None);
-                }
-            }
-            let mut bindings = Vec::with_capacity(reflection.buffers.len());
-            for i in 0..reflection.buffers.len() {
-                bindings.push(
-                    vk::DescriptorSetLayoutBinding::default()
-                        .binding(i as u32)
-                        .descriptor_count(1)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .stage_flags(vk::ShaderStageFlags::COMPUTE),
-                );
-            }
-            let desc_set_layout_create =
-                vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-            let descriptor_set_layout = self
-                .device
-                .create_descriptor_set_layout(&desc_set_layout_create, None)?;
-            defer! {
-                if err.get() {
-                    self.device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                }
-            }
-            let pipeline_layout = self.device.create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::default().set_layouts(&[descriptor_set_layout]),
-                None,
-            )?;
-            let _cache_lock;
-            let cache = if let Some(c) = cache {
-                let lock = c
-                    .inner
-                    .lock()
-                    .map_err(|e| VulkanError::LockError(e.to_string()))?;
-                let cache = *lock;
-                _cache_lock = Some(lock);
-                cache
-            } else {
-                _cache_lock = None;
-                vk::PipelineCache::null()
-            };
-            let entry = c"main";
-            let pipeline_create_info = vk::ComputePipelineCreateInfo::default()
-                .stage(
-                    vk::PipelineShaderStageCreateInfo::default()
-                        .stage(vk::ShaderStageFlags::COMPUTE)
-                        .module(kernel)
-                        .name(entry),
-                )
-                .layout(pipeline_layout);
-            let pipeline = self
-                .device
-                .create_compute_pipelines(cache, &[pipeline_create_info], None)
-                .map_err(|e| e.1)?[0];
-            drop(_cache_lock);
-            err.set(false);
-            Ok(VulkanKernel {
-                kernel,
-                pipeline,
-                pipeline_layout,
-                descriptor_set_layout,
-                descriptor_pools: Vec::new(),
-            })
-        }
-    }
-    #[tracing::instrument]
-    unsafe fn destroy_kernel(
-        &mut self,
-        kernel: <Vulkan as Backend>::Kernel,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            for pool in kernel.descriptor_pools {
-                self.device.destroy_descriptor_pool(pool.pool, None);
-            }
-            self.device.destroy_pipeline(kernel.pipeline, None);
-            self.device
-                .destroy_pipeline_layout(kernel.pipeline_layout, None);
-            self.device.destroy_shader_module(kernel.kernel, None);
-            self.device
-                .destroy_descriptor_set_layout(kernel.descriptor_set_layout, None);
-            Ok(())
-        }
-    }
-    #[tracing::instrument]
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_buffer(
-        &mut self,
+        &self,
         alloc_info: &types::HalBufferDescriptor,
     ) -> Result<<Vulkan as Backend>::Buffer, <Vulkan as Backend>::Error> {
         unsafe {
             let err = Cell::new(true);
-            let queue_family_indices = [self.queue_family_idx, vk::QUEUE_FAMILY_EXTERNAL];
             /*let sharing_mode = if alloc_info.can_export {
                 vk::SharingMode::CONCURRENT
             } else {
@@ -729,7 +586,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             let create_info = vk::BufferCreateInfo::default()
                 .size(alloc_info.size)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .queue_family_indices(&queue_family_indices)
+                .queue_family_indices(&self.shared.queue_family_indices)
                 .usage({
                     use vk::BufferUsageFlags as F;
                     match alloc_info.memory_type {
@@ -741,14 +598,15 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                         HalBufferType::UploadDownload => F::TRANSFER_SRC | F::TRANSFER_DST,
                     }
                 });
-            let buffer = self.device.create_buffer(&create_info, None)?;
+            let buffer = self.shared.functions.create_buffer(&create_info, None)?;
             defer! {
                 if err.get() {
-                    self.device.destroy_buffer(buffer, None);
+                    self.shared.functions.destroy_buffer(buffer, None);
                 }
             }
             let requirements = self
-                .device
+                .shared
+                .functions
                 .get_buffer_memory_requirements(buffer)
                 .alignment(alloc_info.min_alignment as u64);
             use types::HalBufferType::*;
@@ -768,10 +626,11 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     linear: true,
                     allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
                 })?;
-            if let Err(e) =
-                self.device
-                    .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
-            {
+            if let Err(e) = self.shared.functions.bind_buffer_memory(
+                buffer,
+                allocation.memory(),
+                allocation.offset(),
+            ) {
                 let error = e.into();
                 self.alloc.lock().unwrap().free(allocation)?;
                 return Err(error);
@@ -789,64 +648,118 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             })
         }
     }
-
-    #[tracing::instrument]
-    unsafe fn destroy_buffer(
-        &mut self,
-        buffer: <Vulkan as Backend>::Buffer,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn create_semaphore(&self) -> std::result::Result<VulkanSemaphore, VulkanError> {
         unsafe {
-            self.device.destroy_buffer(buffer.buffer, None);
-            self.alloc.lock().unwrap().free(buffer.allocation)?;
-            Ok(())
-        }
-    }
-    #[tracing::instrument(skip(initial_data))]
-    unsafe fn create_kernel_cache(
-        &mut self,
-        initial_data: &[u8],
-    ) -> Result<<Vulkan as Backend>::KernelCache, <Vulkan as Backend>::Error> {
-        unsafe {
-            let create_info = vk::PipelineCacheCreateInfo::default().initial_data(initial_data);
-            let pc = self.device.create_pipeline_cache(&create_info, None)?;
-            Ok(VulkanPipelineCache {
-                inner: Mutex::new(pc),
+            let mut next = vk::SemaphoreTypeCreateInfo::default()
+                .initial_value(0)
+                .semaphore_type(vk::SemaphoreType::TIMELINE);
+            let create_info = vk::SemaphoreCreateInfo::default()
+                .flags(vk::SemaphoreCreateFlags::empty())
+                .push_next(&mut next);
+            Ok(VulkanSemaphore {
+                inner: self.shared.functions.create_semaphore(&create_info, None)?,
+                current_value: Mutex::new(0),
             })
         }
     }
-    #[tracing::instrument]
-    unsafe fn destroy_kernel_cache(
-        &mut self,
-        cache: <Vulkan as Backend>::KernelCache,
+    unsafe fn destroy(
+        self,
+        _instance: &mut <Vulkan as Backend>::Instance,
     ) -> Result<(), <Vulkan as Backend>::Error> {
+        self.alloc.lock().unwrap().report_memory_leaks(Level::Error);
+        drop(self.alloc);
+        Ok(())
+    }
+}
+
+pub struct VulkanStream {
+    shared: Arc<SharedDeviceInfo>,
+    queue: vk::Queue,
+    queue_family_idx: u32,
+    command_pool: vk::CommandPool,
+    unused_command_buffers: Mutex<Vec<vk::CommandBuffer>>,
+}
+
+impl Stream<Vulkan> for VulkanStream {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn wait_for_idle(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            let lock = cache
-                .inner
-                .lock()
-                .map_err(|e| VulkanError::LockError(e.to_string()))?;
-            self.device.destroy_pipeline_cache(*lock, None);
-            drop(lock);
+            self.shared.functions.queue_wait_idle(self.queue)?;
             Ok(())
         }
     }
-    #[tracing::instrument]
-    unsafe fn get_kernel_cache_data(
-        &mut self,
-        cache: &mut <Vulkan as Backend>::KernelCache,
-    ) -> Result<Vec<u8>, <Vulkan as Backend>::Error> {
-        unsafe {
-            let lock = cache
-                .inner
-                .lock()
-                .map_err(|e| VulkanError::LockError(e.to_string()))?;
-            let data = self.device.get_pipeline_cache_data(*lock)?;
-            drop(lock);
-            Ok(data)
-        }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn create_recorder(
+        &self,
+    ) -> Result<<Vulkan as Backend>::CommandRecorder, <Vulkan as Backend>::Error> {
+        Ok(VulkanCommandRecorder {
+            inner: self.get_command_buffer()?,
+        })
     }
-    #[tracing::instrument]
-    unsafe fn create_bind_group(
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn submit_recorders(
         &mut self,
+        infos: &mut [RecorderSubmitInfo<Vulkan>],
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        let mut submits = Vec::new();
+        let mut wait_semaphores = Vec::new();
+        let mut signal_semaphores = Vec::new();
+        let mut cb_infos = Vec::new();
+        for info in &*infos {
+            for sem in info.wait_semaphores {
+                wait_semaphores.push(
+                    vk::SemaphoreSubmitInfoKHR::default()
+                        .semaphore(sem.inner)
+                        .value(*sem.current_value.lock().unwrap() + 1)
+                        .stage_mask(vk::PipelineStageFlags2KHR::ALL_COMMANDS_KHR),
+                );
+            }
+            if let Some(s) = info.signal_semaphore {
+                signal_semaphores.push(
+                    vk::SemaphoreSubmitInfoKHR::default()
+                        .semaphore(s.inner)
+                        .value(*s.current_value.lock().unwrap() + 1)
+                        .stage_mask(vk::PipelineStageFlags2KHR::ALL_COMMANDS_KHR),
+                );
+            }
+            cb_infos.push(
+                vk::CommandBufferSubmitInfoKHR::default()
+                    .command_buffer(info.command_recorder.inner),
+            );
+        }
+        {
+            let mut wait_idx = 0;
+            let mut signal_idx = 0;
+            for (cb_idx, info) in (*infos).iter().enumerate() {
+                let submit = vk::SubmitInfo2KHR::default()
+                    .command_buffer_infos(std::slice::from_ref(&cb_infos[cb_idx]))
+                    .wait_semaphore_infos(
+                        &wait_semaphores[wait_idx..wait_idx + info.wait_semaphores.len()],
+                    )
+                    .signal_semaphore_infos(if info.signal_semaphore.is_some() {
+                        std::slice::from_ref(&signal_semaphores[signal_idx])
+                    } else {
+                        &[]
+                    });
+                submits.push(submit);
+                wait_idx += info.wait_semaphores.len();
+                signal_idx += info.signal_semaphore.is_some() as usize;
+            }
+        }
+
+        unsafe {
+            self.shared
+                .functions
+                .supa_queue_submit2(self.queue, &submits, vk::Fence::null())?;
+        }
+        Ok(())
+    }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn create_bind_group(
+        &self,
+        device: &VulkanDevice,
         kernel: &mut VulkanKernel,
         resources: &[crate::HalBufferSlice<Vulkan>],
     ) -> Result<VulkanBindGroup, VulkanError> {
@@ -879,7 +792,10 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     .max_sets(next_size)
                     .pool_sizes(&sizes)
                     .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET);
-                let pool = self.device.create_descriptor_pool(&create_info, None)?;
+                let pool = self
+                    .shared
+                    .functions
+                    .create_descriptor_pool(&create_info, None)?;
                 kernel.descriptor_pools.push(DescriptorPoolData {
                     pool,
                     max_size: next_size,
@@ -892,14 +808,18 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             let alloc_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(kernel.descriptor_pools[pool_idx].pool)
                 .set_layouts(std::slice::from_ref(&kernel.descriptor_set_layout));
-            let descriptor_set = self.device.allocate_descriptor_sets(&alloc_info)?[0];
+            let descriptor_set = self
+                .shared
+                .functions
+                .allocate_descriptor_sets(&alloc_info)?[0];
             defer! {}
             let mut bg = VulkanBindGroup {
                 inner: descriptor_set,
                 pool_idx: pool_idx as u32,
             };
-            if let Err(e) = self.update_bind_group(&mut bg, kernel, resources) {
-                let _ = self.device.free_descriptor_sets(
+
+            if let Err(e) = bg.update(device, self, kernel, resources) {
+                let _ = self.shared.functions.free_descriptor_sets(
                     kernel.descriptor_pools[pool_idx].pool,
                     &[descriptor_set],
                 );
@@ -910,215 +830,188 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             }
         }
     }
-    #[tracing::instrument]
-    unsafe fn update_bind_group(
-        &mut self,
-        bg: &mut <Vulkan as Backend>::BindGroup,
-        _kernel: &mut <Vulkan as Backend>::Kernel,
-        resources: &[HalBufferSlice<Vulkan>],
+    unsafe fn cleanup_cached_resources(
+        &self,
+        instance: &<Vulkan as Backend>::Instance,
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        let mut writes = Vec::with_capacity(resources.len());
-        let mut buffer_infos = Vec::with_capacity(resources.len());
-        for resource in resources {
-            buffer_infos.push(
-                vk::DescriptorBufferInfo::default()
-                    .buffer(resource.buffer.buffer)
-                    .offset(resource.offset)
-                    .range(resource.len),
-            );
-        }
-        for (i, info) in buffer_infos.iter().enumerate() {
-            writes.push(
-                vk::WriteDescriptorSet::default()
-                    .dst_set(bg.inner)
-                    .descriptor_count(1)
-                    .dst_binding(i as u32)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .buffer_info(std::slice::from_ref(info)),
-            );
-        }
+        let mut vk_cbs = self.unused_command_buffers.lock().unwrap();
         unsafe {
-            self.device.update_descriptor_sets(&writes, &[]);
+            instance
+                .shared
+                .functions
+                .free_command_buffers(self.command_pool, &vk_cbs);
         }
+        vk_cbs.clear();
         Ok(())
     }
-    #[tracing::instrument]
-    unsafe fn destroy_bind_group(
-        &mut self,
-        kernel: &mut <Vulkan as Backend>::Kernel,
-        bind_group: VulkanBindGroup,
+    unsafe fn destroy(
+        self,
+        _device: &mut <Vulkan as Backend>::Device,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            self.device.free_descriptor_sets(
-                kernel.descriptor_pools[bind_group.pool_idx as usize].pool,
-                &[bind_group.inner],
-            )?;
+            self.shared
+                .functions
+                .destroy_command_pool(self.command_pool, None);
         }
         Ok(())
     }
-    #[tracing::instrument]
-    unsafe fn create_recorder(
-        &mut self,
-    ) -> Result<<Vulkan as Backend>::CommandRecorder, <Vulkan as Backend>::Error> {
-        Ok(VulkanCommandRecorder {
-            inner: self.get_command_buffer()?,
-        })
-    }
-    #[tracing::instrument]
-    unsafe fn destroy_recorder(
-        &mut self,
-        recorder: <Vulkan as Backend>::CommandRecorder,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        self.unused_command_buffers.push(recorder.inner);
-        Ok(())
-    }
-    #[tracing::instrument]
-    unsafe fn submit_recorders(
-        &mut self,
-        infos: &mut [RecorderSubmitInfo<Vulkan>],
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        let mut submits = Vec::new();
-        let mut wait_semaphores = Vec::new();
-        let mut signal_semaphores = Vec::new();
-        let mut cb_infos = Vec::new();
-        for info in &*infos {
-            if let Some(sem) = info.wait_semaphore {
-                wait_semaphores.push(
-                    vk::SemaphoreSubmitInfoKHR::default()
-                        .semaphore(sem.inner)
-                        .value(*sem.current_value.lock().unwrap() + 1)
-                        .stage_mask(vk::PipelineStageFlags2KHR::ALL_COMMANDS_KHR),
-                );
-            }
-            if let Some(s) = info.signal_semaphore {
-                signal_semaphores.push(
-                    vk::SemaphoreSubmitInfoKHR::default()
-                        .semaphore(s.inner)
-                        .value(*s.current_value.lock().unwrap() + 1)
-                        .stage_mask(vk::PipelineStageFlags2KHR::ALL_COMMANDS_KHR),
-                );
-            }
-            cb_infos.push(
-                vk::CommandBufferSubmitInfoKHR::default()
-                    .command_buffer(info.command_recorder.inner),
-            );
-        }
-        {
-            let mut wait_idx = 0;
-            let mut signal_idx = 0;
-            for (cb_idx, info) in (*infos).iter().enumerate() {
-                let submit = vk::SubmitInfo2KHR::default()
-                    .command_buffer_infos(std::slice::from_ref(&cb_infos[cb_idx]))
-                    .wait_semaphore_infos(
-                        &wait_semaphores
-                            [wait_idx..wait_idx + info.wait_semaphore.is_some() as u8 as usize],
-                    )
-                    .signal_semaphore_infos(if info.signal_semaphore.is_some() {
-                        std::slice::from_ref(&signal_semaphores[signal_idx])
-                    } else {
-                        &[]
-                    });
-                submits.push(submit);
-                wait_idx += info.wait_semaphore.is_some() as u8 as usize;
-                signal_idx += info.signal_semaphore.is_some() as usize;
-            }
-        }
+}
 
+pub struct VulkanInstance {
+    entry: ash::Entry,
+    instance: ash::Instance,
+    _phyd: vk::PhysicalDevice,
+    debug: Option<vk::DebugUtilsMessengerEXT>,
+    shared: Arc<SharedDeviceInfo>,
+    spirv_version: types::SpirvVersion,
+    _api_version: u32,
+}
+impl Debug for VulkanInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("VulkanInstance")
+    }
+}
+impl Display for VulkanInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "VulkanInstance({})",
+            self.shared.functions.handle().as_raw()
+        )
+    }
+}
+impl VulkanStream {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    pub fn get_command_buffer(&self) -> Result<vk::CommandBuffer, VulkanError> {
+        match self.unused_command_buffers.lock().unwrap().pop() {
+            Some(c) => Ok(c),
+            None => unsafe {
+                Ok(self
+                    .shared
+                    .functions
+                    .allocate_command_buffers(
+                        &vk::CommandBufferAllocateInfo::default()
+                            .command_pool(self.command_pool)
+                            .level(vk::CommandBufferLevel::PRIMARY)
+                            .command_buffer_count(1),
+                    )?
+                    .into_iter()
+                    .next()
+                    .unwrap())
+            },
+        }
+    }
+}
+impl BackendInstance<Vulkan> for VulkanInstance {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn destroy(self) -> Result<(), VulkanError> {
         unsafe {
-            self.device
-                .supa_queue_submit2(self.queue, &submits, vk::Fence::null())?;
+            self.shared.functions.destroy_device(None);
+            if let Some(debug) = self.debug {
+                ash::ext::debug_utils::Instance::new(&self.entry, &self.instance)
+                    .destroy_debug_utils_messenger(debug, None);
+            }
+            self.instance.destroy_instance(None);
         }
         Ok(())
     }
-    #[tracing::instrument]
-    unsafe fn wait_for_idle(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            self.device.device_wait_idle()?;
-            Ok(())
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    fn get_properties(&self) -> HalInstanceProperties {
+        HalInstanceProperties {
+            sync_mode: types::SyncMode::VulkanStyle,
+            kernel_lang: types::KernelTarget::Spirv {
+                version: self.spirv_version,
+            },
+            easily_update_bind_groups: false,
+            semaphore_signal: true,
+            map_buffers: true,
+            map_buffer_while_gpu_use: true,
+            upload_download_buffers: true,
         }
     }
-    #[tracing::instrument(skip(data), fields(len=data.len()))]
-    unsafe fn write_buffer(
-        &mut self,
-        buffer: &mut <Vulkan as Backend>::Buffer,
-        offset: u64,
-        data: &[u8],
-    ) -> Result<(), <Vulkan as Backend>::Error> {
+    #[cfg_attr(feature = "trace", tracing::instrument(skip(binary)))]
+    unsafe fn compile_kernel(
+        &self,
+        desc: KernelDescriptor,
+    ) -> Result<<Vulkan as Backend>::Kernel, <Vulkan as Backend>::Error> {
         unsafe {
-            let b =
-                (buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8).add(offset as usize);
-            let slice = std::slice::from_raw_parts_mut(b, data.len());
-            slice.copy_from_slice(data);
-            Ok(())
-        }
-    }
-    #[tracing::instrument(skip(data), fields(len=data.len()))]
-    unsafe fn read_buffer(
-        &mut self,
-        buffer: &mut <Vulkan as Backend>::Buffer,
-        offset: u64,
-        data: &mut [u8],
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            let b =
-                (buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8).add(offset as usize);
-            let slice = std::slice::from_raw_parts(b as *const u8, data.len());
-            data.copy_from_slice(slice);
-        }
-        Ok(())
-    }
-    #[tracing::instrument]
-    unsafe fn map_buffer(
-        &mut self,
-        buffer: &mut <Vulkan as Backend>::Buffer,
-    ) -> Result<*mut u8, <Vulkan as Backend>::Error> {
-        Ok(buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8)
-    }
-    #[tracing::instrument]
-    unsafe fn unmap_buffer(
-        &mut self,
-        buffer: &mut <Vulkan as Backend>::Buffer,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        // Unmapping isn't necessary on vulkan as long as the mapped pointer isn't used
-        // while it could be modified elsewhere
-        Ok(())
-    }
-    #[tracing::instrument]
-    unsafe fn create_semaphore(&mut self) -> std::result::Result<VulkanSemaphore, VulkanError> {
-        unsafe {
-            let mut next = vk::SemaphoreTypeCreateInfo::default()
-                .initial_value(0)
-                .semaphore_type(vk::SemaphoreType::TIMELINE);
-            let create_info = vk::SemaphoreCreateInfo::default()
-                .flags(vk::SemaphoreCreateFlags::empty())
-                .push_next(&mut next);
-            Ok(VulkanSemaphore {
-                inner: self.device.create_semaphore(&create_info, None)?,
-                current_value: Mutex::new(0),
-                device: self.device.clone(),
+            let err = Cell::new(true);
+            let kernel_create_info = &vk::ShaderModuleCreateInfo::default();
+            let ptr = desc.binary.as_ptr() as *const u32;
+            assert!(desc.binary.len() % 4 == 0);
+            let kernel = if ptr.is_aligned() {
+                self.shared.functions.create_shader_module(
+                    &kernel_create_info
+                        .code(std::slice::from_raw_parts(ptr, desc.binary.len() / 4)),
+                    None,
+                )?
+            } else {
+                let mut v = Vec::<u32>::with_capacity(desc.binary.len() / 4);
+                #[allow(clippy::uninit_vec)]
+                v.set_len(desc.binary.len() / 4);
+                desc.binary
+                    .as_ptr()
+                    .copy_to(v.as_mut_ptr() as *mut u8, desc.binary.len());
+                self.shared
+                    .functions
+                    .create_shader_module(&kernel_create_info.code(&v), None)?
+            };
+            defer! {
+                if err.get() {
+                    self.shared.functions.destroy_shader_module(kernel, None);
+                }
+            }
+            let mut bindings = Vec::with_capacity(desc.reflection.buffers.len());
+            for i in 0..desc.reflection.buffers.len() {
+                bindings.push(
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(i as u32)
+                        .descriptor_count(1)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .stage_flags(vk::ShaderStageFlags::COMPUTE),
+                );
+            }
+            let desc_set_layout_create =
+                vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+            let descriptor_set_layout = self
+                .shared
+                .functions
+                .create_descriptor_set_layout(&desc_set_layout_create, None)?;
+            defer! {
+                if err.get() {
+                    self.shared.functions.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                }
+            }
+            let pipeline_layout = self.shared.functions.create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo::default().set_layouts(&[descriptor_set_layout]),
+                None,
+            )?;
+            let entry = c"main";
+            let pipeline_create_info = vk::ComputePipelineCreateInfo::default()
+                .stage(
+                    vk::PipelineShaderStageCreateInfo::default()
+                        .stage(vk::ShaderStageFlags::COMPUTE)
+                        .module(kernel)
+                        .name(entry),
+                )
+                .layout(pipeline_layout);
+            let pipeline = self
+                .shared
+                .functions
+                .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
+                .map_err(|e| e.1)?[0];
+            err.set(false);
+            Ok(VulkanKernel {
+                kernel,
+                pipeline,
+                pipeline_layout,
+                descriptor_set_layout,
+                descriptor_pools: Vec::new(),
             })
         }
     }
-    #[tracing::instrument]
-    unsafe fn destroy_semaphore(
-        &mut self,
-        semaphore: VulkanSemaphore,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            self.device.destroy_semaphore(semaphore.inner, None);
-        }
-        Ok(())
-    }
-    #[tracing::instrument]
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
-        if !self.unused_command_buffers.is_empty() {
-            unsafe {
-                self.device
-                    .free_command_buffers(self.command_pool, &self.unused_command_buffers);
-            }
-        }
-        self.unused_command_buffers.clear();
-        self.unused_command_buffers.clear();
         Ok(())
     }
 }
@@ -1130,27 +1023,108 @@ pub struct VulkanKernel {
     pub pipeline_layout: vk::PipelineLayout,
     pub descriptor_pools: Vec<DescriptorPoolData>,
 }
-impl Kernel<Vulkan> for VulkanKernel {}
+impl Kernel<Vulkan> for VulkanKernel {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn destroy(self, instance: &VulkanInstance) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            for pool in self.descriptor_pools {
+                instance
+                    .shared
+                    .functions
+                    .destroy_descriptor_pool(pool.pool, None);
+            }
+            instance
+                .shared
+                .functions
+                .destroy_pipeline(self.pipeline, None);
+            instance
+                .shared
+                .functions
+                .destroy_pipeline_layout(self.pipeline_layout, None);
+            instance
+                .shared
+                .functions
+                .destroy_shader_module(self.kernel, None);
+            instance
+                .shared
+                .functions
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            Ok(())
+        }
+    }
+}
 #[derive(Debug)]
 pub struct VulkanBuffer {
     pub buffer: vk::Buffer,
     pub allocation: Allocation,
     pub create_info: types::HalBufferDescriptor,
 }
-impl Buffer<Vulkan> for VulkanBuffer {}
+impl Buffer<Vulkan> for VulkanBuffer {
+    #[cfg_attr(feature = "trace", tracing::instrument(skip(data), fields(len=data.len())))]
+    unsafe fn write(
+        &mut self,
+        _device: &VulkanDevice,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            let b =
+                (self.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8).add(offset as usize);
+            let slice = std::slice::from_raw_parts_mut(b, data.len());
+            slice.copy_from_slice(data);
+            Ok(())
+        }
+    }
+    #[cfg_attr(feature = "trace", tracing::instrument(skip(data), fields(len=data.len())))]
+    unsafe fn read(
+        &mut self,
+        _device: &VulkanDevice,
+        offset: u64,
+        data: &mut [u8],
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            let b =
+                (self.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8).add(offset as usize);
+            let slice = std::slice::from_raw_parts(b as *const u8, data.len());
+            data.copy_from_slice(slice);
+        }
+        Ok(())
+    }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn map(
+        &mut self,
+        _device: &VulkanDevice,
+    ) -> Result<*mut u8, <Vulkan as Backend>::Error> {
+        Ok(self.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8)
+    }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn unmap(&mut self, _device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
+        // Unmapping isn't necessary on vulkan as long as the mapped pointer isn't used
+        // while it could be modified elsewhere
+        Ok(())
+    }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn destroy(self, device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            device.shared.functions.destroy_buffer(self.buffer, None);
+            device.alloc.lock().unwrap().free(self.allocation)?;
+            Ok(())
+        }
+    }
+}
 #[derive(Debug)]
 pub struct VulkanCommandRecorder {
     inner: vk::CommandBuffer,
 }
 impl VulkanCommandRecorder {
-    #[tracing::instrument]
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn begin(
         &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
+        stream: &<Vulkan as Backend>::Stream,
         cb: vk::CommandBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            instance.device.begin_command_buffer(
+            stream.shared.functions.begin_command_buffer(
                 cb,
                 &vk::CommandBufferBeginInfo::default()
                     .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
@@ -1158,22 +1132,22 @@ impl VulkanCommandRecorder {
             Ok(())
         }
     }
-    #[tracing::instrument]
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn end(
         &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
+        stream: &<Vulkan as Backend>::Stream,
         cb: vk::CommandBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            instance.device.end_command_buffer(cb)?;
+            stream.shared.functions.end_command_buffer(cb)?;
             Ok(())
         }
     }
-    #[tracing::instrument]
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     #[allow(clippy::too_many_arguments)]
     fn copy_buffer(
         &mut self,
-        instance: &<Vulkan as Backend>::Instance,
+        stream: &<Vulkan as Backend>::Stream,
         src_buffer: &<Vulkan as Backend>::Buffer,
         dst_buffer: &<Vulkan as Backend>::Buffer,
         src_offset: u64,
@@ -1182,7 +1156,7 @@ impl VulkanCommandRecorder {
         cb: vk::CommandBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            instance.device.cmd_copy_buffer(
+            stream.shared.functions.cmd_copy_buffer(
                 cb,
                 src_buffer.buffer,
                 dst_buffer.buffer,
@@ -1194,10 +1168,10 @@ impl VulkanCommandRecorder {
         }
         Ok(())
     }
-    #[tracing::instrument(skip(push_constants), fields(push_constants_len=push_constants.len()))]
+    #[cfg_attr(feature = "trace", tracing::instrument(skip(push_constants), fields(push_constants_len=push_constants.len())))]
     fn dispatch_kernel(
         &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
+        stream: &<Vulkan as Backend>::Stream,
         kernel: &<Vulkan as Backend>::Kernel,
         descriptor_set: &<Vulkan as Backend>::BindGroup,
         push_constants: &[u8],
@@ -1205,10 +1179,12 @@ impl VulkanCommandRecorder {
         cb: vk::CommandBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            instance
-                .device
-                .cmd_bind_pipeline(cb, vk::PipelineBindPoint::COMPUTE, kernel.pipeline);
-            instance.device.cmd_bind_descriptor_sets(
+            stream.shared.functions.cmd_bind_pipeline(
+                cb,
+                vk::PipelineBindPoint::COMPUTE,
+                kernel.pipeline,
+            );
+            stream.shared.functions.cmd_bind_descriptor_sets(
                 cb,
                 vk::PipelineBindPoint::COMPUTE,
                 kernel.pipeline_layout,
@@ -1217,7 +1193,7 @@ impl VulkanCommandRecorder {
                 &[],
             );
             if !push_constants.is_empty() {
-                instance.device.cmd_push_constants(
+                stream.shared.functions.cmd_push_constants(
                     cb,
                     kernel.pipeline_layout,
                     vk::ShaderStageFlags::COMPUTE,
@@ -1225,7 +1201,7 @@ impl VulkanCommandRecorder {
                     push_constants,
                 );
             }
-            instance.device.cmd_dispatch(
+            stream.shared.functions.cmd_dispatch(
                 cb,
                 workgroup_dims[0],
                 workgroup_dims[1],
@@ -1234,18 +1210,19 @@ impl VulkanCommandRecorder {
         }
         Ok(())
     }
-    #[tracing::instrument]
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn zero_memory(
         &mut self,
-        instance: &mut <Vulkan as Backend>::Instance,
+        stream: &<Vulkan as Backend>::Stream,
         buffer: &VulkanBuffer,
         offset: u64,
         size: u64,
         cb: vk::CommandBuffer,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            instance
-                .device
+            stream
+                .shared
+                .functions
                 .cmd_fill_buffer(cb, buffer.buffer, offset, size, 0);
         }
         Ok(())
@@ -1261,7 +1238,7 @@ impl VulkanCommandRecorder {
     /// First command must be a pipeline barrier. Following commands must be memory barriers
     fn sync_command<'a>(
         &mut self,
-        instance: &<Vulkan as Backend>::Instance,
+        stream: &<Vulkan as Backend>::Stream,
         cb: vk::CommandBuffer,
         commands: impl IntoIterator<Item = &'a BufferCommand<'a, Vulkan>>,
     ) -> Result<(), VulkanError> {
@@ -1282,8 +1259,8 @@ impl VulkanCommandRecorder {
                         .buffer(buffer.buffer)
                         .offset(*offset)
                         .size(*len)
-                        .src_queue_family_index(instance.queue_family_idx)
-                        .dst_queue_family_index(instance.queue_family_idx)
+                        .src_queue_family_index(stream.queue_family_idx)
+                        .dst_queue_family_index(stream.queue_family_idx)
                         .src_access_mask(
                             vk::AccessFlags2KHR::MEMORY_READ_KHR
                                 | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
@@ -1309,10 +1286,10 @@ impl VulkanCommandRecorder {
                         .src_queue_family_index(if *import {
                             vk::QUEUE_FAMILY_EXTERNAL
                         } else {
-                            instance.queue_family_idx
+                            stream.queue_family_idx
                         })
                         .dst_queue_family_index(if *import {
-                            instance.queue_family_idx
+                            stream.queue_family_idx
                         } else {
                             vk::QUEUE_FAMILY_EXTERNAL
                         })
@@ -1341,18 +1318,19 @@ impl VulkanCommandRecorder {
         }
         let dependency_info = vk::DependencyInfoKHR::default().buffer_memory_barriers(&barriers);
         unsafe {
-            instance
-                .device
+            stream
+                .shared
+                .functions
                 .supa_cmd_pipeline_barrier2(cb, &dependency_info)
         };
         Ok(())
     }
-    #[tracing::instrument]
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn record_command(
         &mut self,
-        instance: &mut VulkanInstance,
+        stream: &VulkanStream,
         cb: vk::CommandBuffer,
-        command: &mut BufferCommand<Vulkan>,
+        command: &BufferCommand<Vulkan>,
     ) -> Result<(), VulkanError> {
         match command {
             BufferCommand::CopyBuffer {
@@ -1362,7 +1340,7 @@ impl VulkanCommandRecorder {
                 dst_offset,
                 len,
             } => self.copy_buffer(
-                instance,
+                stream,
                 src_buffer,
                 dst_buffer,
                 *src_offset,
@@ -1371,7 +1349,7 @@ impl VulkanCommandRecorder {
                 cb,
             )?,
             BufferCommand::ZeroMemory { buffer } => {
-                self.zero_memory(instance, buffer.buffer, buffer.offset, buffer.len, cb)?;
+                self.zero_memory(stream, buffer.buffer, buffer.offset, buffer.len, cb)?;
             }
             BufferCommand::DispatchKernel {
                 kernel,
@@ -1379,7 +1357,7 @@ impl VulkanCommandRecorder {
                 push_constants,
                 workgroup_dims,
             } => self.dispatch_kernel(
-                instance,
+                stream,
                 kernel,
                 bind_group,
                 push_constants,
@@ -1399,14 +1377,14 @@ impl VulkanCommandRecorder {
     }
 }
 impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
-    #[tracing::instrument]
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn record_commands(
         &mut self,
-        instance: &mut VulkanInstance,
-        commands: &mut [crate::BufferCommand<Vulkan>],
+        stream: &VulkanStream,
+        commands: &[crate::BufferCommand<Vulkan>],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         let cb = self.inner;
-        self.begin(instance, cb)?;
+        self.begin(stream, cb)?;
         let mut pipeline_chain_start = None;
         for i in 0..commands.len() {
             match &commands[i] {
@@ -1419,25 +1397,36 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
                 }
                 _ => {
                     if let Some(start) = pipeline_chain_start {
-                        self.sync_command(instance, cb, &commands[start..i])?;
+                        self.sync_command(stream, cb, &commands[start..i])?;
                         pipeline_chain_start = None;
                     }
-                    self.record_command(instance, cb, &mut commands[i])?;
+                    self.record_command(stream, cb, &commands[i])?;
                 }
             }
         }
-        self.end(instance, cb)?;
+        self.end(stream, cb)?;
         Ok(())
     }
     unsafe fn clear(
         &mut self,
-        _instance: &mut <Vulkan as Backend>::Instance,
+        stream: &<Vulkan as Backend>::Stream,
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            _instance
-                .device
+            stream
+                .shared
+                .functions
                 .reset_command_buffer(self.inner, vk::CommandBufferResetFlags::RELEASE_RESOURCES)?;
         }
+        Ok(())
+    }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn destroy(self, stream: &VulkanStream) -> Result<(), <Vulkan as Backend>::Error> {
+        stream
+            .unused_command_buffers
+            .lock()
+            .unwrap()
+            .push(self.inner);
         Ok(())
     }
 }
@@ -1453,18 +1442,65 @@ pub struct VulkanBindGroup {
     inner: vk::DescriptorSet,
     pool_idx: u32,
 }
-impl BindGroup<Vulkan> for VulkanBindGroup {}
+impl BindGroup<Vulkan> for VulkanBindGroup {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn update(
+        &mut self,
+        device: &VulkanDevice,
+        _stream: &VulkanStream,
+        _kernel: &mut <Vulkan as Backend>::Kernel,
+        resources: &[HalBufferSlice<Vulkan>],
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        let mut writes = Vec::with_capacity(resources.len());
+        let mut buffer_infos = Vec::with_capacity(resources.len());
+        for resource in resources {
+            buffer_infos.push(
+                vk::DescriptorBufferInfo::default()
+                    .buffer(resource.buffer.buffer)
+                    .offset(resource.offset)
+                    .range(resource.len),
+            );
+        }
+        for (i, info) in buffer_infos.iter().enumerate() {
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(self.inner)
+                    .descriptor_count(1)
+                    .dst_binding(i as u32)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .buffer_info(std::slice::from_ref(info)),
+            );
+        }
+        unsafe {
+            device.shared.functions.update_descriptor_sets(&writes, &[]);
+        }
+        Ok(())
+    }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn destroy(
+        self,
+        stream: &VulkanStream,
+        kernel: &mut <Vulkan as Backend>::Kernel,
+    ) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            stream.shared.functions.free_descriptor_sets(
+                kernel.descriptor_pools[self.pool_idx as usize].pool,
+                &[self.inner],
+            )?;
+        }
+        Ok(())
+    }
+}
 #[derive(Debug)]
 pub struct VulkanSemaphore {
     inner: vk::Semaphore,
     current_value: Mutex<u64>,
-    device: Arc<DeviceFunctions>,
 }
 impl Semaphore<Vulkan> for VulkanSemaphore {
-    #[tracing::instrument]
-    unsafe fn wait(&self) -> Result<(), <Vulkan as Backend>::Error> {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn wait(&self, device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            self.device.supa_wait_semaphores(
+            device.shared.functions.supa_wait_semaphores(
                 &vk::SemaphoreWaitInfo::default()
                     .semaphores(std::slice::from_ref(&self.inner))
                     .values(&[*self.current_value.lock().unwrap() + 1]),
@@ -1473,17 +1509,22 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         }
         Ok(())
     }
-    #[tracing::instrument]
-    unsafe fn is_signalled(&self) -> Result<bool, <Vulkan as Backend>::Error> {
-        Ok(
-            unsafe { self.device.supa_get_semaphore_counter_value(self.inner)? }
-                == *self.current_value.lock().unwrap() + 1,
-        )
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn is_signalled(
+        &self,
+        device: &VulkanDevice,
+    ) -> Result<bool, <Vulkan as Backend>::Error> {
+        Ok(unsafe {
+            device
+                .shared
+                .functions
+                .supa_get_semaphore_counter_value(self.inner)?
+        } == *self.current_value.lock().unwrap() + 1)
     }
-    #[tracing::instrument]
-    unsafe fn signal(&self) -> Result<(), <Vulkan as Backend>::Error> {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn signal(&mut self, device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            self.device.supa_signal_semaphore(
+            device.shared.functions.supa_signal_semaphore(
                 &vk::SemaphoreSignalInfo::default()
                     .semaphore(self.inner)
                     .value(*self.current_value.lock().unwrap() + 1),
@@ -1491,10 +1532,21 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         }
         Ok(())
     }
-    unsafe fn reset(&self) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn reset(&mut self, _device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
         *self.current_value.lock().unwrap() += 1;
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn destroy(self, device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
+        unsafe {
+            device.shared.functions.destroy_semaphore(self.inner, None);
+        }
+        Ok(())
+    }
+}
+pub struct SharedDeviceInfo {
+    functions: DeviceFunctions,
+    queue_family_indices: Vec<u32>,
 }
 pub struct DeviceFunctions {
     device: ash::Device,

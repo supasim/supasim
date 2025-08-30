@@ -171,6 +171,8 @@ pub struct HalInstanceProperties {
 pub struct HalDeviceProperties {
     /// Whether the system has unified memory, which provides opportunities for optimization, particularly on apple, mobile, or other devices with integrated GPUs
     pub is_unified_memory: bool,
+    /// Whether it supports buffers that live on device but can be mapped from host
+    pub host_mappable_buffers: bool,
 }
 /// # Safety
 /// This is undefined behavior lol

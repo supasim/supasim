@@ -58,7 +58,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send {
     /// # Safety
     /// * All associated resources must be destroyed
     /// * All device work must be completed
-    /// * All devices and streams must be dropped
+    /// * All devices must be destroyed
     unsafe fn destroy(self) -> Result<(), B::Error>;
 }
 
@@ -106,7 +106,7 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send {
     /// * No mapped pointers may be used to access the same data ranges concurrently
     unsafe fn write(
         &mut self,
-        instance: &B::Device,
+        device: &B::Device,
         offset: u64,
         data: &[u8],
     ) -> Result<(), B::Error>;
@@ -117,7 +117,7 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send {
     ///   * This is a limitation of wgpu and may be dealt with in the future
     unsafe fn read(
         &mut self,
-        instance: &B::Device,
+        device: &B::Device,
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), B::Error>;
@@ -128,14 +128,14 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send {
     /// * Writing to a mapped upload buffer is illegal(except on unified memory systems)
     /// * If the device doesn't support `map_buffer_while_gpu_use`, the buffer must be unmapped before
     ///   any GPU work using the buffer is submitted
-    unsafe fn map(&mut self, instance: &B::Device) -> Result<*mut u8, B::Error>;
+    unsafe fn map(&mut self, device: &B::Device) -> Result<*mut u8, B::Error>;
     /// # Safety
     /// * All mapped pointers are invalidated
-    unsafe fn unmap(&mut self, instance: &B::Device) -> Result<(), B::Error>;
+    unsafe fn unmap(&mut self, device: &B::Device) -> Result<(), B::Error>;
     /// # Safety
     /// * All bind groups using this buffer must have been updated or destroyed
     /// * The buffer must not be mapped
-    unsafe fn destroy(self, instance: &B::Device) -> Result<(), B::Error>;
+    unsafe fn destroy(self, device: &B::Device) -> Result<(), B::Error>;
 }
 
 pub trait BindGroup<B: Backend<BindGroup = Self>>: Send {
@@ -175,7 +175,7 @@ pub trait Semaphore<B: Backend<Semaphore = Self>>: Send {
 }
 
 pub trait Device<B: Backend<Device = Self>> {
-    unsafe fn get_properties(&self, instance: &B::Instance) -> HalDeviceProperties;
+    fn get_properties(&self, instance: &B::Instance) -> HalDeviceProperties;
     /// # Safety
     /// Currently no safety requirements. This is subject to change
     unsafe fn cleanup_cached_resources(&self, instance: &B::Instance) -> Result<(), B::Error>;
@@ -186,6 +186,10 @@ pub trait Device<B: Backend<Device = Self>> {
     /// # Safety
     /// Currently no safety requirements. This is subject to change
     unsafe fn create_semaphore(&self) -> Result<B::Semaphore, B::Error>;
+    /// # Safety
+    /// * Must be called after all of the device's queues have been destroyed
+    /// * All objects created from this must have been destroyed
+    unsafe fn destroy(self, instance: &mut B::Instance) -> Result<(), B::Error>;
 }
 pub trait Stream<B: Backend<Stream = Self>> {
     /// # Safety
@@ -210,6 +214,12 @@ pub trait Stream<B: Backend<Stream = Self>> {
         kernel: &mut B::Kernel,
         buffers: &[HalBufferSlice<B>],
     ) -> Result<B::BindGroup, B::Error>;
+    /// # Safety
+    /// Currently no safety requirements. This is subject to change
+    unsafe fn cleanup_cached_resources(&self, instance: &B::Instance) -> Result<(), B::Error>;
+    /// # Safety
+    /// * The queue must be empty
+    unsafe fn destroy(self, device: &mut B::Device) -> Result<(), B::Error>;
 }
 
 #[derive(Debug)]
@@ -307,7 +317,7 @@ pub struct InstanceDescriptor<B: Backend> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StreamType {
+pub enum StreamType {
     ComputeAndTransfer,
     TransferOnly,
 }

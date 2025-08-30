@@ -32,7 +32,7 @@ static INSTANCE_CREATE_LOCK: LazyLock<std::sync::Mutex<()>> =
     LazyLock::new(|| std::sync::Mutex::new(()));
 
 fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Result<(), B::Error> {
-    let instance = descriptor.instance;
+    let mut instance = descriptor.instance;
     let device = descriptor.devices.into_iter().next().unwrap();
     let crate::StreamDescriptor {
         mut stream,
@@ -270,8 +270,8 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
         sbout.destroy(&device)?;
         upload_buffer.destroy(&device)?;
         download_buffer.destroy(&device)?;
-        drop(stream);
-        drop(device);
+        stream.destroy(&mut device)?;
+        device.destroy(&mut instance)?;
         instance.destroy()?;
         info!("Destroyed");
         Ok(())

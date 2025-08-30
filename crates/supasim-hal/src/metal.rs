@@ -110,10 +110,18 @@ impl Device<Metal> for MetalDevice {
             current_value: 0,
         })
     }
-    unsafe fn get_properties(&self, _instance: &MetalInstance) -> types::HalDeviceProperties {
+    fn get_properties(&self, _instance: &MetalInstance) -> types::HalDeviceProperties {
+        let is_unified_memory = self.device.hasUnifiedMemory();
         types::HalDeviceProperties {
-            is_unified_memory: self.device.hasUnifiedMemory(),
+            is_unified_memory,
+            host_mappable_buffers: is_unified_memory,
         }
+    }
+    unsafe fn destroy(
+        self,
+        _instance: &mut <Metal as Backend>::Instance,
+    ) -> Result<(), <Metal as Backend>::Error> {
+        Ok(())
     }
 }
 
@@ -177,18 +185,32 @@ impl Stream<Metal> for MetalStream {
         }
         Ok(())
     }
+    unsafe fn cleanup_cached_resources(
+        &self,
+        _instance: &<Metal as Backend>::Instance,
+    ) -> Result<(), <Metal as Backend>::Error> {
+        Ok(())
+    }
+    unsafe fn destroy(
+        self,
+        _device: &mut <Metal as Backend>::Device,
+    ) -> Result<(), <Metal as Backend>::Error> {
+        Ok(())
+    }
 }
 
 impl Backend for Metal {
     type Instance = MetalInstance;
-    type Error = MetalError;
+    type Device = MetalDevice;
+    type Stream = MetalStream;
+
     type Semaphore = MetalSemaphore;
     type BindGroup = MetalBindGroup;
     type Kernel = MetalKernel;
     type Buffer = MetalBuffer;
     type CommandRecorder = MetalCommandRecorder;
-    type Device = MetalDevice;
-    type Stream = MetalStream;
+
+    type Error = MetalError;
 
     fn setup_default_descriptor() -> Result<crate::InstanceDescriptor<Self>, Self::Error> {
         let instance = Metal::create_instance()?;
