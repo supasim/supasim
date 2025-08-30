@@ -65,7 +65,7 @@ impl Backend for Vulkan {
     type Error = VulkanError;
 
     fn setup_default_descriptor() -> Result<crate::InstanceDescriptor<Self>, Self::Error> {
-        todo!()
+        Self::create_instance(true)
     }
 }
 impl Vulkan {
