@@ -549,6 +549,7 @@ impl crate::Error<Vulkan> for VulkanError {
     }
 }
 
+#[derive(Debug)]
 pub struct VulkanDevice {
     shared: Arc<SharedDeviceInfo>,
     alloc: Mutex<Allocator>,
@@ -673,6 +674,7 @@ impl Device<Vulkan> for VulkanDevice {
     }
 }
 
+#[derive(Debug)]
 pub struct VulkanStream {
     shared: Arc<SharedDeviceInfo>,
     queue: vk::Queue,
@@ -1544,6 +1546,8 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         Ok(())
     }
 }
+
+#[derive(Debug)]
 pub struct SharedDeviceInfo {
     functions: DeviceFunctions,
     queue_family_indices: Vec<u32>,
