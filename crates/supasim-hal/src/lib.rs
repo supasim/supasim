@@ -38,6 +38,7 @@ pub trait Backend: Sized + std::fmt::Debug + Clone + Send + Sync + 'static {
 
     type Error: Error<Self>;
 
+    /// Creates a default instance, with a single device, with a single queue. Good for testing/simple setup
     fn setup_default_descriptor() -> Result<InstanceDescriptor<Self>, Self::Error>;
 }
 
@@ -52,7 +53,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send {
 
     /// # Safety
     /// Currently no safety requirements. This is subject to change
-    unsafe fn cleanup_cached_resources(&self) -> Result<(), B::Error>;
+    unsafe fn cleanup_cached_resources(&mut self) -> Result<(), B::Error>;
 
     /// # Safety
     /// * All associated resources must be destroyed
@@ -167,7 +168,7 @@ pub trait Semaphore<B: Backend<Semaphore = Self>>: Send {
 }
 
 pub trait Device<B: Backend<Device = Self>> {
-    unsafe fn get_properties(&self, instance: &B::Instance) -> HalDeviceProperties {}
+    unsafe fn get_properties(&self, instance: &B::Instance) -> HalDeviceProperties;
     /// # Safety
     /// Currently no safety requirements. This is subject to change
     unsafe fn cleanup_cached_resources(&self, instance: &B::Instance) -> Result<(), B::Error>;
@@ -178,9 +179,6 @@ pub trait Device<B: Backend<Device = Self>> {
     /// # Safety
     /// Currently no safety requirements. This is subject to change
     unsafe fn create_semaphore(&self) -> Result<B::Semaphore, B::Error>;
-    /// # Safety
-    /// * The number of created streams must be <= the device's properties `max_streams` value
-    unsafe fn create_stream(&mut self) -> Result<B::Stream, B::Error>;
 }
 pub trait Stream<B: Backend<Stream = Self>> {
     /// # Safety
@@ -289,7 +287,14 @@ pub struct DeviceDescriptor<B: Backend> {
     /// Devices in the same group can share semaphores and such
     pub group_idx: Option<u32>,
 }
+
 pub struct InstanceDescriptor<B: Backend> {
     pub instance: B::Instance,
     pub devices: Vec<DeviceDescriptor<B>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamType {
+    ComputeAndTransfer,
+    TransferOnly,
 }

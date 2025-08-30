@@ -170,9 +170,7 @@ pub struct HalInstanceProperties {
     pub upload_download_buffers: bool,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub struct HalDeviceProperties {
-    pub max_streams: u32,
-}
+pub struct HalDeviceProperties {}
 /// # Safety
 /// This is undefined behavior lol
 pub unsafe fn to_static_lifetime<T>(r: &T) -> &'static T
