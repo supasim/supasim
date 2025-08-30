@@ -4,7 +4,10 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-use hal::{BackendInstance, CommandRecorder, HalBufferSlice, RecorderSubmitInfo, Semaphore};
+use hal::{
+    BindGroup as _, Buffer as _, CommandRecorder, Device as _, HalBufferSlice, RecorderSubmitInfo,
+    Semaphore, Stream as _,
+};
 use parking_lot::{Condvar, Mutex};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -245,7 +248,7 @@ pub fn assemble_streams<B: hal::Backend>(
     resources.temp_copy_buffer = if src_buffer_len > 0 {
         let mut buf = unsafe {
             instance
-                .inner
+                .device
                 .lock()
                 .as_mut()
                 .unwrap()
@@ -257,17 +260,16 @@ pub fn assemble_streams<B: hal::Backend>(
                 .map_supasim()?
         };
         let mut current_offset = 0;
-        for cr in crs.iter_mut() {
-            unsafe {
-                instance
-                    .inner
-                    .lock()
-                    .as_mut()
-                    .unwrap()
-                    .write_buffer(&mut buf, current_offset, &cr.writes_slice)
+        unsafe {
+            // Map it exactly once so we don't map/unmap for every CR
+            let device = instance.device.lock();
+            buf.map(device.as_ref().unwrap()).map_supasim()?;
+            for cr in crs.iter_mut() {
+                buf.write(device.as_ref().unwrap(), current_offset, &cr.writes_slice)
                     .map_supasim()?;
+                current_offset += cr.writes_slice.len() as u64;
             }
-            current_offset += cr.writes_slice.len() as u64;
+            buf.unmap(device.as_ref().unwrap()).map_supasim()?;
         }
         Some(buf)
     } else {
@@ -461,11 +463,15 @@ pub fn record_command_streams<B: hal::Backend>(
         }
         let bg = unsafe {
             instance
-                .inner
+                .stream
                 .lock()
                 .as_mut()
                 .unwrap()
-                .create_bind_group(kernel.inner.as_mut().unwrap(), &resources)
+                .create_bind_group(
+                    instance.device.lock().as_ref().unwrap(),
+                    kernel.inner.as_mut().unwrap(),
+                    &resources,
+                )
                 .map_supasim()?
         };
         bindgroups.push((bg, _k.clone()));
@@ -679,7 +685,7 @@ pub fn record_command_streams<B: hal::Backend>(
         }
         unsafe {
             recorder
-                .record_commands(instance.inner.lock().as_mut().unwrap(), &mut hal_commands)
+                .record_commands(instance.stream.lock().as_ref().unwrap(), &hal_commands)
                 .map_supasim()?
         };
     }
@@ -728,7 +734,7 @@ impl<B: hal::Backend> CpuSubmission<B> {
                     .as_ref()
                     .unwrap()
                     .upgrade()?;
-                let properties = instance.inner_properties;
+                let properties = instance.instance_properties;
                 let mut mapped_buffers = Vec::with_capacity(buffers.len());
                 let mut ids = Vec::new();
                 for b in &buffers {
@@ -740,12 +746,11 @@ impl<B: hal::Backend> CpuSubmission<B> {
                     for (i, b) in buffers.iter().enumerate() {
                         let mut buffer_inner = b.buffer.inner_mut()?;
                         let mapping = unsafe {
-                            instance
+                            buffer_inner
                                 .inner
-                                .lock()
                                 .as_mut()
                                 .unwrap()
-                                .map_buffer(buffer_inner.inner.as_mut().unwrap())
+                                .map(instance.device.lock().as_ref().unwrap())
                                 .map_supasim()?
                         };
                         mapped_buffers.push(MappedBuffer {
@@ -778,13 +783,11 @@ impl<B: hal::Backend> CpuSubmission<B> {
                             data = Vec::with_capacity(b.len as usize);
                             unsafe {
                                 data.set_len(b.len as usize);
-                                _instance
-                                    .inner()?
+                                buffer
                                     .inner
-                                    .lock()
                                     .as_mut()
                                     .unwrap()
-                                    .read_buffer(buffer.inner.as_mut().unwrap(), b.start, &mut data)
+                                    .map(_instance.inner()?.device.lock().as_ref().unwrap())
                                     .map_supasim()?;
                             };
                         };
@@ -964,22 +967,23 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
     let mut _num_submitted_so_far = 1;
     let (semaphore_signal, map_buffer_while_gpu_use) = {
         (
-            logic.instance.inner_properties.semaphore_signal,
-            logic.instance.inner_properties.map_buffer_while_gpu_use,
+            logic.instance.instance_properties.semaphore_signal,
+            logic.instance.instance_properties.map_buffer_while_gpu_use,
         )
     };
-    let mut semaphores = Vec::new();
+    let mut semaphores: Vec<B::Semaphore> = Vec::new();
     let acquire_semaphore = |sems: &mut Vec<B::Semaphore>| -> SupaSimResult<B, B::Semaphore> {
-        Ok(if let Some(s) = sems.pop() {
+        Ok(if let Some(mut s) = sems.pop() {
             unsafe {
-                s.reset().map_supasim()?;
+                s.reset(logic.instance.device.lock().as_ref().unwrap())
+                    .map_supasim()?;
             }
             s
         } else {
             unsafe {
                 logic
                     .instance
-                    .inner
+                    .device
                     .lock()
                     .as_mut()
                     .unwrap()
@@ -1000,13 +1004,8 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                 SendSyncThreadEvent::WaitFinishAndShutdown => {
                     for semaphore in semaphores {
                         unsafe {
-                            logic
-                                .instance
-                                .inner
-                                .lock()
-                                .as_mut()
-                                .unwrap()
-                                .destroy_semaphore(semaphore)
+                            semaphore
+                                .destroy(logic.instance.device.lock().as_ref().unwrap())
                                 .unwrap();
                         }
                     }
@@ -1040,13 +1039,8 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                 Ok(SendSyncThreadEvent::WaitFinishAndShutdown) => {
                     for semaphore in semaphores {
                         unsafe {
-                            logic
-                                .instance
-                                .inner
-                                .lock()
-                                .as_mut()
-                                .unwrap()
-                                .destroy_semaphore(semaphore)
+                            semaphore
+                                .destroy(logic.instance.device.lock().as_ref().unwrap())
                                 .unwrap();
                         }
                     }
@@ -1113,11 +1107,36 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
             }
         }
         _num_submitted_so_far += temp_submission_vec.len();
+        // Assemble the ranges for the wait semaphores
+        let mut waits = Vec::new();
+        {
+            let mut prev_was_cpu = false;
+            let mut semaphore_idx = 0;
+            for item in temp_submission_vec.iter_mut() {
+                match item {
+                    Work::CpuWork(_) => prev_was_cpu = true,
+                    Work::GpuSubmission(g) => {
+                        if g.command_recorders.is_empty() {
+                            continue;
+                        }
+                        // CPU wait semaphore at the start
+                        if prev_was_cpu {
+                            waits.push(&used_semaphores[semaphore_idx]);
+                            semaphore_idx += 1;
+                        }
+                        // Signal semaphore at the end
+                        semaphore_idx += 1;
+                        prev_was_cpu = false;
+                    }
+                }
+            }
+        }
         // Give the wait/signal semaphores to the submits
         {
             let mut prev_was_cpu = false;
             let mut recorders_iter = recorders.iter_mut();
             let mut semaphore_idx = 0;
+            let mut wait_idx = 0;
             for item in temp_submission_vec.iter_mut() {
                 match item {
                     Work::CpuWork(_) => prev_was_cpu = true,
@@ -1127,12 +1146,12 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                         for (i, r) in next.iter_mut().enumerate() {
                             submits.push(RecorderSubmitInfo {
                                 command_recorder: r,
-                                wait_semaphore: if prev_was_cpu && i == 0 {
+                                wait_semaphores: if prev_was_cpu && i == 0 {
                                     semaphore_idx += 1;
-
-                                    Some(&used_semaphores[semaphore_idx])
+                                    wait_idx += 1;
+                                    std::slice::from_ref(&waits[wait_idx - 1])
                                 } else {
-                                    None
+                                    &[]
                                 },
                                 signal_semaphore: if i == count - 1 {
                                     Some(&used_semaphores[semaphore_idx])
@@ -1151,7 +1170,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
         unsafe {
             logic
                 .instance
-                .inner
+                .stream
                 .lock()
                 .as_mut()
                 .unwrap()
@@ -1171,14 +1190,18 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                         logic.shared.1.notify_all();
                     }
                     Work::GpuSubmission(mut item) => {
-                        if let Some(s) = submits[submit_idx].wait_semaphore {
+                        // TODO: verify that this makes any sense
+                        /*for s in submits[submit_idx].wait_semaphores {
                             unsafe {
-                                s.signal().unwrap();
+                                s.signal(logic.instance.device.lock().as_ref().unwrap())
+                                    .unwrap();
                             }
-                            semaphore_idx += 1;
-                        }
+                        }*/
+                        semaphore_idx += submits[submit_idx].wait_semaphores.len();
                         unsafe {
-                            used_semaphores[semaphore_idx].wait().unwrap();
+                            used_semaphores[semaphore_idx]
+                                .wait(logic.instance.device.lock().as_ref().unwrap())
+                                .unwrap();
                         }
                         semaphore_idx += 1;
                         submit_idx += 1;
@@ -1207,13 +1230,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                         item.used_resources.kernels.clear();
                         if let Some(b) = std::mem::take(&mut item.used_resources.temp_copy_buffer) {
                             unsafe {
-                                logic
-                                    .instance
-                                    .inner
-                                    .lock()
-                                    .as_mut()
-                                    .unwrap()
-                                    .destroy_buffer(b)
+                                b.destroy(logic.instance.device.lock().as_ref().unwrap())
                                     .unwrap();
                             }
                         }
@@ -1221,13 +1238,7 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
                             let mut _k = kernel.inner_mut().unwrap();
                             let k = _k.inner.as_mut().unwrap();
                             unsafe {
-                                logic
-                                    .instance
-                                    .inner
-                                    .lock()
-                                    .as_mut()
-                                    .unwrap()
-                                    .destroy_bind_group(k, bg)
+                                bg.destroy(logic.instance.stream.lock().as_ref().unwrap(), k)
                                     .unwrap();
                             }
                         }

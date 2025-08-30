@@ -162,6 +162,7 @@ pub trait Semaphore<B: Backend<Semaphore = Self>>: Send {
     unsafe fn is_signalled(&self, device: &B::Device) -> Result<bool, B::Error>;
     /// # Safety
     /// * The semaphore must not be waited on by any CPU side wait command
+    /// * The device must support semaphore signalling
     unsafe fn signal(&mut self, device: &B::Device) -> Result<(), B::Error>;
     /// Note that in most implementations this won't actually result in any underlying API changes.
     /// # Safety
@@ -294,8 +295,8 @@ pub struct ExternalMemoryObject {
 
 #[derive(Debug, Clone)]
 pub struct KernelDescriptor<'a> {
-    binary: &'a [u8],
-    reflection: types::KernelReflectionInfo,
+    pub binary: &'a [u8],
+    pub reflection: types::KernelReflectionInfo,
 }
 
 pub struct StreamDescriptor<B: Backend> {
