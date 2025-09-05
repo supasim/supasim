@@ -6,11 +6,8 @@ END LICENSE */
 
 struct Parameters
 {
-    [binding(0)]
     StructuredBuffer<uint32_t> buffer0;
-    [binding(1)]
     StructuredBuffer<uint32_t> buffer1;
-    [binding(2)]
     RWStructuredBuffer<uint32_t> result;
 }
 

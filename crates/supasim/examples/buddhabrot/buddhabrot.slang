@@ -23,11 +23,8 @@ struct TempData
 
 struct Parameters
 {
-    [binding(0)]
     StructuredBuffer<InputOptions> imageSize;
-    [binding(1)]
     RWStructuredBuffer<Atomic<uint32_t>> buffer;
-    [binding(2)]
     RWStructuredBuffer<TempData> tempBuffer;
 }
 
@@ -119,7 +116,8 @@ void Finalize(uint3 id: SV_DispatchThreadID, ParameterBlock<Parameters> paramete
             if (abs(pos.x) < 2.0 && abs(pos.y) < 2.0)
             {
                 int pixelIndex = getPixelIndex(pos, parameters.imageSize[0].imageWidth, parameters.imageSize[0].imageHeight);
-                parameters.buffer[pixelIndex].add(1);
+                if(pixelIndex < parameters.imageSize[0].imageWidth * parameters.imageSize[0].imageHeight && pixelIndex >= 0) 
+                    parameters.buffer[pixelIndex].add(1);
             }
         }
     }

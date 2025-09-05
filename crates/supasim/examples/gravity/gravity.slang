@@ -34,9 +34,14 @@ struct ChunkInfo
 
 struct Parameters
 {
+    [binding(0)]
     StructuredBuffer<InputOptions> options;
+    [binding(1)]
     RWStructuredBuffer<Atomic<uint32_t>> numParticles;
+    [binding(2)]
     RWStructuredBuffer<Particle> particleBuffer;
+    [binding(3)]
     RWStructuredBuffer<ChunkInfo> chunkTracker;
+    [binding(4)]
     RWStructuredBuffer<uint32_t> bins;
 }

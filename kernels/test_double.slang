@@ -6,7 +6,6 @@ END LICENSE */
 
 struct Parameters
 {
-    [binding(0)]
     RWStructuredBuffer<uint32_t> buffer;
 }
 

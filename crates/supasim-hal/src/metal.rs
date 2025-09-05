@@ -169,13 +169,13 @@ impl Stream<Metal> for MetalStream {
                 let as_event: &ProtocolObject<dyn MTLEvent> = wait_semaphore.event.0.as_ref();
                 info.command_recorder
                     .command_buffer
-                    .encodeWaitForEvent_value(as_event, wait_semaphore.current_value);
+                    .encodeWaitForEvent_value(as_event, wait_semaphore.current_value + 1);
             }
             if let Some(signal_semaphore) = info.signal_semaphore {
                 let as_event: &ProtocolObject<dyn MTLEvent> = signal_semaphore.event.0.as_ref();
                 info.command_recorder
                     .command_buffer
-                    .encodeSignalEvent_value(as_event, signal_semaphore.current_value);
+                    .encodeSignalEvent_value(as_event, signal_semaphore.current_value + 1);
             }
             info.command_recorder.command_buffer.commit();
         }
@@ -365,7 +365,7 @@ impl Semaphore<Metal> for MetalSemaphore {
         _device: &MetalDevice,
     ) -> Result<bool, <Metal as Backend>::Error> {
         let value = unsafe { self.event.signaledValue() };
-        Ok(value == self.current_value + 1)
+        Ok(value > self.current_value)
     }
     unsafe fn reset(&mut self, _device: &MetalDevice) -> Result<(), <Metal as Backend>::Error> {
         self.current_value += 1;
