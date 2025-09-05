@@ -23,6 +23,8 @@ Shaders are written in [Slang](https://shader-slang.org/). Supasim provides some
 
 ## Compiling
 
+Once you have the dependencies installed, you can simply add supasim as a dependency to your project, with your desired features. The examples can be easily run like any other rust project, for example `cargo run --example buddhabrot`.
+
 ### Requirements
 All requirements are part of the vulkan sdk. The only dynamically linked component is `DXC` for compiling DirectX shaders.
 This is required to use the wgpu backend, or to compile DXIL code for the shader library. Therefore, users seeking this
