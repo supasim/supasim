@@ -12,7 +12,6 @@ members = [
   "crates/supasim-hal",
   "crates/supasim-kernels",
   "crates/supasim-types",
-  "crates/supasim-gui-helper",
 ]
 default-members = [
   "crates/supasim",

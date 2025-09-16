@@ -1932,10 +1932,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "supasim-gui-helper"
-version = "0.0.2"
-
-[[package]]
 name = "supasim-hal"
 version = "0.0.2"
 dependencies = [
