@@ -1,12 +1,12 @@
 # All about kernels
 
-## What is this folder?
+## What is in this folder?
 This folder is for kernels that may be used in examples or tests across multiple folders in this project. As a user, you can probably ignore this folder.
 
 ## Known issues with slang
 **SLANG IS WEIRD.** Lots of thing won't behave as expected. It is highly recommended that you use assertions to verify the correctness of generated reflection information, which reflects what slang outputs.
 
-**Always use the `[binding(0)]` attribute.** This prevents *soo* many bugs before they occur.
+**Always use the `[binding(n)]` attribute.** This prevents *soo* many bugs before they occur.
 
 Anyway, on with the list:
 
