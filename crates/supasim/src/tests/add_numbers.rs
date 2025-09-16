@@ -17,7 +17,6 @@ pub fn add_numbers<Backend: hal::Backend>(hal: hal::InstanceDescriptor<Backend>)
     let download_buffer = instance
         .create_buffer(&crate::BufferDescriptor {
             size: 16,
-            buffer_type: BufferType::Download,
             contents_align: 4,
             ..Default::default()
         })

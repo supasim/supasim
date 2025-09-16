@@ -19,6 +19,7 @@ pub extern crate kernels;
 #[cfg(test)]
 mod tests;
 
+mod residency;
 mod sync;
 
 use anyhow::anyhow;
@@ -26,9 +27,9 @@ use hal::{
     BackendInstance as _, Buffer as _, CommandRecorder as _, Device as _, Kernel as _, Stream as _,
     StreamDescriptor, StreamType,
 };
-use parking_lot::{Condvar, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::cell::UnsafeCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ops::Bound;
 use std::{
     marker::PhantomData,
@@ -46,6 +47,7 @@ pub use types::{
     SpirvVersion,
 };
 
+use crate::residency::{BufferResidency, BufferUser, BufferUserId, SliceTracker};
 use crate::sync::{GpuSubmissionInfo, SyncThreadHandle, create_sync_thread};
 
 pub type UserBufferAccessClosure<'a, B> =
@@ -72,37 +74,10 @@ impl<T> DerefMut for InnerRefMut<'_, T> {
         &mut self.0
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BufferType {
-    /// Used by kernels
-    Gpu,
-    /// Used to upload data to GPU
-    Upload,
-    /// Used to download data from GPU
-    Download,
-    /// Automatically converted between CPU/GPU depending on usage. Currently not implemented
-    Automatic,
-}
-impl BufferType {
-    pub fn can_be_on_cpu(&self) -> bool {
-        match self {
-            Self::Gpu => false,
-            Self::Upload | Self::Download | Self::Automatic => true,
-        }
-    }
-    pub fn can_be_on_gpu(&self) -> bool {
-        match self {
-            Self::Gpu | Self::Automatic => true,
-            Self::Upload | Self::Download => false,
-        }
-    }
-}
 #[derive(Clone, Copy, Debug)]
 pub struct BufferDescriptor {
     /// The size needed in bytes
     pub size: u64,
-    /// The type of the buffer
-    pub buffer_type: BufferType,
     /// The value that the contents of the buffer must be aligned to. This is important for when supasim must detect
     pub contents_align: u64,
     /// Currently unused. In the future this may be used to prefer keeping some buffers in memory when device runs out of memory and swapping becomes necessary
@@ -114,24 +89,9 @@ impl Default for BufferDescriptor {
     fn default() -> Self {
         Self {
             size: 0,
-            buffer_type: BufferType::Gpu,
             contents_align: 0,
             priority: 1.0,
             can_export: false,
-        }
-    }
-}
-impl From<BufferDescriptor> for types::HalBufferDescriptor {
-    fn from(s: BufferDescriptor) -> types::HalBufferDescriptor {
-        types::HalBufferDescriptor {
-            size: s.size,
-            memory_type: match s.buffer_type {
-                BufferType::Gpu => types::HalBufferType::Storage,
-                BufferType::Upload => types::HalBufferType::Upload,
-                BufferType::Download => types::HalBufferType::Download,
-                BufferType::Automatic => types::HalBufferType::Storage,
-            },
-            min_alignment: 16,
         }
     }
 }
@@ -294,8 +254,6 @@ pub enum SupaSimError<B: hal::Backend> {
     BufferRegionNotValid,
     ValidateIndirectUnsupported,
     UserClosure(anyhow::Error),
-    /// Buffer attempted to be used from wrong side of cpu/gpu on non-unified memory system
-    BufferLocalityViolated,
     KernelCompileError(#[from] kernels::KernelCompileError),
     SyncThreadPanic(String),
     BufferExportError(String),
@@ -496,11 +454,6 @@ impl<B: hal::Backend> SupaSimInstance<B> {
     }
     pub fn create_buffer(&self, desc: &BufferDescriptor) -> SupaSimResult<B, Buffer<B>> {
         self.check_destroyed()?;
-        if desc.can_export && desc.buffer_type != BufferType::Gpu {
-            return Err(SupaSimError::BufferExportError(
-                "Exportable buffers can only be of `Gpu` type".to_string(),
-            ));
-        }
         let s = self.inner()?;
         let inner = unsafe {
             s.device
@@ -510,13 +463,6 @@ impl<B: hal::Backend> SupaSimInstance<B> {
                 .create_buffer(&(*desc).into())
         }
         .map_supasim()?;
-        let buffer_type_is_cpu = match desc.buffer_type {
-            BufferType::Download | BufferType::Upload => true,
-            BufferType::Gpu => false,
-            BufferType::Automatic => unimplemented!(),
-        };
-        let cpu_available = s.device_properties.is_unified_memory || buffer_type_is_cpu;
-        let gpu_available = s.device_properties.is_unified_memory || !buffer_type_is_cpu;
         let b = Buffer::from_inner(BufferInner {
             _phantom: Default::default(),
             _is_destroyed: false,
@@ -527,7 +473,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             _semaphores: Vec::new(),
             create_info: *desc,
             last_used: 0,
-            slice_tracker: SliceTracker::new(gpu_available, cpu_available),
+            slice_tracker: SliceTracker::new(),
             is_currently_external: false,
         });
         b.inner_mut()?.id = s.buffers.lock().insert(Some(b.downgrade()));
@@ -948,15 +894,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
             len,
             needs_mut: false,
         };
-        if matches!(
-            (
-                src_buffer.inner()?.create_info.buffer_type,
-                dst_buffer.inner()?.create_info.buffer_type,
-            ),
-            (BufferType::Download, _) | (_, BufferType::Upload)
-        ) {
-            return Err(SupaSimError::BufferLocalityViolated);
-        }
         let dst_slice = BufferSlice {
             buffer: dst_buffer.clone(),
             start: dst_offset,
@@ -1012,9 +949,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
             needs_mut: true,
         };
         dst_slice.validate()?;
-        if buffer.inner()?.create_info.buffer_type == BufferType::Upload {
-            return Err(SupaSimError::BufferLocalityViolated);
-        }
         let mut s = self.inner_mut()?;
         let src_offset = s.writes_slice.len() as u64;
         s.commands.push(BufferCommand {
@@ -1046,9 +980,6 @@ impl<B: hal::Backend> CommandRecorder<B> {
         }
         for b in buffers {
             b.validate()?;
-            if !b.buffer.inner()?.create_info.buffer_type.can_be_on_gpu() {
-                return Err(SupaSimError::BufferLocalityViolated);
-            }
         }
         let mut s = self.inner_mut()?;
         s.commands.push(BufferCommand {
@@ -1174,6 +1105,7 @@ api_type!(Buffer, {
     id: Index,
     _semaphores: Vec<(Index, BufferRange)>,
     create_info: BufferDescriptor,
+    residency: BufferResidency,
     last_used: u64,
     slice_tracker: SliceTracker,
     is_currently_external: bool,
@@ -1466,171 +1398,3 @@ pub type CpuCallback<B> = (
     Box<dyn Fn(Vec<MappedBuffer<B>>) -> Result<(), SupaSimError<B>>>,
     Vec<Buffer<B>>,
 );
-struct SliceTrackerInner {
-    uses: HashMap<BufferUserId, BufferUser>,
-    current_id: u64,
-    cpu_locked: Option<u64>,
-    gpu_available: bool,
-    cpu_available: bool,
-}
-struct SliceTracker {
-    condvar: Condvar,
-    /// Contains a submission index.
-    ///
-    /// Also, the higher level u64 is for the current id. Bool is for whether cpu work is prevented(used for mapping logic)
-    mutex: Mutex<SliceTrackerInner>,
-}
-impl SliceTracker {
-    pub fn new(gpu_available: bool, cpu_available: bool) -> Self {
-        Self {
-            condvar: Condvar::new(),
-            mutex: Mutex::new(SliceTrackerInner {
-                uses: HashMap::new(),
-                current_id: 0,
-                cpu_locked: None,
-                gpu_available,
-                cpu_available,
-            }),
-        }
-    }
-    pub fn acquire<B: hal::Backend>(
-        &self,
-        instance: &InstanceState<B>,
-        range: BufferRange,
-        user: BufferUser,
-        bypass_gpu: bool,
-    ) -> SupaSimResult<B, BufferUserId> {
-        let mut lock = self.mutex.lock();
-        if match user {
-            BufferUser::Cpu => !lock.cpu_available,
-            BufferUser::Cross(_) => !lock.cpu_available,
-            BufferUser::Gpu(_) => !lock.gpu_available,
-        } {
-            return Err(SupaSimError::BufferLocalityViolated);
-        }
-        if !bypass_gpu {
-            let mut cont = true;
-            let mut gpu_submissions = Vec::new();
-            while cont {
-                let mut has_cpu = false;
-                cont = false;
-                gpu_submissions.clear();
-                if user.submission_id().is_none() && lock.cpu_locked.is_some() {
-                    cont = true;
-                    gpu_submissions.push(lock.cpu_locked.unwrap());
-                }
-                for (&a, &submission) in &lock.uses {
-                    if a.range.overlaps(&range) {
-                        // If this is part of the same GPU submission, don't try to wait
-                        if submission.submission_id() == user.submission_id()
-                            && submission.submission_id().is_some()
-                        {
-                            continue;
-                        }
-                        cont = true;
-                        if let Some(sub) = submission.submission_id() {
-                            gpu_submissions.push(sub);
-                        } else {
-                            has_cpu = true;
-                        }
-                        break;
-                    }
-                }
-                if cont && has_cpu {
-                    self.condvar.wait(&mut lock);
-                } else if cont {
-                    let sub = *gpu_submissions.iter().min().unwrap();
-                    if sub == u64::MAX {
-                        self.condvar.wait(&mut lock);
-                    } else {
-                        drop(lock);
-                        instance.sync_thread().wait_for(sub, true)?;
-                        lock = self.mutex.lock();
-                    }
-                } else {
-                    break;
-                }
-            }
-        }
-        let id = BufferUserId {
-            range,
-            id: lock.current_id,
-        };
-        lock.current_id += 1;
-        lock.uses.insert(id, user);
-        Ok(id)
-    }
-    pub fn update_user_submission<B: hal::Backend>(
-        &self,
-        user: BufferUserId,
-        submission_id: u64,
-        instance: &InstanceState<B>,
-    ) {
-        let mut lock = self.mutex.lock();
-        if instance
-            .sync_thread()
-            .wait_for(submission_id, false)
-            .unwrap()
-        {
-            lock.uses.remove(&user).unwrap();
-        } else {
-            lock.uses
-                .get_mut(&user)
-                .unwrap()
-                .set_submission_id(submission_id);
-        }
-        self.condvar.notify_all();
-    }
-    pub fn release(&self, range: BufferUserId) {
-        self.mutex.lock().uses.remove(&range);
-        self.condvar.notify_all();
-    }
-    pub fn acquire_cpu<B: hal::Backend>(&self, submission_id: u64) -> SupaSimResult<B, ()> {
-        let mut lock = self.mutex.lock();
-        let mut cont = true;
-        while cont {
-            cont = false;
-            for &submission in lock.uses.values() {
-                if submission.submission_id().is_none() {
-                    cont = true;
-                    break;
-                }
-            }
-            if cont {
-                self.condvar.wait(&mut lock);
-            }
-        }
-        lock.cpu_locked = Some(submission_id);
-        Ok(())
-    }
-    pub fn release_cpu(&self) {
-        self.mutex.lock().cpu_locked = None;
-        self.condvar.notify_all();
-    }
-}
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-struct BufferUserId {
-    range: BufferRange,
-    id: u64,
-}
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-enum BufferUser {
-    Gpu(u64),
-    Cpu,
-    Cross(u64),
-}
-impl BufferUser {
-    fn submission_id(&self) -> Option<u64> {
-        match self {
-            Self::Gpu(a) | Self::Cross(a) => Some(*a),
-            Self::Cpu => None,
-        }
-    }
-    fn set_submission_id(&mut self, id: u64) {
-        match self {
-            Self::Gpu(v) => *v = id,
-            Self::Cross(v) => *v = id,
-            Self::Cpu => panic!(),
-        }
-    }
-}
