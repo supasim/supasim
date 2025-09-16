@@ -1,10 +1,42 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use parking_lot::{Condvar, Mutex};
+use smallvec::SmallVec;
 
 use crate::{BufferRange, InstanceState, SupaSimResult};
 
-pub struct BufferResidency {}
+const DEVICE_SMALLVEC_SIZE: usize = 4;
+
+struct ResidencyState<B: hal::Backend> {
+    /// The backing memory
+    buffer: Option<B::Buffer>,
+    /// Whether it will be up to date by the time the timeline reaches the point
+    up_to_date: bool,
+}
+/// Stored in the file system
+struct StorageResidencyState {
+    file_name: String,
+}
+struct BufferResidencyTimelineEntry {
+    /// Whether it is a write. If so, then accesses cannot be stacked, except on the same device
+    is_write: bool,
+    /// Whether it is also accessed from the host
+    host_access: bool,
+    /// The last submission that uses it for each device
+    last_submissions: SmallVec<[Option<usize>; DEVICE_SMALLVEC_SIZE]>,
+}
+pub struct BufferResidency<B: hal::Backend> {
+    /// Residency state for each device
+    devices: SmallVec<[ResidencyState<B>; DEVICE_SMALLVEC_SIZE]>,
+    /// Residency state for the host
+    host: ResidencyState<B>,
+    /// Alternative to residencystate buffer for host memory
+    storage: Option<StorageResidencyState>,
+    /// The index of the most up-to-date device. If this is none,
+    /// that means the host is the most up-to-date
+    most_recent: Option<usize>,
+    timeline: VecDeque<BufferResidencyTimelineEntry>,
+}
 
 struct SliceTrackerInner {
     uses: HashMap<BufferUserId, BufferUser>,
