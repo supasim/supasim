@@ -47,7 +47,7 @@ pub use types::{
     SpirvVersion,
 };
 
-use crate::residency::{BufferResidency, BufferUser, BufferUserId, SliceTracker};
+use crate::residency::BufferResidency;
 use crate::sync::{GpuSubmissionInfo, SyncThreadHandle, create_sync_thread};
 
 pub type UserBufferAccessClosure<'a, B> =

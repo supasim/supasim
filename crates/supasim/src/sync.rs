@@ -21,9 +21,9 @@ use thunderdome::Index;
 use types::SyncOperations;
 
 use crate::{
-    Buffer, BufferCommand, BufferCommandInner, BufferRange, BufferSlice, BufferUserId,
-    CommandRecorderInner, InstanceState, Kernel, MapSupasimError, MappedBuffer,
-    SendableUserBufferAccessClosure, SupaSimError, SupaSimInstance, SupaSimResult,
+    Buffer, BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner,
+    InstanceState, Kernel, MapSupasimError, MappedBuffer, SendableUserBufferAccessClosure,
+    SupaSimError, SupaSimInstance, SupaSimResult,
 };
 
 pub struct SubmissionResources<B: hal::Backend> {
