@@ -4,26 +4,9 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-use hal::{
-    BindGroup as _, Buffer as _, CommandRecorder, Device as _, HalBufferSlice, RecorderSubmitInfo,
-    Semaphore, Stream as _,
-};
-use parking_lot::{Condvar, Mutex};
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
-use std::marker::PhantomData;
-use std::ops::Deref;
-use std::panic::UnwindSafe;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use thunderdome::Index;
-use types::SyncOperations;
 
-use crate::{
-    Buffer, BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner,
-    Instance, Kernel, MapSupasimError, MappedBuffer, SendableUserBufferAccessClosure, SupaSimError,
-    SupaSimResult,
-};
+use crate::Instance;
 
 /// A semaphore with info about its device that returns to a pool on drop
 pub struct DeviceSemaphore<B: hal::Backend> {

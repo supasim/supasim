@@ -398,6 +398,7 @@ pub fn record_command_streams<B: hal::Backend>(
     recorder: &mut B::CommandRecorder,
     write_buffer: &Option<B::Buffer>,
     device_idx: usize,
+    stream_idx: usize,
 ) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
     let instance = instance.inner()?;
     let mut bindgroups = Vec::new();
@@ -436,8 +437,8 @@ pub fn record_command_streams<B: hal::Backend>(
             });
         }
         let bg = unsafe {
-            instance
-                .stream
+            instance.devices[device_idx].streams[stream_idx]
+                .inner
                 .lock()
                 .as_mut()
                 .unwrap()
@@ -661,7 +662,14 @@ pub fn record_command_streams<B: hal::Backend>(
         }
         unsafe {
             recorder
-                .record_commands(instance.stream.lock().as_ref().unwrap(), &hal_commands)
+                .record_commands(
+                    instance.devices[device_idx].streams[stream_idx]
+                        .inner
+                        .lock()
+                        .as_ref()
+                        .unwrap(),
+                    &hal_commands,
+                )
                 .map_supasim()?
         };
     }

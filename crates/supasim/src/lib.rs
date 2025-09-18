@@ -271,10 +271,8 @@ struct Device<B: hal::Backend> {
 api_type!(Instance, {
     /// The inner hal instance
     instance: Mutex<Option<B::Instance>>,
-    /// The inner hal device
+    /// The inner hal devices
     devices: SmallVec<[Device<B>; DEVICE_SMALLVEC_SIZE]>,
-    /// The inner hal stream
-    stream: Mutex<Option<B::Stream>>,
     /// The hal instance properties
     instance_properties: types::HalInstanceProperties,
     /// The hal device properties
@@ -313,8 +311,12 @@ impl<B: hal::Backend> Instance<B> {
             _phantom: Default::default(),
             _is_destroyed: false,
             instance: Mutex::new(Some(instance)),
-            device: Mutex::new(Some(device)),
-            stream: Mutex::new(Some(stream)),
+            devices: smallvec![Device {
+                inner: Mutex::new(Some(device)),
+                streams: smallvec![Stream {
+                    inner: Mutex::new(Some(stream))
+                }]
+            }],
             instance_properties,
             device_properties,
             kernels: Mutex::new(Arena::default()),
@@ -323,7 +325,6 @@ impl<B: hal::Backend> Instance<B> {
             command_recorders: Mutex::new(Arena::default()),
             hal_command_recorders: Mutex::new(Vec::new()),
             kernel_compiler: Mutex::new(kernels::GlobalState::new_from_env().unwrap()),
-            sync_thread: None,
             myself: None,
         });
 
@@ -736,12 +737,15 @@ impl<B: hal::Backend> InstanceInner<B> {
                 let _ = k._destroy();
             }
         }
-
         unsafe {
-            let _ = self.stream.lock().as_mut().unwrap().wait_for_idle().is_ok();
-        }
-        let instance = self.instance.get_mut().take().unwrap();
-        unsafe {
+            let mut instance = self.instance.get_mut().take().unwrap();
+            for mut device in std::mem::take(&mut self.devices) {
+                let mut dev = device.inner.get_mut().take().unwrap();
+                for mut stream in device.streams {
+                    stream.inner.get_mut().take().unwrap().destroy(&mut dev);
+                }
+                dev.destroy(&mut instance);
+            }
             instance.destroy().unwrap();
         }
     }
