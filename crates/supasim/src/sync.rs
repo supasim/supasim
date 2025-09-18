@@ -6,15 +6,40 @@ END LICENSE */
 
 use std::sync::Arc;
 
-use crate::Instance;
+use hal::Semaphore as _;
+use smallvec::SmallVec;
+
+use crate::{DEVICE_SMALLVEC_SIZE, Instance, MapSupasimError, SupaSimResult};
 
 /// A semaphore with info about its device that returns to a pool on drop
 pub struct DeviceSemaphore<B: hal::Backend> {
     pub inner: Option<B::Semaphore>,
-    pub device_index: usize,
+    /// The device, stream and submission that will signal it. If None, then the host will signal.
+    pub device_stream_submission: Option<(usize, usize, usize)>,
+    pub submission: usize,
     instance: Instance<B>,
     /// Other semaphores (on other devices) that should be signalled when this finishes
-    others_to_signal: Vec<Arc<DeviceSemaphore<B>>>,
+    to_signal_per_device: SmallVec<[Option<Arc<DeviceSemaphore<B>>>; DEVICE_SMALLVEC_SIZE]>,
+}
+impl<B: hal::Backend> DeviceSemaphore<B> {
+    pub fn wait(&self) -> SupaSimResult<B, ()> {
+        unsafe {
+            self.inner
+                .as_ref()
+                .unwrap()
+                .wait(self.instance.inner()?.instance.lock().as_ref().unwrap())
+                .map_supasim()
+        }
+    }
+    pub fn is_signalled(&self) -> SupaSimResult<B, bool> {
+        unsafe {
+            self.inner
+                .as_ref()
+                .unwrap()
+                .is_signalled(self.instance.inner()?.instance.lock().as_ref().unwrap())
+                .map_supasim()
+        }
+    }
 }
 impl<B: hal::Backend> Drop for DeviceSemaphore<B> {
     fn drop(&mut self) {

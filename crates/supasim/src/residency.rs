@@ -1,9 +1,10 @@
 use std::{collections::VecDeque, sync::Arc};
 
+use hal::Buffer;
 use parking_lot::{Condvar, Mutex};
 use smallvec::SmallVec;
 
-use crate::{DEVICE_SMALLVEC_SIZE, sync::DeviceSemaphore};
+use crate::{DEVICE_SMALLVEC_SIZE, Instance, sync::DeviceSemaphore};
 
 struct OutOfDateWait<B: hal::Backend> {
     semaphores: Vec<Arc<DeviceSemaphore<B>>>,
@@ -91,6 +92,21 @@ impl<B: hal::Backend> BufferResidency<B> {
             storage: None,
             read_accesses: Vec::new(),
             write_accesses: VecDeque::new(),
+        }
+    }
+    pub unsafe fn destroy(&mut self, _instance: &Instance<B>) {
+        let instance = _instance.inner().unwrap();
+        for (dev_id, dev) in &mut self.devices.iter_mut().chain([&mut self.host]).enumerate() {
+            if let Some(b) = dev.buffer.take() {
+                unsafe {
+                    let dev_id = if dev_id < instance.devices.len() {
+                        dev_id
+                    } else {
+                        0
+                    };
+                    b.destroy(instance.devices[dev_id].inner.lock().as_ref().unwrap());
+                }
+            }
         }
     }
 }

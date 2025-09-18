@@ -56,7 +56,7 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
             .try_init();
         dev_utils::setup_trace_printer_if_env();
         info!("Starting test");
-        let fun_semaphore = device.create_semaphore()?;
+        let fun_semaphore = instance.create_semaphore()?;
         let kernel_compiler = kernels::GlobalState::new_from_env().unwrap();
         let mut add_code = Vec::new();
         let mut double_code = Vec::new();
@@ -253,7 +253,7 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
             signal_semaphore: Some(&fun_semaphore),
         }))?;
         info!("Submitted recorders");
-        fun_semaphore.wait(&device)?;
+        fun_semaphore.wait(&instance)?;
 
         let mut res = [3u32, 0, 0, 0];
         download_buffer.read(&device, 0, bytemuck::cast_slice_mut(&mut res))?;
@@ -262,7 +262,7 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
         info!("Read buffers");
 
         recorder.destroy(&stream)?;
-        fun_semaphore.destroy(&device)?;
+        fun_semaphore.destroy(&instance)?;
         bind_group.destroy(&stream, &kernel)?;
         bind_group2.destroy(&stream, &kernel2)?;
         kernel.destroy(&instance)?;

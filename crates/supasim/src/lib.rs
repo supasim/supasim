@@ -1203,7 +1203,7 @@ impl<B: hal::Backend> std::fmt::Debug for Buffer<B> {
     }
 }
 impl<B: hal::Backend> BufferInner<B> {
-    fn destroy(&mut self, instance: &InstanceState<B>) {
+    fn destroy(&mut self, instance: &InstanceInner<B>) {
         instance.buffers.lock().remove(self.id);
         unsafe {
             std::mem::take(&mut self.inner)
