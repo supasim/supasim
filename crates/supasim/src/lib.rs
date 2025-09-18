@@ -19,6 +19,7 @@ pub extern crate kernels;
 #[cfg(test)]
 mod tests;
 
+mod record;
 mod residency;
 mod sync;
 
@@ -28,7 +29,7 @@ use hal::{
     StreamDescriptor, StreamType,
 };
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::cell::UnsafeCell;
+use smallvec::{SmallVec, smallvec};
 use std::collections::HashSet;
 use std::ops::Bound;
 use std::{
@@ -48,7 +49,10 @@ pub use types::{
 };
 
 use crate::residency::BufferResidency;
-use crate::sync::{GpuSubmissionInfo, SyncThreadHandle, create_sync_thread};
+use crate::sync::DeviceSemaphore;
+
+pub(crate) const DEVICE_SMALLVEC_SIZE: usize = 4;
+pub(crate) const STREAM_SMALLVEC_SIZE: usize = 16;
 
 pub type UserBufferAccessClosure<'a, B> =
     Box<dyn FnOnce(&mut [MappedBuffer<'a, B>]) -> anyhow::Result<()>>;
@@ -133,30 +137,6 @@ impl<B: hal::Backend> BufferSlice<B> {
             len: buffer.inner()?.create_info.size,
             needs_mut,
         })
-    }
-    fn acquire(&self, user: BufferUser, bypass_gpu: bool) -> SupaSimResult<B, BufferUserId> {
-        let s = self.buffer.inner()?;
-        let instance = s.instance.clone();
-
-        s.slice_tracker.acquire(
-            &*instance.inner()?,
-            BufferRange {
-                start: self.start,
-                len: self.len,
-                needs_mut: self.needs_mut,
-            },
-            user,
-            bypass_gpu,
-        )
-    }
-    fn release(&self, id: u64) -> SupaSimResult<B, ()> {
-        let s = self.buffer.inner()?;
-        // Clippy generates a confusing warning and nonsense solution
-        s.slice_tracker.release(BufferUserId {
-            range: self.into(),
-            id,
-        });
-        Ok(())
     }
     fn range(&self) -> BufferRange {
         BufferRange {
@@ -281,11 +261,18 @@ pub type SupaSimResult<B, T> = Result<T, SupaSimError<B>>;
 pub struct InstanceProperties {
     pub kernel_lang: KernelTarget,
 }
-struct InstanceState<B: hal::Backend> {
+struct Stream<B: hal::Backend> {
+    inner: Mutex<Option<B::Stream>>,
+}
+struct Device<B: hal::Backend> {
+    inner: Mutex<Option<B::Device>>,
+    streams: SmallVec<[Stream<B>; STREAM_SMALLVEC_SIZE]>,
+}
+api_type!(Instance, {
     /// The inner hal instance
     instance: Mutex<Option<B::Instance>>,
     /// The inner hal device
-    device: Mutex<Option<B::Device>>,
+    devices: SmallVec<[Device<B>; DEVICE_SMALLVEC_SIZE]>,
     /// The inner hal stream
     stream: Mutex<Option<B::Stream>>,
     /// The hal instance properties
@@ -304,34 +291,10 @@ struct InstanceState<B: hal::Backend> {
     hal_command_recorders: Mutex<Vec<B::CommandRecorder>>,
     /// User accessible kernel compiler state
     kernel_compiler: Mutex<kernels::GlobalState>,
-    /// A handle to the thread used for syncing
-    sync_thread: UnsafeCell<Option<SyncThreadHandle<B>>>,
     /// A weak reference to self
-    myself: UnsafeCell<Option<SupaSimInstanceWeak<B>>>,
-}
-impl<B: hal::Backend> InstanceState<B> {
-    pub fn sync_thread(&self) -> &SyncThreadHandle<B> {
-        unsafe { &*self.sync_thread.get() }.as_ref().unwrap()
-    }
-}
-impl<B: hal::Backend> Drop for InstanceState<B> {
-    fn drop(&mut self) {
-        let instance = std::mem::take(&mut *self.instance.lock()).unwrap();
-        unsafe {
-            instance.destroy().unwrap();
-        }
-    }
-}
-api_type!(SupaSimInstance, {
-    _inner: Arc<InstanceState<B>>,
+    myself: Option<InstanceWeak<B>>,
 },);
-impl<B: hal::Backend> Deref for SupaSimInstanceInner<B> {
-    type Target = InstanceState<B>;
-    fn deref(&self) -> &Self::Target {
-        &self._inner
-    }
-}
-impl<B: hal::Backend> SupaSimInstance<B> {
+impl<B: hal::Backend> Instance<B> {
     pub fn from_hal(desc: hal::InstanceDescriptor<B>) -> Self {
         let instance = desc.instance;
         let device = desc.devices.into_iter().next().unwrap();
@@ -346,34 +309,30 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         let device = device.device;
         let instance_properties = instance.get_properties();
         let device_properties = device.get_properties(&instance);
-        let s = Self::from_inner(SupaSimInstanceInner {
+        let s = Self::from_inner(InstanceInner {
             _phantom: Default::default(),
             _is_destroyed: false,
-            _inner: Arc::new(InstanceState {
-                instance: Mutex::new(Some(instance)),
-                device: Mutex::new(Some(device)),
-                stream: Mutex::new(Some(stream)),
-                instance_properties,
-                device_properties,
-                kernels: Mutex::new(Arena::default()),
-                buffers: Mutex::new(Arena::default()),
-                wait_handles: Mutex::new(Arena::default()),
-                command_recorders: Mutex::new(Arena::default()),
-                hal_command_recorders: Mutex::new(Vec::new()),
-                kernel_compiler: Mutex::new(kernels::GlobalState::new_from_env().unwrap()),
-                sync_thread: UnsafeCell::new(None),
-                myself: UnsafeCell::new(None),
-            }),
+            instance: Mutex::new(Some(instance)),
+            device: Mutex::new(Some(device)),
+            stream: Mutex::new(Some(stream)),
+            instance_properties,
+            device_properties,
+            kernels: Mutex::new(Arena::default()),
+            buffers: Mutex::new(Arena::default()),
+            wait_handles: Mutex::new(Arena::default()),
+            command_recorders: Mutex::new(Arena::default()),
+            hal_command_recorders: Mutex::new(Vec::new()),
+            kernel_compiler: Mutex::new(kernels::GlobalState::new_from_env().unwrap()),
+            sync_thread: None,
+            myself: None,
         });
 
         let handle = create_sync_thread(s.clone()).unwrap();
-
-        unsafe {
-            let inner_mut = s.inner().unwrap();
-            *inner_mut.sync_thread.get() = Some(handle);
-            *inner_mut.myself.get() = Some(s.downgrade());
+        {
+            let mut inner_mut = s.inner_mut().unwrap();
+            inner_mut.sync_thread = Some(handle);
+            inner_mut.myself = Some(s.downgrade());
         }
-
         s
     }
     pub fn properties(&self) -> SupaSimResult<B, InstanceProperties> {
@@ -406,11 +365,11 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             _phantom: Default::default(),
             _is_destroyed: false,
             instance: self.clone(),
-            inner: Some(kernel),
+            per_device: smallvec![Some(kernel)],
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
             reflection_info: reflection,
-            last_used: 0,
+            last_used_per_device: smallvec![Vec::new()],
         });
         k.inner_mut()?.id = s.kernels.lock().insert(k.downgrade());
         Ok(k)
@@ -455,26 +414,15 @@ impl<B: hal::Backend> SupaSimInstance<B> {
     pub fn create_buffer(&self, desc: &BufferDescriptor) -> SupaSimResult<B, Buffer<B>> {
         self.check_destroyed()?;
         let s = self.inner()?;
-        let inner = unsafe {
-            s.device
-                .lock()
-                .as_mut()
-                .unwrap()
-                .create_buffer(&(*desc).into())
-        }
-        .map_supasim()?;
         let b = Buffer::from_inner(BufferInner {
             _phantom: Default::default(),
             _is_destroyed: false,
             instance: self.clone(),
-            inner: Some(inner),
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
-            _semaphores: Vec::new(),
             create_info: *desc,
-            last_used: 0,
-            slice_tracker: SliceTracker::new(),
             is_currently_external: false,
+            residency: BufferResidency::new(1),
         });
         b.inner_mut()?.id = s.buffers.lock().insert(Some(b.downgrade()));
         Ok(b)
@@ -737,14 +685,12 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         self._destroy()
     }
 }
-impl<B: hal::Backend> SupaSimInstanceInner<B> {
+impl<B: hal::Backend> InstanceInner<B> {
     fn destroy(&mut self) {
         println!("Instance destroying");
         // We unsafely pass a mutable reference to the sync thread, knowing that this thread will "join" it,
         // meaning that at no point is the mutable reference used by both at the same time.
-        let mut sync_thread =
-            std::mem::take::<Option<SyncThreadHandle<B>>>(unsafe { &mut *self.sync_thread.get() })
-                .unwrap();
+        let mut sync_thread = self.sync_thread.take().unwrap();
         let _ = sync_thread.wait_for_idle();
         let _ = sync_thread
             .sender
@@ -790,21 +736,26 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
                 let _ = k._destroy();
             }
         }
+
         unsafe {
             let _ = self.stream.lock().as_mut().unwrap().wait_for_idle().is_ok();
         }
+        let instance = self.instance.get_mut().take().unwrap();
+        unsafe {
+            instance.destroy().unwrap();
+        }
     }
 }
-impl<B: hal::Backend> Drop for SupaSimInstanceInner<B> {
+impl<B: hal::Backend> Drop for InstanceInner<B> {
     fn drop(&mut self) {
         self.destroy();
     }
 }
 api_type!(Kernel, {
-    instance: SupaSimInstance<B>,
-    inner: Option<B::Kernel>,
+    instance: Instance<B>,
+    per_device: SmallVec<[Option<B::Kernel>; DEVICE_SMALLVEC_SIZE]>,
     reflection_info: KernelReflectionInfo,
-    last_used: u64,
+    last_used_per_device: SmallVec<[Vec<DeviceSemaphore<B>>; DEVICE_SMALLVEC_SIZE]>,
     id: Index,
 },);
 impl<B: hal::Backend> std::fmt::Debug for Kernel<B> {
@@ -865,7 +816,7 @@ struct SubmittedCommandRecorder<B: hal::Backend> {
     used_buffers: Vec<BufferWeak<B>>,
 }
 api_type!(CommandRecorder, {
-    instance: SupaSimInstance<B>,
+    instance: Instance<B>,
     is_alive: bool,
     id: Index,
     commands: Vec<BufferCommand<B>>,
@@ -1100,14 +1051,10 @@ impl<B: hal::Backend> BufferBacking<B> {
     }
 }
 api_type!(Buffer, {
-    instance: SupaSimInstance<B>,
-    inner: Option<B::Buffer>,
+    instance: Instance<B>,
     id: Index,
-    _semaphores: Vec<(Index, BufferRange)>,
     create_info: BufferDescriptor,
-    residency: BufferResidency,
-    last_used: u64,
-    slice_tracker: SliceTracker,
+    residency: BufferResidency<B>,
     is_currently_external: bool,
 },);
 impl<B: hal::Backend> Buffer<B> {
@@ -1275,7 +1222,7 @@ impl<B: hal::Backend> Drop for BufferInner<B> {
 /// If the entire buffer isn't the same type you are trying to read, read as bytes first then cast yourself.
 /// SupaSim does checks for alignments and validates offsets with the size of types
 pub struct MappedBuffer<'a, B: hal::Backend> {
-    instance: SupaSimInstance<B>,
+    instance: Instance<B>,
     inner: *mut u8,
     len: u64,
     buffer_align: u64,
@@ -1357,9 +1304,8 @@ impl<B: hal::Backend> Drop for MappedBuffer<'_, B> {
 }
 
 api_type!(WaitHandle, {
-    instance: SupaSimInstance<B>,
-    /// Index of the submission
-    index: u64,
+    instance: Instance<B>,
+    semaphore: DeviceSemaphore<B>,
     id: Index,
     is_alive: bool,
 },);
