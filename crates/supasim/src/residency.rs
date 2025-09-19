@@ -1,13 +1,19 @@
+/* BEGIN LICENSE
+  SupaSim, a GPGPU and simulation toolkit.
+  Copyright (C) 2025 Magnus Larsson
+  SPDX-License-Identifier: MIT OR Apache-2.0
+END LICENSE */
+
 use std::{collections::VecDeque, sync::Arc};
 
 use hal::Buffer;
 use parking_lot::{Condvar, Mutex};
 use smallvec::SmallVec;
 
-use crate::{DEVICE_SMALLVEC_SIZE, Instance, sync::DeviceSemaphore};
+use crate::{DEVICE_SMALLVEC_SIZE, Instance, sync::Semaphore};
 
 struct OutOfDateWait<B: hal::Backend> {
-    semaphores: Vec<Arc<DeviceSemaphore<B>>>,
+    semaphores: Vec<Arc<Semaphore<B>>>,
     needs_more_copy: bool,
 }
 #[derive(Default)]
@@ -60,13 +66,10 @@ struct BufferAccessRange {
 }
 /// Contains data for waiting on a buffer access
 struct BufferAccessFinish<B: hal::Backend> {
-    /// If none, it is a host access, and condvar is Some. If some, device_semaphores has length 1 and
-    /// the only element is a host-waitable semaphore, and condvar is None.
-    device_index: Option<u32>,
     /// The conditional variable, only used in CPU->CPU synchronization
     condvar: Option<Condvar>,
     is_complete: Mutex<bool>,
-    device_semaphores: SmallVec<[Option<DeviceSemaphore<B>>; DEVICE_SMALLVEC_SIZE]>,
+    device_semaphore: Option<Semaphore<B>>,
     range: BufferAccessRange,
 }
 pub struct BufferResidency<B: hal::Backend> {
