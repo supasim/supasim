@@ -6,7 +6,7 @@ END LICENSE */
 
 use hal::Semaphore as _;
 
-use crate::{Instance, MapSupasimError, SupaSimResult, WaitHandle};
+use crate::{Instance, MapSupasimError, SupaSimResult, WaitHandle, record};
 
 /// A semaphore with info about its device that returns to a pool on drop
 pub struct Semaphore<B: hal::Backend> {
@@ -58,12 +58,12 @@ impl<B: hal::Backend> Default for SubmissionResources<B> {
 
 pub fn submit_command_recorders<B: hal::Backend>(
     instance: &Instance<B>,
-    command_recorders: &[crate::CommandRecorder<B>],
+    recorders: &[crate::CommandRecorder<B>],
 ) -> SupaSimResult<B, WaitHandle<B>> {
-    self.check_destroyed()?;
+    instance.check_destroyed()?;
     let submission_idx;
     {
-        let s = self.inner()?;
+        let s = instance.inner()?;
 
         let mut recorder_locks = Vec::new();
         for r in recorders.iter_mut() {
@@ -85,7 +85,7 @@ pub fn submit_command_recorders<B: hal::Backend>(
         };
         let mut used_buffers = HashSet::new();
         let mut used_buffer_ranges = Vec::new();
-        let streams = sync::assemble_streams(
+        let streams = record::assemble_streams(
             &mut recorder_inners,
             &s,
             s.instance_properties.sync_mode == SyncMode::VulkanStyle,
