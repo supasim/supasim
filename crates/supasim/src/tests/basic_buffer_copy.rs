@@ -14,11 +14,10 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(
         println!("Hello, world!");
         dev_utils::setup_trace_printer_if_env();
 
-        let instance = SupaSimInstance::<Backend>::from_hal(hal);
+        let instance = Instance::<Backend>::from_hal(hal);
         let upload_buffer = instance
             .create_buffer(&BufferDescriptor {
                 size: 16,
-                buffer_type: BufferType::Upload,
                 contents_align: 4,
                 priority: 0.0,
                 can_export: false,
@@ -27,7 +26,6 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(
         let gpu_buffer = instance
             .create_buffer(&BufferDescriptor {
                 size: 16,
-                buffer_type: BufferType::Gpu,
                 contents_align: 4,
                 priority: 0.0,
                 can_export: false,
@@ -36,7 +34,6 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(
         let download_buffer = instance
             .create_buffer(&BufferDescriptor {
                 size: 16,
-                buffer_type: BufferType::Download,
                 contents_align: 4,
                 priority: 0.0,
                 can_export: false,
