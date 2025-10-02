@@ -25,7 +25,7 @@ opt-valid = ["spirv-tools-sys", "spirv-cross"]
 spirv-cross = ["spirv-cross-sys"]
 
 [dependencies]
-naga = { version = "26.0", default-features = false, features = [
+naga = { version = "27.0", default-features = false, features = [
   "spv-in",
 ], optional = true }
 anyhow.workspace = true
