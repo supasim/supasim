@@ -616,6 +616,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
 name = "foreign-types"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -725,7 +731,7 @@ checksum = "b89c83349105e3732062a895becfc71a8f921bb71ecbbdd8ff99263e3b53a0ca"
 dependencies = [
  "bitflags 2.9.4",
  "gpu-descriptor-types",
- "hashbrown",
+ "hashbrown 0.15.5",
 ]
 
 [[package]]
@@ -756,7 +762,16 @@ checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
  "allocator-api2",
  "equivalent",
- "foldhash",
+ "foldhash 0.1.5",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5419bdc4f6a9207fbeba6d11b604d481addf78ecd10c11ad51e76c2f6482748d"
+dependencies = [
+ "foldhash 0.2.0",
 ]
 
 [[package]]
@@ -793,7 +808,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fe4cd85333e22411419a0bcae1297d25e58c9443848b11dc6a86fefe8c78a661"
 dependencies = [
  "equivalent",
- "hashbrown",
+ "hashbrown 0.15.5",
 ]
 
 [[package]]
@@ -1014,7 +1029,7 @@ dependencies = [
  "cfg_aliases",
  "codespan-reporting",
  "half",
- "hashbrown",
+ "hashbrown 0.15.5",
  "hexf-parse",
  "indexmap",
  "libm",
@@ -1026,6 +1041,31 @@ dependencies = [
  "spirv",
  "thiserror 2.0.17",
  "unicode-ident",
+]
+
+[[package]]
+name = "naga"
+version = "27.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12b2e757b11b47345d44e7760e45458339bc490463d9548cd8651c53ae523153"
+dependencies = [
+ "arrayvec",
+ "bit-set",
+ "bitflags 2.9.4",
+ "cfg-if",
+ "cfg_aliases",
+ "codespan-reporting",
+ "half",
+ "hashbrown 0.16.0",
+ "indexmap",
+ "libm",
+ "log",
+ "num-traits",
+ "once_cell",
+ "petgraph",
+ "rustc-hash 1.1.0",
+ "spirv",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -1449,7 +1489,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54acf3a685220b533e437e264e4d932cfbdc4cc7ec0cd232ed73c08d03b8a7ca"
 dependencies = [
  "fixedbitset",
- "hashbrown",
+ "hashbrown 0.15.5",
  "indexmap",
 ]
 
@@ -1978,7 +2018,7 @@ dependencies = [
  "bytemuck",
  "hassle-rs",
  "libc",
- "naga",
+ "naga 27.0.0",
  "rand",
  "serde_json",
  "shader-slang",
@@ -2498,10 +2538,10 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "document-features",
- "hashbrown",
+ "hashbrown 0.15.5",
  "js-sys",
  "log",
- "naga",
+ "naga 26.0.0",
  "portable-atomic",
  "profiling",
  "raw-window-handle",
@@ -2528,10 +2568,10 @@ dependencies = [
  "bytemuck",
  "cfg_aliases",
  "document-features",
- "hashbrown",
+ "hashbrown 0.15.5",
  "indexmap",
  "log",
- "naga",
+ "naga 26.0.0",
  "once_cell",
  "parking_lot",
  "portable-atomic",
@@ -2583,12 +2623,12 @@ dependencies = [
  "gpu-alloc",
  "gpu-allocator 0.27.0",
  "gpu-descriptor",
- "hashbrown",
+ "hashbrown 0.15.5",
  "libc",
  "libloading",
  "log",
  "metal",
- "naga",
+ "naga 26.0.0",
  "objc",
  "ordered-float",
  "parking_lot",
