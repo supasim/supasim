@@ -594,7 +594,8 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn wait(&self, device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
         if let Some(a) = self.inner.lock().unwrap().clone() {
-            self.device
+            device
+                .device
                 .poll(wgpu::PollType::Wait {
                     submission_index: Some(a.clone()),
                     timeout: None,
