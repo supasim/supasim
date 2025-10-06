@@ -37,7 +37,7 @@ homepage = "https://supasim.github.io/"
 # Many of these aren't yet used by supasim
 anyhow = "1.0"
 bitflags = "2.9"
-bytemuck = { version = "1.23", features = ["derive"] }
+bytemuck = { version = "1.24", features = ["derive"] }
 env_logger = "0.11"
 getrandom = "0.3"
 libloading = "0.8"
@@ -47,7 +47,7 @@ rayon = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
-tempfile = "3.22"
+tempfile = "3.23"
 scopeguard = "1.2"
 daggy = "0.9"
 thunderdome = "0.6"
@@ -58,7 +58,7 @@ paste = "1.0"
 
 pollster = { version = "0.4" }
 
-wgpu = { version = "26.0", default-features = false, features = [
+wgpu = { version = "27.0", default-features = false, features = [
   "spirv",
   "dx12",
   "metal",

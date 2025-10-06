@@ -59,6 +59,7 @@ impl Wgpu {
             backend_options: wgpu::BackendOptions {
                 dx12: wgpu::Dx12BackendOptions {
                     shader_compiler: wgpu::Dx12Compiler::default_dynamic_dxc(),
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -86,6 +87,7 @@ impl Wgpu {
                 required_limits: wgpu::Limits::downlevel_defaults(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::Off,
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
             }))?;
         Ok(InstanceDescriptor {
             instance: WgpuInstance {
@@ -139,8 +141,7 @@ impl Device<Wgpu> for WgpuDevice {
         });
         Ok(WgpuBuffer {
             inner: Box::new(buffer.clone()),
-            slice: None,
-            mapped_slice: None,
+            view: None,
             map_mut: match alloc_info.memory_type {
                 HalBufferType::Download => Some(false),
                 HalBufferType::Upload => Some(true),
@@ -208,7 +209,9 @@ impl Stream<Wgpu> for WgpuStream {
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn wait_for_idle(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
-        self.device.poll(wgpu::PollType::Wait).unwrap();
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
         Ok(())
     }
 
@@ -384,8 +387,7 @@ pub struct WgpuBuffer {
     /// This can't be moved for fear of UB lol. This is because buffer
     /// mapping expands the lifetime of a reference to it to 'static.
     inner: Box<wgpu::Buffer>,
-    slice: Option<wgpu::BufferSlice<'static>>,
-    mapped_slice: Option<wgpu::BufferViewMut<'static>>,
+    view: Option<wgpu::BufferViewMut>,
     map_mut: Option<bool>,
 }
 unsafe impl Send for WgpuBuffer {}
@@ -393,10 +395,8 @@ unsafe impl Sync for WgpuBuffer {}
 impl Buffer<Wgpu> for WgpuBuffer {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(mut self, _device: &WgpuDevice) -> Result<(), <Wgpu as Backend>::Error> {
-        if self.mapped_slice.is_some() {
-            // Drop the mapped slice first
-            self.mapped_slice = None;
-            self.slice = None;
+        if self.view.is_some() {
+            self.view = None;
             self.inner.unmap();
         }
         Ok(())
@@ -409,7 +409,7 @@ impl Buffer<Wgpu> for WgpuBuffer {
         offset: u64,
         data: &[u8],
     ) -> Result<(), <Wgpu as Backend>::Error> {
-        let was_mapped = self.mapped_slice.is_some();
+        let was_mapped = self.view.is_some();
         let ptr = unsafe { self.map(device)?.add(offset as usize) };
         unsafe { std::slice::from_raw_parts_mut(ptr, data.len()) }.clone_from_slice(data);
         if !was_mapped {
@@ -425,7 +425,7 @@ impl Buffer<Wgpu> for WgpuBuffer {
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), <Wgpu as Backend>::Error> {
-        let was_mapped = self.mapped_slice.is_some();
+        let was_mapped = self.view.is_some();
         let ptr = unsafe { self.map(device)?.add(offset as usize) };
         unsafe { data.clone_from_slice(std::slice::from_raw_parts(ptr, data.len())) };
         if !was_mapped {
@@ -436,22 +436,12 @@ impl Buffer<Wgpu> for WgpuBuffer {
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn map(&mut self, device: &WgpuDevice) -> Result<*mut u8, <Wgpu as Backend>::Error> {
-        let ptr = match &mut self.mapped_slice {
+        let ptr = match &mut self.view {
             Some(slice) => slice.as_mut_ptr(),
             None => {
-                // Fuck it. Transmute is to not worry about lifetimes.
-                // Current wgpu implementation only need the lifetime for
-                // the reference to the inner buffer, not needing mut.
-                // Since the inner buffer lives as long as the WgpuBuffer,
-                // and will never be used mutably until it is destroyed
-                // with the WgpuBuffer itself, this should be safe.
-                unsafe {
-                    self.slice = Some(std::mem::transmute::<
-                        wgpu::BufferSlice<'_>,
-                        wgpu::BufferSlice<'static>,
-                    >(self.inner.slice(..)));
-                }
-                self.slice.as_ref().unwrap().map_async(
+                let slice = self.inner.slice(..);
+
+                slice.map_async(
                     if self.map_mut.unwrap() {
                         wgpu::MapMode::Write
                     } else {
@@ -462,11 +452,14 @@ impl Buffer<Wgpu> for WgpuBuffer {
                 // In theory map_async will go through after doing this kind of blocking wait.
                 // This might change in the future, making wgpu a volatile backend.
                 // Also, this is dumb as shit.
-                device.device.poll(wgpu::PollType::Wait).unwrap();
+                device
+                    .device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .unwrap();
                 // Now that we know that the slice will "live forever", we can get its mapped range which
                 // will likewise "live forever". I told you I knew what I was doing, borrow checker!
-                self.mapped_slice = Some(self.slice.as_mut().unwrap().get_mapped_range_mut());
-                self.mapped_slice.as_mut().unwrap().as_mut_ptr()
+                self.view = Some(slice.get_mapped_range_mut());
+                self.view.as_mut().unwrap().as_mut_ptr()
             }
         };
 
@@ -475,8 +468,7 @@ impl Buffer<Wgpu> for WgpuBuffer {
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn unmap(&mut self, _device: &WgpuDevice) -> Result<(), <Wgpu as Backend>::Error> {
-        self.mapped_slice = None;
-        self.slice = None;
+        self.view = None;
         self.inner.unmap();
         Ok(())
     }
@@ -602,9 +594,11 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn wait(&self, device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
         if let Some(a) = self.inner.lock().unwrap().clone() {
-            device
-                .device
-                .poll(wgpu::PollType::WaitForSubmissionIndex(a.clone()))
+            self.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(a.clone()),
+                    timeout: None,
+                })
                 .map_err(|_| WgpuError::PollTimeout)?;
         }
         Ok(())

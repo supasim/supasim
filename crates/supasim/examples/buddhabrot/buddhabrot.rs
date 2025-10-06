@@ -111,6 +111,7 @@ impl<B: hal::Backend> AppState<B> {
                 required_limits: wgpu::Limits::defaults(),
                 memory_hints: Default::default(),
                 trace: wgpu::Trace::Off,
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
             })
             .await
             .unwrap();

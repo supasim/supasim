@@ -51,7 +51,7 @@ tracing = { workspace = true, optional = true }
 
 # Vulkan dependencies
 ash = { version = "0.38", optional = true, features = ["debug"] }
-gpu-allocator = { version = "0.27", optional = true, features = ["vulkan"] }
+gpu-allocator = { version = "0.28", optional = true, features = ["vulkan"] }
 
 # WGPU dependencies
 wgpu = { workspace = true, optional = true }
