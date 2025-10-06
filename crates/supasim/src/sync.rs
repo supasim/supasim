@@ -972,8 +972,8 @@ fn sync_thread_main<B: hal::Backend>(logic: &mut SyncThreadData<B>) {
         )
     };
     let mut semaphores: Vec<B::Semaphore> = Vec::new();
-    let acquire_semaphore = |sems: &mut Vec<B::Semaphore>| -> SupaSimResult<B, B::Semaphore> {
-        Ok(if let Some(mut s) = sems.pop() {
+    let acquire_semaphore = |semaphores: &mut Vec<B::Semaphore>| -> SupaSimResult<B, B::Semaphore> {
+        Ok(if let Some(mut s) = semaphores.pop() {
             unsafe {
                 s.reset(logic.instance.device.lock().as_ref().unwrap())
                     .map_supasim()?;
