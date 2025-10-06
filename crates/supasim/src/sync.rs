@@ -773,7 +773,7 @@ impl<B: hal::Backend> CpuSubmission<B> {
                     drop(mapped_buffers);
                     error?;
                 } else {
-                    let mut buffer_datas = Vec::new();
+                    let mut buffer_contents = Vec::new();
                     for b in &buffers {
                         let mut buffer = b.buffer.inner_mut()?;
                         let _instance = buffer.instance.clone();
@@ -791,9 +791,9 @@ impl<B: hal::Backend> CpuSubmission<B> {
                                     .map_supasim()?;
                             };
                         };
-                        buffer_datas.push(data);
+                        buffer_contents.push(data);
                     }
-                    for (i, a) in buffer_datas.iter_mut().enumerate() {
+                    for (i, a) in buffer_contents.iter_mut().enumerate() {
                         let b = &buffers[i];
                         let buffer_inner = b.buffer.inner()?;
                         let mapped = MappedBuffer {
@@ -814,7 +814,7 @@ impl<B: hal::Backend> CpuSubmission<B> {
                     // Memory issues if we don't unmap I guess
                     let error =
                         closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e));
-                    for b in buffer_datas {
+                    for b in buffer_contents {
                         std::mem::forget(b);
                     }
                     drop(mapped_buffers);

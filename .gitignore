@@ -1,7 +1,6 @@
 /target/
 /lib/
 /crates/supasim-kernels/kernel-tests/**
-/test.*
 /.env
 /.vscode
 /.idea

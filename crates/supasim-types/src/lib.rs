@@ -153,7 +153,7 @@ pub enum SyncOperations {
 pub struct HalInstanceProperties {
     /// What synchronization requirements the backend has
     pub sync_mode: SyncMode,
-    /// What kernel langauge the backend takes
+    /// What kernel language the backend takes
     pub kernel_lang: KernelTarget,
     /// Whether the backend supports bind groups that are updated while commands are already recorded. This makes bind groups far cheaper to use
     pub easily_update_bind_groups: bool,
