@@ -146,8 +146,8 @@ pub struct BufferSlice<B: hal::Backend> {
 impl<B: hal::Backend> BufferSlice<B> {
     pub fn validate(&self) -> SupaSimResult<B, ()> {
         let b = self.buffer.inner()?;
-        if (self.start % b.create_info.contents_align) == 0
-            && (self.len % b.create_info.contents_align) == 0
+        if self.start.is_multiple_of(b.create_info.contents_align)
+            && self.len.is_multiple_of(b.create_info.contents_align)
         {
             Ok(())
         } else {
@@ -157,9 +157,9 @@ impl<B: hal::Backend> BufferSlice<B> {
     pub fn validate_with_align(&self, align: u64) -> SupaSimResult<B, ()> {
         let b = self.buffer.inner()?;
         // This is explained in MappedBuffer associated methods
-        if (align % b.create_info.contents_align) == 0
-            && (self.start % align) == 0
-            && (self.len % align) == 0
+        if align.is_multiple_of(b.create_info.contents_align)
+            && self.start.is_multiple_of(align)
+            && self.len.is_multiple_of(align)
         {
             Ok(())
         } else {
@@ -977,7 +977,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
     /// Offset and length must be multiples of 4
     pub fn zero_memory(&self, buffer: &Buffer<B>, offset: u64, size: u64) -> SupaSimResult<B, ()> {
         self.check_destroyed()?;
-        if offset % 4 != 0 || size % 4 != 0 {
+        if !offset.is_multiple_of(4) || !size.is_multiple_of(4) {
             return Err(SupaSimError::ZeroMemoryWrongAlignment);
         }
         let slice = BufferSlice {
@@ -1360,11 +1360,11 @@ impl<B: hal::Backend> MappedBuffer<'_, B> {
     pub fn readable<T: bytemuck::Pod>(&self) -> SupaSimResult<B, &[T]> {
         let s = unsafe { std::slice::from_raw_parts(self.inner, self.len as usize) };
         // Length of the slice is a multiple of the length of the type
-        if (self.len % size_of::<T>() as u64) == 0
+        if self.len.is_multiple_of(size_of::<T>() as u64)
         // Length of the type is a multiple of the buffer alignment
-        && (((size_of::<T>() as u64 % self.buffer_align) == 0) || ((self.buffer_align % size_of::<T>() as u64) == 0))
+        && ((size_of::<T>() as u64).is_multiple_of(self.buffer_align) || self.buffer_align.is_multiple_of(size_of::<T>() as u64))
             // The offset is reasonable given the size of T
-            && (self.in_buffer_offset % size_of::<T>() as u64) == 0
+            && self.in_buffer_offset.is_multiple_of(size_of::<T>() as u64)
         {
             Ok(bytemuck::cast_slice(s))
         } else {
@@ -1378,11 +1378,11 @@ impl<B: hal::Backend> MappedBuffer<'_, B> {
         self.was_used_mut = true;
         let s = unsafe { std::slice::from_raw_parts_mut(self.inner, self.len as usize) };
         // Length of the slice is a multiple of the length of the type
-        if (self.len % size_of::<T>() as u64) == 0
+        if self.len.is_multiple_of(size_of::<T>() as u64)
         // Length of the type is a multiple of the buffer alignment
-        && (((size_of::<T>() as u64 % self.buffer_align) == 0) || ((self.buffer_align % size_of::<T>() as u64) == 0))
+        && ((size_of::<T>() as u64).is_multiple_of(self.buffer_align) || self.buffer_align.is_multiple_of(size_of::<T>() as u64))
             // The offset is reasonable given the size of T
-            && (self.in_buffer_offset % size_of::<T>() as u64) == 0
+            && self.in_buffer_offset.is_multiple_of(size_of::<T>() as u64)
         {
             Ok(bytemuck::cast_slice_mut(s))
         } else {
