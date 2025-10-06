@@ -621,11 +621,11 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
         }
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn signal(&mut self, device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
+    unsafe fn signal(&mut self, _device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
         unreachable!()
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn reset(&mut self, device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
+    unsafe fn reset(&mut self, _device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
         *self.inner.lock().unwrap() = None;
         Ok(())
     }

@@ -941,7 +941,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             let err = Cell::new(true);
             let kernel_create_info = &vk::ShaderModuleCreateInfo::default();
             let ptr = desc.binary.as_ptr() as *const u32;
-            assert!(desc.binary.len() % 4 == 0);
+            assert!(desc.binary.len().is_multiple_of(4));
             let kernel = if ptr.is_aligned() {
                 self.shared.functions.create_shader_module(
                     &kernel_create_info
