@@ -184,9 +184,7 @@ impl Stream<Metal> for MetalStream {
     unsafe fn wait_for_idle(&mut self) -> Result<(), <Metal as Backend>::Error> {
         let cb = self.inner.commandBuffer().ok_or(MetalError::ObjectCreate)?;
         cb.commit();
-        unsafe {
-            cb.waitUntilCompleted();
-        }
+        cb.waitUntilCompleted();
         Ok(())
     }
     unsafe fn cleanup_cached_resources(
@@ -364,7 +362,7 @@ impl Semaphore<Metal> for MetalSemaphore {
         &self,
         _device: &MetalDevice,
     ) -> Result<bool, <Metal as Backend>::Error> {
-        let value = unsafe { self.event.signaledValue() };
+        let value = self.event.signaledValue();
         Ok(value == self.current_value + 1)
     }
     unsafe fn reset(&mut self, _device: &MetalDevice) -> Result<(), <Metal as Backend>::Error> {
@@ -373,17 +371,15 @@ impl Semaphore<Metal> for MetalSemaphore {
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn signal(&mut self, _device: &MetalDevice) -> Result<(), <Metal as Backend>::Error> {
-        unsafe {
-            self.event.setSignaledValue(self.current_value + 1);
-        }
+        self.event.setSignaledValue(self.current_value + 1);
+
         Ok(())
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn wait(&self, _device: &MetalDevice) -> Result<(), <Metal as Backend>::Error> {
-        unsafe {
-            self.event
-                .waitUntilSignaledValue_timeoutMS(self.current_value + 1, u64::MAX);
-        }
+        self.event
+            .waitUntilSignaledValue_timeoutMS(self.current_value + 1, u64::MAX);
+
         Ok(())
     }
     unsafe fn destroy(
