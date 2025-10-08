@@ -42,8 +42,8 @@ use types::SyncMode;
 pub use hal;
 pub use hal::{DeviceDescriptor, InstanceDescriptor};
 pub use types::{
-    Backend, ExternalBufferDescriptor, HalBufferType, KernelReflectionInfo, KernelTarget,
-    MetalVersion, ShaderModel, SpirvVersion,
+    Backend, ExternalBufferDescriptor, ExternalSemaphoreDescriptor, HalBufferType,
+    KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel, SpirvVersion,
 };
 
 use crate::sync::{GpuSubmissionInfo, SyncThreadHandle, create_sync_thread};
@@ -490,6 +490,8 @@ impl<B: hal::Backend> SupaSimInstance<B> {
             commands: Vec::new(),
             is_alive: true,
             writes_slice: Vec::new(),
+            sem_waits: vec![],
+            sem_signals: vec![],
         });
         r.inner_mut()?.id = s.command_recorders.lock().insert(Some(r.downgrade()));
         Ok(r)
@@ -789,10 +791,19 @@ impl<B: hal::Backend> SupaSimInstance<B> {
     }
     /// # Safety
     /// Importing memory is inherently unsafe. You must manually use external semaphores and memory ownership transfers to synchronize.
+    /// The descriptor must be valid.
     pub unsafe fn import_buffer(
         &self,
         _desc: &ExternalBufferDescriptor,
     ) -> SupaSimResult<B, Buffer<B>> {
+        todo!()
+    }
+    /// # Safety
+    /// Importing semaphores is inherently unsafe. The descriptor must be valid.
+    pub unsafe fn import_semaphore(
+        &self,
+        _desc: &ExternalSemaphoreDescriptor,
+    ) -> SupaSimResult<B, ExternalSemaphore<B>> {
         todo!()
     }
     pub fn destroy(&mut self) -> SupaSimResult<B, ()> {
@@ -932,6 +943,8 @@ api_type!(CommandRecorder, {
     id: Index,
     commands: Vec<BufferCommand<B>>,
     writes_slice: Vec<u8>,
+    sem_waits: Vec<ExternalSemaphore<B>>,
+    sem_signals: Vec<ExternalSemaphore<B>>,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
     /// Valid copies (automatic can replace any of these)
@@ -1075,6 +1088,18 @@ impl<B: hal::Backend> CommandRecorder<B> {
             inner: BufferCommandInner::MemoryTransfer { import },
             buffers: vec![buffer.clone()],
         });
+        Ok(())
+    }
+    /// Applies to the **entire** command recorder. All commands execute after the external semaphore has been signalled.
+    pub fn wait_for_semaphore(&self, s: ExternalSemaphore<B>) -> SupaSimResult<B, ()> {
+        self.check_destroyed()?;
+        self.inner_mut()?.sem_waits.push(s);
+        Ok(())
+    }
+    /// Applies to the **entire** command recorder. After all commands execute after the external semaphore will be signalled.
+    pub fn signal_semaphore(&self, s: ExternalSemaphore<B>) -> SupaSimResult<B, ()> {
+        self.check_destroyed()?;
+        self.inner_mut()?.sem_signals.push(s);
         Ok(())
     }
 }
@@ -1642,3 +1667,8 @@ impl BufferUser {
         }
     }
 }
+
+api_type!(ExternalSemaphore, {
+    instance: SupaSimInstance<B>,
+    id: Index,
+},);
