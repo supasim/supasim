@@ -225,7 +225,7 @@ pub fn assemble_streams<B: hal::Backend>(
 
     resources.temp_copy_buffer = if src_buffer_len > 0 {
         let mut buf = unsafe {
-            instance.inner()?.devices[device_idx]
+            instance.inner()?.hal_devices[device_idx]
                 .inner
                 .lock()
                 .as_mut()
@@ -241,7 +241,7 @@ pub fn assemble_streams<B: hal::Backend>(
         unsafe {
             // Map it exactly once so we don't map/unmap for every CR
             let _instance = instance.inner()?;
-            let device = _instance.devices[device_idx].inner.lock();
+            let device = _instance.hal_devices[device_idx].inner.lock();
             buf.map(device.as_ref().unwrap()).map_supasim()?;
             for cr in crs.iter_mut() {
                 buf.write(device.as_ref().unwrap(), current_offset, &cr.writes_slice)
@@ -441,13 +441,17 @@ pub fn record_command_streams<B: hal::Backend>(
             });
         }
         let bg = unsafe {
-            instance.devices[device_idx].streams[stream_idx]
+            instance.hal_devices[device_idx].streams[stream_idx]
                 .inner
                 .lock()
                 .as_mut()
                 .unwrap()
                 .create_bind_group(
-                    instance.devices[device_idx].inner.lock().as_ref().unwrap(),
+                    instance.hal_devices[device_idx]
+                        .inner
+                        .lock()
+                        .as_ref()
+                        .unwrap(),
                     kernel.per_device[device_idx].as_mut().unwrap(),
                     &resources,
                 )
@@ -653,7 +657,7 @@ pub fn record_command_streams<B: hal::Backend>(
         unsafe {
             recorder
                 .record_commands(
-                    instance.devices[device_idx].streams[stream_idx]
+                    instance.hal_devices[device_idx].streams[stream_idx]
                         .inner
                         .lock()
                         .as_ref()

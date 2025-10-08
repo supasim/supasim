@@ -10,7 +10,7 @@ use hal::{Buffer, Semaphore as _};
 use parking_lot::{Condvar, Mutex};
 use smallvec::SmallVec;
 
-use crate::{DEVICE_SMALLVEC_SIZE, Instance, sync::Semaphore};
+use crate::{DEVICE_SMALLVEC_SIZE, Instance, InstanceInner, sync::Semaphore};
 
 struct OutOfDateWait<B: hal::Backend> {
     semaphores: Vec<Arc<Semaphore<B>>>,
@@ -41,7 +41,7 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
     pub fn get_needed_waits(&mut self, _range: BufferAccessRange) -> OutOfDateWait<B> {
         todo!()
     }
-    pub fn check_all_current_copies(&mut self, instance: &Instance<B>) {
+    pub fn check_all_current_copies(&mut self, instance: &InstanceInner<B>) {
         for i in (0..self.current_copies.len()).rev() {
             if self.current_copies[i].is_complete_host(instance) {
                 self.current_copies.remove(i);
@@ -100,7 +100,7 @@ struct BufferAccessFinish<B: hal::Backend> {
     range: BufferAccessRange,
 }
 impl<B: hal::Backend> BufferAccessFinish<B> {
-    pub fn is_complete_host(&self, instance: &crate::Instance<B>) -> bool {
+    pub fn is_complete_host(&self, instance: &InstanceInner<B>) -> bool {
         if let Some(cv) = self.condvar.as_ref() {
             let mut lock = self.is_complete.lock();
             loop {
@@ -119,7 +119,7 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
                 s.inner
                     .as_ref()
                     .unwrap()
-                    .is_signalled(instance.inner().unwrap().instance.read().as_ref().unwrap());
+                    .is_signalled(instance.hal_instance.read().as_ref().unwrap());
             }
             todo!()
         } else {
@@ -158,12 +158,12 @@ impl<B: hal::Backend> BufferResidency<B> {
         for (dev_id, dev) in &mut self.devices.iter_mut().chain([&mut self.host]).enumerate() {
             if let Some(b) = dev.buffer.take() {
                 unsafe {
-                    let dev_id = if dev_id < instance.devices.len() {
+                    let dev_id = if dev_id < instance.hal_devices.len() {
                         dev_id
                     } else {
                         0
                     };
-                    b.destroy(instance.devices[dev_id].inner.lock().as_ref().unwrap());
+                    b.destroy(instance.hal_devices[dev_id].inner.lock().as_ref().unwrap());
                 }
             }
         }

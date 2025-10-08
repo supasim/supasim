@@ -38,6 +38,7 @@ use std::{
 };
 use thiserror::Error;
 use thunderdome::{Arena, Index};
+use types::HalDeviceProperties;
 
 pub use hal;
 pub use hal::{DeviceDescriptor, InstanceDescriptor};
@@ -265,16 +266,15 @@ struct Stream<B: hal::Backend> {
 struct Device<B: hal::Backend> {
     inner: Mutex<Option<B::Device>>,
     streams: SmallVec<[Stream<B>; STREAM_SMALLVEC_SIZE]>,
+    properties: HalDeviceProperties,
 }
 api_type!(Instance, {
     /// The inner hal instance
-    instance: RwLock<Option<B::Instance>>,
+    hal_instance: RwLock<Option<B::Instance>>,
     /// The inner hal devices
-    devices: SmallVec<[Device<B>; DEVICE_SMALLVEC_SIZE]>,
+    hal_devices: SmallVec<[Device<B>; DEVICE_SMALLVEC_SIZE]>,
     /// The hal instance properties
-    instance_properties: types::HalInstanceProperties,
-    /// The hal device properties
-    device_properties: types::HalDeviceProperties,
+    hal_instance_properties: types::HalInstanceProperties,
     /// All created kernels
     kernels: RwLock<Arena<KernelWeak<B>>>,
     /// All created buffers
@@ -288,7 +288,7 @@ api_type!(Instance, {
     /// User accessible kernel compiler state
     kernel_compiler: Mutex<kernels::GlobalState>,
     /// A weak reference to self
-    myself: Option<InstanceWeak<B>>,
+    self_weak: Option<InstanceWeak<B>>,
 },);
 impl<B: hal::Backend> Instance<B> {
     pub fn from_hal(desc: hal::InstanceDescriptor<B>) -> Self {
@@ -308,33 +308,33 @@ impl<B: hal::Backend> Instance<B> {
         let s = Self::from_inner(InstanceInner {
             _phantom: Default::default(),
             _is_destroyed: false,
-            instance: Mutex::new(Some(instance)),
-            devices: smallvec![Device {
+            hal_instance: RwLock::new(Some(instance)),
+            hal_devices: smallvec![Device {
                 inner: Mutex::new(Some(device)),
                 streams: smallvec![Stream {
                     inner: Mutex::new(Some(stream))
                 }]
             }],
-            instance_properties,
-            device_properties,
-            kernels: Mutex::new(Arena::default()),
-            buffers: Mutex::new(Arena::default()),
-            wait_handles: Mutex::new(Arena::default()),
-            command_recorders: Mutex::new(Arena::default()),
-            hal_command_recorders: Mutex::new(Vec::new()),
+            hal_instance_properties: instance_properties,
+            hal_device_properties: device_properties,
+            kernels: RwLock::new(Arena::default()),
+            buffers: RwLock::new(Arena::default()),
+            wait_handles: RwLock::new(Arena::default()),
+            command_recorders: RwLock::new(Arena::default()),
+            hal_command_recorders: RwLock::new(Vec::new()),
             kernel_compiler: Mutex::new(kernels::GlobalState::new_from_env().unwrap()),
-            myself: None,
+            self_weak: None,
         });
 
         {
             let mut inner_mut = s.inner_mut().unwrap();
-            inner_mut.myself = Some(s.downgrade());
+            inner_mut.self_weak = Some(s.downgrade());
         }
         s
     }
     pub fn properties(&self) -> SupaSimResult<B, InstanceProperties> {
         self.check_destroyed()?;
-        let v = self.inner()?.instance_properties;
+        let v = self.inner()?.hal_instance_properties;
         Ok(InstanceProperties {
             kernel_lang: v.kernel_lang,
         })
@@ -348,8 +348,8 @@ impl<B: hal::Backend> Instance<B> {
 
         let s = self.inner()?;
         let kernel = unsafe {
-            s.instance
-                .lock()
+            s.hal_instance
+                .write()
                 .as_mut()
                 .unwrap()
                 .compile_kernel(hal::KernelDescriptor {
@@ -368,7 +368,7 @@ impl<B: hal::Backend> Instance<B> {
             reflection_info: reflection,
             last_used_per_device: smallvec![Vec::new()],
         });
-        k.inner_mut()?.id = s.kernels.lock().insert(k.downgrade());
+        k.inner_mut()?.id = s.kernels.write().insert(k.downgrade());
         Ok(k)
     }
     pub fn compile_slang_kernel(&self, slang: &str, entry: &str) -> SupaSimResult<B, Kernel<B>> {
@@ -379,7 +379,7 @@ impl<B: hal::Backend> Instance<B> {
             s.kernel_compiler
                 .lock()
                 .compile_kernel(kernels::KernelCompileOptions {
-                    target: s.instance_properties.kernel_lang,
+                    target: s.hal_instance_properties.kernel_lang,
                     source: kernels::KernelSource::Memory(slang.as_bytes()),
                     dest: kernels::KernelDest::Memory(&mut binary),
                     entry,
@@ -405,7 +405,7 @@ impl<B: hal::Backend> Instance<B> {
             is_alive: true,
             writes_slice: Vec::new(),
         });
-        r.inner_mut()?.id = s.command_recorders.lock().insert(Some(r.downgrade()));
+        r.inner_mut()?.id = s.command_recorders.write().insert(Some(r.downgrade()));
         Ok(r)
     }
     pub fn create_buffer(&self, desc: &BufferDescriptor) -> SupaSimResult<B, Buffer<B>> {
@@ -421,7 +421,7 @@ impl<B: hal::Backend> Instance<B> {
             is_currently_external: false,
             residency: BufferResidency::new(1),
         });
-        b.inner_mut()?.id = s.buffers.lock().insert(Some(b.downgrade()));
+        b.inner_mut()?.id = s.buffers.write().insert(Some(b.downgrade()));
         Ok(b)
     }
     pub fn submit_commands(
@@ -448,8 +448,8 @@ impl<B: hal::Backend> Instance<B> {
         self.check_destroyed()?;
         let s = self.inner()?;
         unsafe {
-            s.instance
-                .lock()
+            s.hal_instance
+                .write()
                 .as_mut()
                 .unwrap()
                 .cleanup_cached_resources()
@@ -468,7 +468,7 @@ impl<B: hal::Backend> Instance<B> {
         buffers: &[&BufferSlice<B>],
     ) -> SupaSimResult<B, ()> {
         self.check_destroyed()?;
-        let properties = self.inner()?.instance_properties;
+        let properties = self.inner()?.hal_instance_properties;
         let mut mapped_buffers = Vec::with_capacity(buffers.len());
         let mut ids = Vec::new();
         for b in buffers {
@@ -579,7 +579,7 @@ impl<B: hal::Backend> InstanceInner<B> {
         if sync_thread.shared_thread.0.lock().error.is_some() {
             println!("Instance attempting to shutdown gracefully despite sync thread error");
         }
-        for (_, cr) in std::mem::take(&mut *self.command_recorders.lock()) {
+        for (_, cr) in std::mem::take(&mut *self.command_recorders.write()) {
             if let Some(cr) = cr
                 && let Ok(cr) = cr.upgrade()
             {
@@ -589,7 +589,7 @@ impl<B: hal::Backend> InstanceInner<B> {
                 let _ = cr._destroy();
             }
         }
-        for (_, wh) in std::mem::take(&mut *self.wait_handles.lock()) {
+        for (_, wh) in std::mem::take(&mut *self.wait_handles.write()) {
             if let Ok(wh) = wh.upgrade() {
                 if let Ok(mut wh2) = wh.inner_mut() {
                     wh2.destroy(self);
@@ -597,7 +597,7 @@ impl<B: hal::Backend> InstanceInner<B> {
                 let _ = wh._destroy();
             }
         }
-        for (_, b) in std::mem::take(&mut *self.buffers.lock()) {
+        for (_, b) in std::mem::take(&mut *self.buffers.write()) {
             if let Some(b) = b
                 && let Ok(b) = b.upgrade()
             {
@@ -607,7 +607,7 @@ impl<B: hal::Backend> InstanceInner<B> {
                 let _ = b._destroy();
             }
         }
-        for (_, k) in std::mem::take(&mut *self.kernels.lock()) {
+        for (_, k) in std::mem::take(&mut *self.kernels.write()) {
             if let Ok(k) = k.upgrade() {
                 if let Ok(mut k2) = k.inner_mut() {
                     k2.destroy(self);
@@ -616,8 +616,8 @@ impl<B: hal::Backend> InstanceInner<B> {
             }
         }
         unsafe {
-            let mut instance = self.instance.get_mut().take().unwrap();
-            for mut device in std::mem::take(&mut self.devices) {
+            let mut instance = self.hal_instance.get_mut().take().unwrap();
+            for mut device in std::mem::take(&mut self.hal_devices) {
                 let mut dev = device.inner.get_mut().take().unwrap();
                 for mut stream in device.streams {
                     stream.inner.get_mut().take().unwrap().destroy(&mut dev);
@@ -1006,7 +1006,7 @@ impl<B: hal::Backend> Buffer<B> {
         let instance = _instance.inner()?;
         let mut s = self.inner_mut()?;
         let buffer_align = s.create_info.contents_align;
-        if instance.instance_properties.map_buffers {
+        if instance.hal_instance_properties.map_buffers {
             let mapped_ptr = unsafe {
                 s.inner
                     .as_mut()
@@ -1082,7 +1082,7 @@ impl<B: hal::Backend> std::fmt::Debug for Buffer<B> {
 }
 impl<B: hal::Backend> BufferInner<B> {
     fn destroy(&mut self, instance: &InstanceInner<B>) {
-        instance.buffers.lock().remove(self.id);
+        instance.buffers.write().remove(self.id);
         unsafe {
             std::mem::take(&mut self.inner)
                 .unwrap()
@@ -1162,7 +1162,7 @@ impl<B: hal::Backend> Drop for MappedBuffer<'_, B> {
         };
         slice.release(self.user_id).unwrap();
         let mut s = self.buffer.inner_mut().unwrap();
-        if instance.instance_properties.map_buffers {
+        if instance.hal_instance_properties.map_buffers {
             // Nothing needs to be done for now
         } else {
             unsafe {
@@ -1192,8 +1192,8 @@ api_type!(WaitHandle, {
     is_alive: bool,
 },);
 impl<B: hal::Backend> WaitHandleInner<B> {
-    fn destroy(&mut self, instance: &InstanceState<B>) {
-        instance.wait_handles.lock().remove(self.id);
+    fn destroy(&mut self, instance: &InstanceInner<B>) {
+        instance.wait_handles.write().remove(self.id);
         self.is_alive = false;
     }
 }

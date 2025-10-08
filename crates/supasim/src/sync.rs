@@ -21,7 +21,7 @@ impl<B: hal::Backend> Semaphore<B> {
             self.inner
                 .as_ref()
                 .unwrap()
-                .wait(self.instance.inner()?.instance.read().as_ref().unwrap())
+                .wait(self.instance.inner()?.hal_instance.read().as_ref().unwrap())
                 .map_supasim()
         }
     }
@@ -30,7 +30,7 @@ impl<B: hal::Backend> Semaphore<B> {
             self.inner
                 .as_ref()
                 .unwrap()
-                .is_signalled(self.instance.inner()?.instance.read().as_ref().unwrap())
+                .is_signalled(self.instance.inner()?.hal_instance.read().as_ref().unwrap())
                 .map_supasim()
         }
     }
@@ -88,7 +88,7 @@ pub fn submit_command_recorders<B: hal::Backend>(
         let streams = record::assemble_streams(
             &mut recorder_inners,
             &s,
-            s.instance_properties.sync_mode == SyncMode::VulkanStyle,
+            s.hal_instance_properties.sync_mode == SyncMode::VulkanStyle,
         )?;
         for (buf_id, ranges) in &streams.used_ranges {
             let b = s
