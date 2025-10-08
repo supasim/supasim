@@ -1,4 +1,4 @@
-# Sync & resource tracking overview
+# Sync & resource tracking overview (Out ouf date)
 
 * The instance tracks all command recorders submitted by index and associated semaphore
 * The instance occasionally checks for completed semaphores

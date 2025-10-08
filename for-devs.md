@@ -41,7 +41,7 @@ Cuda supports cuda-graphs, but these are only in "recent" versions of cuda. Othe
   * Needs to be reference counting somehow, and a destructor that calls destroy
   * Needs to avoid circular references
   * Needs to still be trackable from the main instance, so it must have access to the instance and the instance must have access to it
-    * This should be fine. The instance should destroy it when the instance is destroyed, and destorying it should tell the instance to remove the reference
+    * This should be fine. The instance should destroy it when the instance is destroyed, and destroying it should tell the instance to remove the reference
   * References to things other than the instance should be done through an "id" system rather than direct references
 
 ## Bindless details

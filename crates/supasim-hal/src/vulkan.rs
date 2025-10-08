@@ -15,10 +15,6 @@ use ash::{
     vk::{self, Handle},
 };
 use core::ffi;
-use gpu_allocator::{
-    AllocationError, AllocationSizes, AllocatorDebugSettings,
-    vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc},
-};
 use log::{Level, warn};
 use std::{borrow::Cow, cell::Cell, ffi::CStr, ops::Deref, sync::Mutex};
 use std::{
@@ -27,6 +23,7 @@ use std::{
 };
 use thiserror::Error;
 use types::{HalBufferType, HalInstanceProperties, SyncOperations};
+use vk_mem::{Alloc, AllocationCreateFlags, Allocator, AllocatorCreateInfo};
 
 use scopeguard::defer;
 
@@ -367,7 +364,6 @@ impl Vulkan {
             }
             let queue = device.get_device_queue(queue_family_idx, 0);
             let s = Self::from_existing(
-                debug,
                 entry.clone(),
                 instance.clone(),
                 device.clone(),
@@ -397,7 +393,6 @@ impl Vulkan {
     ///   * Synchronization2
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn from_existing(
-        debug: bool,
         entry: ash::Entry,
         instance: ash::Instance,
         device: ash::Device,
@@ -410,20 +405,8 @@ impl Vulkan {
         force_is_unified_memory: Option<bool>,
     ) -> Result<InstanceDescriptor<Vulkan>, VulkanError> {
         unsafe {
-            let mut debug_settings = AllocatorDebugSettings::default();
-            if debug {
-                debug_settings.log_leaks_on_shutdown = true;
-                debug_settings.log_stack_traces = true;
-                debug_settings.log_memory_information = true;
-            }
-            let alloc = Allocator::new(&AllocatorCreateDesc {
-                instance: instance.clone(),
-                device: device.clone(),
-                physical_device: phyd,
-                debug_settings,
-                buffer_device_address: false,
-                allocation_sizes: AllocationSizes::default(),
-            })?;
+            let create_info = AllocatorCreateInfo::new(&instance, &device, phyd);
+            let alloc = Allocator::new(create_info).unwrap();
             let command_pool = device.create_command_pool(
                 &vk::CommandPoolCreateInfo::default()
                     .queue_family_index(queue_family_idx)
@@ -471,7 +454,7 @@ impl Vulkan {
             };
             let device = VulkanDevice {
                 shared: instance.shared.clone(),
-                alloc: Mutex::new(alloc),
+                alloc,
                 is_unified_memory,
             };
             let stream = VulkanStream {
@@ -512,7 +495,7 @@ pub enum VulkanError {
     #[error("{0}")]
     VulkanLoadError(#[from] ash::LoadingError),
     #[error("{0}")]
-    AllocationError(#[from] gpu_allocator::AllocationError),
+    AllocationError(String),
     #[error("An unsupported dispatch mode(indirect) was called")]
     DispatchModeUnsupported,
     #[error("{0}")]
@@ -532,7 +515,7 @@ impl crate::Error<Vulkan> for VulkanError {
     fn is_out_of_device_memory(&self) -> bool {
         match self {
             Self::VulkanRaw(e) => *e == vk::Result::ERROR_OUT_OF_DEVICE_MEMORY,
-            Self::AllocationError(e) => matches!(e, AllocationError::OutOfMemory),
+            Self::AllocationError(_) => true,
             _ => false,
         }
     }
@@ -550,11 +533,17 @@ impl crate::Error<Vulkan> for VulkanError {
     }
 }
 
-#[derive(Debug)]
 pub struct VulkanDevice {
     shared: Arc<SharedDeviceInfo>,
-    alloc: Mutex<Allocator>,
+    alloc: Allocator,
     is_unified_memory: bool,
+}
+impl std::fmt::Debug for VulkanDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.shared, f)?;
+        std::fmt::Debug::fmt(&self.is_unified_memory, f)?;
+        Ok(())
+    }
 }
 
 impl Device<Vulkan> for VulkanDevice {
@@ -578,22 +567,16 @@ impl Device<Vulkan> for VulkanDevice {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_buffer(
         &self,
-        alloc_info: &types::HalBufferDescriptor,
+        desc: &types::HalBufferDescriptor,
     ) -> Result<<Vulkan as Backend>::Buffer, <Vulkan as Backend>::Error> {
         unsafe {
-            let err = Cell::new(true);
-            /*let sharing_mode = if alloc_info.can_export {
-                vk::SharingMode::CONCURRENT
-            } else {
-                vk::SharingMode::EXCLUSIVE
-            };*/
-            let create_info = vk::BufferCreateInfo::default()
-                .size(alloc_info.size)
+            let buffer_info = vk::BufferCreateInfo::default()
+                .size(desc.size)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .queue_family_indices(&self.shared.queue_family_indices)
                 .usage({
                     use vk::BufferUsageFlags as F;
-                    match alloc_info.memory_type {
+                    match desc.memory_type {
                         HalBufferType::Storage => {
                             F::TRANSFER_SRC | F::TRANSFER_DST | F::STORAGE_BUFFER
                         }
@@ -602,53 +585,30 @@ impl Device<Vulkan> for VulkanDevice {
                         HalBufferType::UploadDownload => F::TRANSFER_SRC | F::TRANSFER_DST,
                     }
                 });
-            let buffer = self.shared.functions.create_buffer(&create_info, None)?;
-            defer! {
-                if err.get() {
-                    self.shared.functions.destroy_buffer(buffer, None);
-                }
-            }
-            let requirements = self
-                .shared
-                .functions
-                .get_buffer_memory_requirements(buffer)
-                .alignment(alloc_info.min_alignment as u64);
-            use types::HalBufferType::*;
-            let allocation = self
-                .alloc
-                .lock()
-                .map_err(|e| VulkanError::LockError(e.to_string()))?
-                .allocate(&AllocationCreateDesc {
-                    name: "",
-                    requirements,
-                    location: match alloc_info.memory_type {
-                        Storage => gpu_allocator::MemoryLocation::GpuOnly,
-                        Upload => gpu_allocator::MemoryLocation::CpuToGpu,
-                        Download => gpu_allocator::MemoryLocation::GpuToCpu,
-                        UploadDownload => gpu_allocator::MemoryLocation::CpuToGpu,
-                    },
-                    linear: true,
-                    allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
-                })?;
-            if let Err(e) = self.shared.functions.bind_buffer_memory(
-                buffer,
-                allocation.memory(),
-                allocation.offset(),
-            ) {
-                let error = e.into();
-                self.alloc.lock().unwrap().free(allocation)?;
-                return Err(error);
-            }
-            err.set(false);
-            if alloc_info.memory_type == HalBufferType::Upload
-                || alloc_info.memory_type == HalBufferType::Download
-            {
-                assert!(allocation.mapped_ptr().is_some());
-            }
+            let mapped = matches!(
+                desc.memory_type,
+                HalBufferType::Download | HalBufferType::Upload | HalBufferType::UploadDownload
+            );
+            let alloc_info = vk_mem::AllocationCreateInfo {
+                usage: vk_mem::MemoryUsage::Auto,
+                flags: if mapped {
+                    AllocationCreateFlags::MAPPED
+                } else {
+                    AllocationCreateFlags::empty()
+                },
+                ..Default::default()
+            };
+            let (buffer, mut allocation) = self.alloc.create_buffer(&buffer_info, &alloc_info)?;
+            let mapped_ptr = if mapped {
+                Some(self.alloc.map_memory(&mut allocation)?)
+            } else {
+                None
+            };
             Ok(VulkanBuffer {
                 buffer,
                 allocation,
-                create_info: *alloc_info,
+                create_info: *desc,
+                mapped_ptr,
             })
         }
     }
@@ -657,7 +617,8 @@ impl Device<Vulkan> for VulkanDevice {
         self,
         _instance: &mut <Vulkan as Backend>::Instance,
     ) -> Result<(), <Vulkan as Backend>::Error> {
-        self.alloc.lock().unwrap().report_memory_leaks(Level::Error);
+        // TODO: do something with these stats?
+        let _stats = self.alloc.calculate_statistics()?;
         drop(self.alloc);
         Ok(())
     }
@@ -1077,9 +1038,13 @@ impl Kernel<Vulkan> for VulkanKernel {
 #[derive(Debug)]
 pub struct VulkanBuffer {
     pub buffer: vk::Buffer,
-    pub allocation: Allocation,
+    pub allocation: vk_mem::Allocation,
     pub create_info: types::HalBufferDescriptor,
+    pub mapped_ptr: Option<*mut u8>,
 }
+// Mapped ptr is not safely sendable. However, it is just a ptr to some memory,
+// only referred to by this buffer, so this is safe.
+unsafe impl Send for VulkanBuffer {}
 impl Buffer<Vulkan> for VulkanBuffer {
     #[cfg_attr(feature = "trace", tracing::instrument(skip(data), fields(len=data.len())))]
     unsafe fn write(
@@ -1089,8 +1054,7 @@ impl Buffer<Vulkan> for VulkanBuffer {
         data: &[u8],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            let b =
-                (self.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8).add(offset as usize);
+            let b = self.mapped_ptr.unwrap().add(offset as usize);
             let slice = std::slice::from_raw_parts_mut(b, data.len());
             slice.copy_from_slice(data);
             Ok(())
@@ -1104,8 +1068,7 @@ impl Buffer<Vulkan> for VulkanBuffer {
         data: &mut [u8],
     ) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            let b =
-                (self.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8).add(offset as usize);
+            let b = self.mapped_ptr.unwrap().add(offset as usize);
             let slice = std::slice::from_raw_parts(b as *const u8, data.len());
             data.copy_from_slice(slice);
         }
@@ -1116,7 +1079,7 @@ impl Buffer<Vulkan> for VulkanBuffer {
         &mut self,
         _device: &VulkanDevice,
     ) -> Result<*mut u8, <Vulkan as Backend>::Error> {
-        Ok(self.allocation.mapped_ptr().unwrap().as_ptr() as *mut u8)
+        Ok(self.mapped_ptr.unwrap())
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn unmap(&mut self, _device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
@@ -1125,10 +1088,11 @@ impl Buffer<Vulkan> for VulkanBuffer {
         Ok(())
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn destroy(self, device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn destroy(mut self, device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
-            device.shared.functions.destroy_buffer(self.buffer, None);
-            device.alloc.lock().unwrap().free(self.allocation)?;
+            device
+                .alloc
+                .destroy_buffer(self.buffer, &mut self.allocation);
             Ok(())
         }
     }

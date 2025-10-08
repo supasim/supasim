@@ -449,15 +449,7 @@ impl Buffer<Wgpu> for WgpuBuffer {
                     },
                     |_| (),
                 );
-                // In theory map_async will go through after doing this kind of blocking wait.
-                // This might change in the future, making wgpu a volatile backend.
-                // Also, this is dumb as shit.
-                device
-                    .device
-                    .poll(wgpu::PollType::wait_indefinitely())
-                    .unwrap();
-                // Now that we know that the slice will "live forever", we can get its mapped range which
-                // will likewise "live forever". I told you I knew what I was doing, borrow checker!
+                device.device.poll(wgpu::PollType::Poll).unwrap();
                 self.view = Some(slice.get_mapped_range_mut());
                 self.view.as_mut().unwrap().as_mut_ptr()
             }

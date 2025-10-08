@@ -6,20 +6,20 @@
 SupaSim is a general purpose GPU and simulation toolkit, made in Rust, with kernels written in [Slang](https://shader-slang.org/).
 
 ## Repo Overview
-Supasim encompasses a large set of libraries. The following libraries live on this repo:
+SupaSim encompasses several libraries. The following libraries live on this repo:
 * [![Crates.io](https://img.shields.io/crates/v/supasim.svg?label=supasim)](https://crates.io/crates/supasim)
 * [![Crates.io](https://img.shields.io/crates/v/supasim-hal.svg?label=supasim-hal)](https://crates.io/crates/supasim-hal)
 * [![Crates.io](https://img.shields.io/crates/v/supasim-kernels.svg?label=supasim-kernels)](https://crates.io/crates/supasim-kernels)
 * [![Crates.io](https://img.shields.io/crates/v/supasim-dev-utils.svg?label=supasim-dev-utils)](https://crates.io/crates/supasim-dev-utils)
 * [![Crates.io](https://img.shields.io/crates/v/supasim-types.svg?label=supasim-types)](https://crates.io/crates/supasim-types)
 
-The following additional libraries live on the [supasim github organization](https://github.com/supasim):
+The following additional libraries providing bindings to C++ libraries live on the [supasim github organization](https://github.com/supasim):
 * [![Crates.io](https://img.shields.io/crates/v/supasim-spirv-cross-sys.svg?label=supasim-spirv-cross-sys)](https://crates.io/crates/supasim-spirv-cross-sys)
 * [![Crates.io](https://img.shields.io/crates/v/supasim-spirv-tools-sys.svg?label=supasim-spirv-tools-sys)](https://crates.io/crates/supasim-spirv-tools-sys)
 
 ## Shaders
 
-Shaders are written in [Slang](https://shader-slang.org/). Supasim provides some advice on how to avoid unintended behavior (aka bugs) in Slang code, which can be seen [here](./kernels/readme.md). When compiling kernels, they may not be directly transpiled to the target language. For example, many languages first go through SPIR-V, enabling SPIRV-Opt to optimize code, as well as allowing use of SPIRV-Cross, which may be more mature and stable than Slang's direct output into the target language.
+Shaders are written in [Slang](https://shader-slang.org/). SupaSim provides some advice on how to avoid unintended behavior (aka bugs) in Slang code, which can be seen [here](./kernels/readme.md). When compiling kernels, they may not be directly transpiled to the target language. For example, many languages first go through SPIR-V, enabling SPIRV-Opt to optimize code, as well as allowing use of SPIRV-Cross, which may be more mature and stable than Slang's direct output into the target language.
 
 ## Compiling
 
@@ -37,7 +37,7 @@ to use these that cannot find them may not function properly.
 
 Otherwise, the full list of dependencies are as follows:
 * Slang
-* SPIRV-Cross (for most build configsl, and for stable compilation to MSL)
+* SPIRV-Cross (for most build configs, and for stable compilation to MSL)
 * SPIRV-Tools (for optimizing and extra validation)
 * DXC and DXIL (for aforementioned use cases)
 
