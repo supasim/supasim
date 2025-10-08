@@ -20,7 +20,7 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(
                 size: 16,
                 contents_align: 4,
                 priority: 0.0,
-                can_export: false,
+                preferred_device_index: None,
             })
             .unwrap();
         let gpu_buffer = instance
@@ -28,7 +28,7 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(
                 size: 16,
                 contents_align: 4,
                 priority: 0.0,
-                can_export: false,
+                preferred_device_index: None,
             })
             .unwrap();
         let download_buffer = instance
@@ -36,7 +36,7 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(
                 size: 16,
                 contents_align: 4,
                 priority: 0.0,
-                can_export: false,
+                preferred_device_index: None,
             })
             .unwrap();
         upload_buffer.write::<u32>(0, &[1, 2, 3, 4]).unwrap();

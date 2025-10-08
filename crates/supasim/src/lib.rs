@@ -85,8 +85,8 @@ pub struct BufferDescriptor {
     pub contents_align: u64,
     /// Currently unused. In the future this may be used to prefer keeping some buffers in memory when device runs out of memory and swapping becomes necessary
     pub priority: f32,
-    /// Whether the memory can be exported
-    pub can_export: bool,
+    /// If `Some`, the device given will be preferred for operations using this buffer. This is useful for example when exporting memory.
+    pub preferred_device_index: Option<usize>,
 }
 impl Default for BufferDescriptor {
     fn default() -> Self {
@@ -94,7 +94,7 @@ impl Default for BufferDescriptor {
             size: 0,
             contents_align: 0,
             priority: 1.0,
-            can_export: false,
+            preferred_device_index: None,
         }
     }
 }
