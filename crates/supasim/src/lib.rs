@@ -43,8 +43,8 @@ use types::HalDeviceProperties;
 pub use hal;
 pub use hal::{DeviceDescriptor, InstanceDescriptor};
 pub use types::{
-    Backend, HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel,
-    SpirvVersion,
+    Backend, ExternalBufferDescriptor, ExternalSemaphoreDescriptor, HalBufferType,
+    KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel, SpirvVersion,
 };
 
 use crate::residency::BufferResidency;
@@ -313,7 +313,7 @@ impl<B: hal::Backend> Instance<B> {
                 inner: Mutex::new(Some(device)),
                 streams: smallvec![Stream {
                     inner: Mutex::new(Some(stream))
-                }]
+                }],
             }],
             hal_instance_properties: instance_properties,
             hal_device_properties: device_properties,
@@ -404,6 +404,8 @@ impl<B: hal::Backend> Instance<B> {
             commands: Vec::new(),
             is_alive: true,
             writes_slice: Vec::new(),
+            sem_waits: vec![],
+            sem_signals: vec![],
         });
         r.inner_mut()?.id = s.command_recorders.write().insert(Some(r.downgrade()));
         Ok(r)
@@ -560,6 +562,23 @@ impl<B: hal::Backend> Instance<B> {
         }
         Ok(())
     }
+    /// # Safety
+    /// Importing memory is inherently unsafe. You must manually use external semaphores and memory ownership transfers to synchronize.
+    /// The descriptor must be valid.
+    pub unsafe fn import_buffer(
+        &self,
+        _desc: &ExternalBufferDescriptor,
+    ) -> SupaSimResult<B, Buffer<B>> {
+        todo!()
+    }
+    /// # Safety
+    /// Importing semaphores is inherently unsafe. The descriptor must be valid.
+    pub unsafe fn import_semaphore(
+        &self,
+        _desc: &ExternalSemaphoreDescriptor,
+    ) -> SupaSimResult<B, ExternalSemaphore<B>> {
+        todo!()
+    }
     pub fn destroy(&mut self) -> SupaSimResult<B, ()> {
         self._destroy()
     }
@@ -703,6 +722,8 @@ api_type!(CommandRecorder, {
     id: Index,
     commands: Vec<BufferCommand<B>>,
     writes_slice: Vec<u8>,
+    sem_waits: Vec<ExternalSemaphore<B>>,
+    sem_signals: Vec<ExternalSemaphore<B>>,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
     /// Valid copies (automatic can replace any of these)
@@ -831,6 +852,18 @@ impl<B: hal::Backend> CommandRecorder<B> {
             inner: BufferCommandInner::MemoryTransfer { import },
             buffers: vec![buffer.clone()],
         });
+        Ok(())
+    }
+    /// Applies to the **entire** command recorder. All commands execute after the external semaphore has been signalled.
+    pub fn wait_for_semaphore(&self, s: ExternalSemaphore<B>) -> SupaSimResult<B, ()> {
+        self.check_destroyed()?;
+        self.inner_mut()?.sem_waits.push(s);
+        Ok(())
+    }
+    /// Applies to the **entire** command recorder. After all commands execute after the external semaphore will be signalled.
+    pub fn signal_semaphore(&self, s: ExternalSemaphore<B>) -> SupaSimResult<B, ()> {
+        self.check_destroyed()?;
+        self.inner_mut()?.sem_signals.push(s);
         Ok(())
     }
 }
@@ -1226,3 +1259,8 @@ pub type CpuCallback<B> = (
     Box<dyn Fn(Vec<MappedBuffer<B>>) -> Result<(), SupaSimError<B>>>,
     Vec<Buffer<B>>,
 );
+
+api_type!(ExternalSemaphore, {
+    instance: Instance<B>,
+    id: Index,
+},);
