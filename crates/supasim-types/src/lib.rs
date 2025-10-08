@@ -173,6 +173,11 @@ pub struct HalDeviceProperties {
     pub is_unified_memory: bool,
     /// Whether it supports buffers that live on device but can be mapped from host
     pub host_mappable_buffers: bool,
+    /// Unique ID for the driver (typically shared across APIs for one device, e.g. the vk id will match dx12 or metal id).
+    /// If zero, this is unknown and can't be relied on.
+    pub driver_id: u64,
+    pub supports_buffer_import: bool,
+    pub supports_semaphore_import: bool,
 }
 /// # Safety
 /// This is undefined behavior lol
@@ -220,4 +225,27 @@ pub enum Backend {
     Vulkan,
     Metal,
     Wgpu,
+}
+
+/// Describes a piece of external memory.
+#[derive(Clone, Debug, Copy)]
+pub struct ExternalBufferDescriptor {
+    /// Index of the device within supasim
+    pub device_index: usize,
+    /// ID of the driver (specific to the physical device AND the driver running it)
+    pub driver_id: u64,
+    /// Opaque external handle, e.g. unix FD or win32 handle.
+    pub handle: u64,
+    /// Offset into the memory allocation where the buffer begins
+    pub offset: u64,
+    /// Size of the buffer
+    pub size: u64,
+}
+
+#[derive(Clone, Debug, Copy)]
+pub struct ExternalSemaphoreDescriptor {
+    /// ID of the driver (specific to the physical device AND the driver running it)
+    pub driver_id: u64,
+    /// Opaque external handle, e.g. unix FD or win32 handle.
+    pub handle: u64,
 }

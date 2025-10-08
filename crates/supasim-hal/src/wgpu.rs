@@ -43,6 +43,28 @@ impl Backend for Wgpu {
     }
 }
 impl Wgpu {
+    pub fn from_existing(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        preset_unified_memory: Option<bool>,
+    ) -> Result<InstanceDescriptor<Wgpu>, WgpuError> {
+        Ok(InstanceDescriptor {
+            instance: WgpuInstance {
+                device: device.clone(),
+            },
+            devices: vec![DeviceDescriptor {
+                device: WgpuDevice {
+                    device: device.clone(),
+                    unified_memory: preset_unified_memory.unwrap_or(false),
+                },
+                group_idx: None,
+                streams: vec![StreamDescriptor {
+                    stream: WgpuStream { queue, device },
+                    stream_type: StreamType::ComputeAndTransfer,
+                }],
+            }],
+        })
+    }
     #[cfg_attr(feature = "trace", tracing::instrument)]
     pub fn create_instance(
         advanced_dbg: bool,
@@ -91,7 +113,6 @@ impl Wgpu {
             }))?;
         Ok(InstanceDescriptor {
             instance: WgpuInstance {
-                _instance: instance,
                 device: device.clone(),
             },
             devices: vec![DeviceDescriptor {
@@ -149,6 +170,12 @@ impl Device<Wgpu> for WgpuDevice {
             },
         })
     }
+    unsafe fn import_buffer(
+        &self,
+        _info: &ExternalBufferDescriptor,
+    ) -> Result<<Wgpu as Backend>::Buffer, <Wgpu as Backend>::Error> {
+        unreachable!()
+    }
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(
         &self,
@@ -161,6 +188,9 @@ impl Device<Wgpu> for WgpuDevice {
             is_unified_memory: self.unified_memory,
             // TODO: look at this
             host_mappable_buffers: false,
+            driver_id: 0,
+            supports_buffer_import: false,
+            supports_semaphore_import: false,
         }
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
@@ -171,6 +201,12 @@ impl Device<Wgpu> for WgpuDevice {
             inner: Mutex::new(None),
             device: self.device.clone(),
         })
+    }
+    unsafe fn import_semaphore(
+        &self,
+        _info: &ExternalSemaphoreDescriptor,
+    ) -> Result<<Wgpu as Backend>::Semaphore, <Wgpu as Backend>::Error> {
+        unreachable!()
     }
     unsafe fn destroy(
         self,
@@ -263,7 +299,6 @@ impl Stream<Wgpu> for WgpuStream {
 
 #[derive(Debug)]
 pub struct WgpuInstance {
-    _instance: wgpu::Instance,
     device: wgpu::Device,
 }
 impl BackendInstance<Wgpu> for WgpuInstance {

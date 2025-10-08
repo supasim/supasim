@@ -550,11 +550,21 @@ impl Device<Vulkan> for VulkanDevice {
         &self,
         _instance: &<Vulkan as Backend>::Instance,
     ) -> types::HalDeviceProperties {
+        let props = unsafe {
+            _instance
+                .instance
+                .get_physical_device_properties(_instance._phyd)
+        };
         types::HalDeviceProperties {
             is_unified_memory: self.is_unified_memory,
             host_mappable_buffers: self.is_unified_memory,
+            // TODO: this is vulkan specific, fix that
+            driver_id: props.vendor_id as u64 + ((props.device_id as u64) << 32),
+            supports_buffer_import: false,
+            supports_semaphore_import: false,
         }
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(
         &self,
         _instance: &<Vulkan as Backend>::Instance,
@@ -610,6 +620,13 @@ impl Device<Vulkan> for VulkanDevice {
         }
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn import_buffer(
+        &self,
+        _info: &types::ExternalBufferDescriptor,
+    ) -> Result<<Vulkan as Backend>::Buffer, <Vulkan as Backend>::Error> {
+        unreachable!()
+    }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_semaphore(&self) -> std::result::Result<VulkanSemaphore, VulkanError> {
         unsafe {
             let mut next = vk::SemaphoreTypeCreateInfo::default()
@@ -624,6 +641,14 @@ impl Device<Vulkan> for VulkanDevice {
             })
         }
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn import_semaphore(
+        &self,
+        _info: &types::ExternalSemaphoreDescriptor,
+    ) -> Result<<Vulkan as Backend>::Semaphore, <Vulkan as Backend>::Error> {
+        unreachable!()
+    }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
         _instance: &mut <Vulkan as Backend>::Instance,

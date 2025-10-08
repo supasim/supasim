@@ -184,8 +184,23 @@ pub trait Device<B: Backend<Device = Self>> {
     unsafe fn create_buffer(&self, alloc_info: &HalBufferDescriptor)
     -> Result<B::Buffer, B::Error>;
     /// # Safety
+    /// * Importing buffers is inherently unsafe
+    /// * The driver ID must match
+    /// * The handle must be a valid handle given the backend
+    /// * The offset, size must be valid within the allocation backed by the handle
+    ///  * The memory must be allocated in a reasonable device-side memory location
+    unsafe fn import_buffer(&self, info: &ExternalBufferDescriptor) -> Result<B::Buffer, B::Error>;
+    /// # Safety
     /// Currently no safety requirements. This is subject to change
     unsafe fn create_semaphore(&self) -> Result<B::Semaphore, B::Error>;
+    /// # Safety
+    /// * Importing semaphores is inherently unsafe
+    /// * The driver ID must match (even if semaphores may be shared among devices)
+    /// * The handle must be a valid handle given the backend
+    unsafe fn import_semaphore(
+        &self,
+        info: &ExternalSemaphoreDescriptor,
+    ) -> Result<B::Semaphore, B::Error>;
     /// # Safety
     /// * Must be called after all of the device's queues have been destroyed
     /// * All objects created from this must have been destroyed

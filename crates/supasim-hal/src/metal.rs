@@ -73,9 +73,11 @@ pub struct MetalDevice {
     device: UniqueObject<dyn MTLDevice>,
 }
 impl Device<Metal> for MetalDevice {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(&self, _instance: &MetalInstance) -> Result<(), MetalError> {
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_buffer(
         &self,
         alloc_info: &types::HalBufferDescriptor,
@@ -98,6 +100,14 @@ impl Device<Metal> for MetalDevice {
             buffer: UniqueObject::new(buffer),
         })
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn import_buffer(
+        &self,
+        _info: &types::ExternalBufferDescriptor,
+    ) -> Result<<Metal as Backend>::Buffer, <Metal as Backend>::Error> {
+        unreachable!()
+    }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_semaphore(
         &self,
     ) -> Result<<Metal as Backend>::Semaphore, <Metal as Backend>::Error> {
@@ -110,11 +120,22 @@ impl Device<Metal> for MetalDevice {
             current_value: 0,
         })
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn import_semaphore(
+        &self,
+        _info: &types::ExternalSemaphoreDescriptor,
+    ) -> Result<<Metal as Backend>::Semaphore, <Metal as Backend>::Error> {
+        unreachable!()
+    }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn get_properties(&self, _instance: &MetalInstance) -> types::HalDeviceProperties {
         let is_unified_memory = self.device.hasUnifiedMemory();
         types::HalDeviceProperties {
             is_unified_memory,
             host_mappable_buffers: is_unified_memory,
+            driver_id: self.device.registryID(),
+            supports_buffer_import: false,
+            supports_semaphore_import: false,
         }
     }
     unsafe fn destroy(

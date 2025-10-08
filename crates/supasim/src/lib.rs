@@ -42,8 +42,8 @@ use types::SyncMode;
 pub use hal;
 pub use hal::{DeviceDescriptor, InstanceDescriptor};
 pub use types::{
-    Backend, HalBufferType, KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel,
-    SpirvVersion,
+    Backend, ExternalBufferDescriptor, HalBufferType, KernelReflectionInfo, KernelTarget,
+    MetalVersion, ShaderModel, SpirvVersion,
 };
 
 use crate::sync::{GpuSubmissionInfo, SyncThreadHandle, create_sync_thread};
