@@ -213,6 +213,8 @@ pub enum BackendOptions {
     Wgpu { backends: wgpu::Backends },
     Vulkan,
 }
+
+#[derive(Clone, Debug)]
 pub struct InstanceDescriptor {
     pub backend_options: BackendOptions,
     pub max_host_memory: Option<u64>,
@@ -221,6 +223,7 @@ pub struct InstanceDescriptor {
     pub full_debug: bool,
 }
 
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
 pub enum Backend {
     Vulkan,
     Metal,

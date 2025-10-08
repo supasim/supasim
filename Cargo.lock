@@ -1920,6 +1920,7 @@ dependencies = [
  "paste",
  "pollster",
  "rand",
+ "smallvec",
  "supasim-dev-utils",
  "supasim-hal",
  "supasim-kernels",

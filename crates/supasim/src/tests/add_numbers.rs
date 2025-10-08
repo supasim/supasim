@@ -11,13 +11,12 @@ pub fn add_numbers<Backend: hal::Backend>(hal: hal::InstanceDescriptor<Backend>)
     dev_utils::setup_trace_printer_if_env();
 
     // Create the instance
-    let instance: SupaSimInstance<Backend> = SupaSimInstance::from_hal(hal);
+    let instance: Instance<Backend> = Instance::from_hal(hal);
 
     // Create the buffers
     let download_buffer = instance
         .create_buffer(&crate::BufferDescriptor {
             size: 16,
-            buffer_type: BufferType::Download,
             contents_align: 4,
             ..Default::default()
         })

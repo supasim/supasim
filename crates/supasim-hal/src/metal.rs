@@ -60,6 +60,7 @@ impl<T: ?Sized + NSObjectProtocol> std::fmt::Debug for UniqueObject<T> {
 #[derive(Debug, Clone)]
 pub struct Metal;
 impl Metal {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     pub fn create_instance() -> Result<MetalInstance, MetalError> {
         let device = objc2_metal::MTLCreateSystemDefaultDevice().ok_or(MetalError::DeviceCreate)?;
         Ok(MetalInstance {
@@ -138,6 +139,7 @@ impl Device<Metal> for MetalDevice {
             supports_semaphore_import: false,
         }
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
         _instance: &mut <Metal as Backend>::Instance,
@@ -202,18 +204,21 @@ impl Stream<Metal> for MetalStream {
         }
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn wait_for_idle(&mut self) -> Result<(), <Metal as Backend>::Error> {
         let cb = self.inner.commandBuffer().ok_or(MetalError::ObjectCreate)?;
         cb.commit();
         cb.waitUntilCompleted();
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(
         &self,
         _instance: &<Metal as Backend>::Instance,
     ) -> Result<(), <Metal as Backend>::Error> {
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
         _device: &mut <Metal as Backend>::Device,
@@ -270,6 +275,7 @@ pub struct MetalInstance {
     device: UniqueObject<dyn MTLDevice>,
 }
 impl BackendInstance<Metal> for MetalInstance {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn get_properties(&self) -> HalInstanceProperties {
         // TODO: check for supported metal version
         //let metal_version = MetalVersion::V2_3;
@@ -290,6 +296,19 @@ impl BackendInstance<Metal> for MetalInstance {
             map_buffer_while_gpu_use: true,
             upload_download_buffers: true,
         }
+    }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn create_semaphore(
+        &self,
+    ) -> Result<<Metal as Backend>::Semaphore, <Metal as Backend>::Error> {
+        Ok(MetalSemaphore {
+            event: UniqueObject::new(
+                self.device
+                    .newSharedEvent()
+                    .ok_or(MetalError::ObjectCreate)?,
+            ),
+            current_value: 0,
+        })
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn compile_kernel(
@@ -334,9 +353,11 @@ impl BackendInstance<Metal> for MetalInstance {
             revised_buffer_indices: revised_layout,
         })
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Metal as Backend>::Error> {
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(self) -> Result<(), <Metal as Backend>::Error> {
         Ok(())
     }
@@ -381,32 +402,29 @@ impl Semaphore<Metal> for MetalSemaphore {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn is_signalled(
         &self,
-        _device: &MetalDevice,
+        _device: &MetalInstance,
     ) -> Result<bool, <Metal as Backend>::Error> {
         let value = self.event.signaledValue();
         Ok(value == self.current_value + 1)
     }
-    unsafe fn reset(&mut self, _device: &MetalDevice) -> Result<(), <Metal as Backend>::Error> {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn reset(&mut self, _device: &MetalInstance) -> Result<(), <Metal as Backend>::Error> {
         self.current_value += 1;
         Ok(())
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn signal(&mut self, _device: &MetalDevice) -> Result<(), <Metal as Backend>::Error> {
+    unsafe fn signal(&mut self, _device: &MetalInstance) -> Result<(), <Metal as Backend>::Error> {
         self.event.setSignaledValue(self.current_value + 1);
-
         Ok(())
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn wait(&self, _device: &MetalDevice) -> Result<(), <Metal as Backend>::Error> {
+    unsafe fn wait(&self, _device: &MetalInstance) -> Result<(), <Metal as Backend>::Error> {
         self.event
             .waitUntilSignaledValue_timeoutMS(self.current_value + 1, u64::MAX);
-
         Ok(())
     }
-    unsafe fn destroy(
-        self,
-        _device: &<Metal as Backend>::Device,
-    ) -> Result<(), <Metal as Backend>::Error> {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn destroy(self, _device: &MetalInstance) -> Result<(), <Metal as Backend>::Error> {
         Ok(())
     }
 }
@@ -435,6 +453,7 @@ impl BindGroup<Metal> for MetalBindGroup {
         }
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
         _instance: &<Metal as Backend>::Stream,
@@ -455,6 +474,7 @@ pub struct MetalKernel {
     revised_buffer_indices: Vec<usize>,
 }
 impl Kernel<Metal> for MetalKernel {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
         _instance: &<Metal as Backend>::Instance,
@@ -502,12 +522,14 @@ impl Buffer<Metal> for MetalBuffer {
         slice.copy_from_slice(data);
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn unmap(
         &mut self,
         _instance: &<Metal as Backend>::Device,
     ) -> Result<(), <Metal as Backend>::Error> {
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
         _instance: &<Metal as Backend>::Device,
@@ -670,6 +692,7 @@ impl CommandRecorder<Metal> for MetalCommandRecorder {
         encoder.finish();
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
         _stream: &<Metal as Backend>::Stream,

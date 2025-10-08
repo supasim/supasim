@@ -53,6 +53,10 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send {
 
     /// # Safety
     /// Currently no safety requirements. This is subject to change
+    unsafe fn create_semaphore(&self) -> Result<B::Semaphore, B::Error>;
+
+    /// # Safety
+    /// Currently no safety requirements. This is subject to change
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), B::Error>;
 
     /// # Safety
@@ -156,22 +160,22 @@ pub trait BindGroup<B: Backend<BindGroup = Self>>: Send {
 pub trait Semaphore<B: Backend<Semaphore = Self>>: Send {
     /// # Safety
     /// * The semaphore must be signalled by some already submitted command recorder
-    unsafe fn wait(&self, device: &B::Device) -> Result<(), B::Error>;
+    unsafe fn wait(&self, instance: &B::Instance) -> Result<(), B::Error>;
     /// # Safety
     /// Currently no safety requirements. This is subject to change
-    unsafe fn is_signalled(&self, device: &B::Device) -> Result<bool, B::Error>;
+    unsafe fn is_signalled(&self, instance: &B::Instance) -> Result<bool, B::Error>;
     /// # Safety
     /// * The semaphore must not be waited on by any CPU side wait command
     /// * The device must support semaphore signalling
-    unsafe fn signal(&mut self, device: &B::Device) -> Result<(), B::Error>;
+    unsafe fn signal(&mut self, instance: &B::Instance) -> Result<(), B::Error>;
     /// Note that in most implementations this won't actually result in any underlying API changes.
     /// # Safety
     /// * The semaphore must not be waited on by any CPU or GPU side wait command
     /// * The semaphore must not be signalled by any CPU or GPU side signal command
-    unsafe fn reset(&mut self, device: &B::Device) -> Result<(), B::Error>;
+    unsafe fn reset(&mut self, instance: &B::Instance) -> Result<(), B::Error>;
     /// # Safety
     /// * All command recorders using this semaphore must've been cleared
-    unsafe fn destroy(self, device: &B::Device) -> Result<(), B::Error>;
+    unsafe fn destroy(self, instance: &B::Instance) -> Result<(), B::Error>;
 }
 
 pub trait Device<B: Backend<Device = Self>> {

@@ -61,6 +61,7 @@ impl Backend for Vulkan {
 
     type Error = VulkanError;
 
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn setup_default_descriptor() -> Result<crate::InstanceDescriptor<Self>, Self::Error> {
         Self::create_instance(true)
     }
@@ -546,6 +547,7 @@ impl std::fmt::Debug for VulkanDevice {
 }
 
 impl Device<Vulkan> for VulkanDevice {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn get_properties(
         &self,
         _instance: &<Vulkan as Backend>::Instance,
@@ -828,6 +830,7 @@ impl Stream<Vulkan> for VulkanStream {
             }
         }
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(
         &self,
         instance: &<Vulkan as Backend>::Instance,
@@ -842,6 +845,7 @@ impl Stream<Vulkan> for VulkanStream {
         vk_cbs.clear();
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
         _device: &mut <Vulkan as Backend>::Device,
@@ -1009,6 +1013,21 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn create_semaphore(&self) -> std::result::Result<VulkanSemaphore, VulkanError> {
+        unsafe {
+            let mut next = vk::SemaphoreTypeCreateInfo::default()
+                .initial_value(0)
+                .semaphore_type(vk::SemaphoreType::TIMELINE);
+            let create_info = vk::SemaphoreCreateInfo::default()
+                .flags(vk::SemaphoreCreateFlags::empty())
+                .push_next(&mut next);
+            Ok(VulkanSemaphore {
+                inner: self.shared.functions.create_semaphore(&create_info, None)?,
+                current_value: Mutex::new(0),
+            })
+        }
+    }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
         Ok(())
     }
@@ -1121,7 +1140,6 @@ pub struct VulkanCommandRecorder {
     inner: vk::CommandBuffer,
 }
 impl VulkanCommandRecorder {
-    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn begin(
         &mut self,
         stream: &<Vulkan as Backend>::Stream,
@@ -1136,7 +1154,6 @@ impl VulkanCommandRecorder {
             Ok(())
         }
     }
-    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn end(
         &mut self,
         stream: &<Vulkan as Backend>::Stream,
@@ -1147,7 +1164,6 @@ impl VulkanCommandRecorder {
             Ok(())
         }
     }
-    #[cfg_attr(feature = "trace", tracing::instrument)]
     #[allow(clippy::too_many_arguments)]
     fn copy_buffer(
         &mut self,
@@ -1172,7 +1188,6 @@ impl VulkanCommandRecorder {
         }
         Ok(())
     }
-    #[cfg_attr(feature = "trace", tracing::instrument(skip(push_constants), fields(push_constants_len=push_constants.len())))]
     fn dispatch_kernel(
         &mut self,
         stream: &<Vulkan as Backend>::Stream,
@@ -1214,7 +1229,6 @@ impl VulkanCommandRecorder {
         }
         Ok(())
     }
-    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn zero_memory(
         &mut self,
         stream: &<Vulkan as Backend>::Stream,
@@ -1329,7 +1343,6 @@ impl VulkanCommandRecorder {
         };
         Ok(())
     }
-    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn record_command(
         &mut self,
         stream: &VulkanStream,
@@ -1411,6 +1424,7 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
         self.end(stream, cb)?;
         Ok(())
     }
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn clear(
         &mut self,
         stream: &<Vulkan as Backend>::Stream,
@@ -1502,7 +1516,7 @@ pub struct VulkanSemaphore {
 }
 impl Semaphore<Vulkan> for VulkanSemaphore {
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn wait(&self, device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn wait(&self, device: &VulkanInstance) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             device.shared.functions.supa_wait_semaphores(
                 &vk::SemaphoreWaitInfo::default()
@@ -1516,7 +1530,7 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn is_signalled(
         &self,
-        device: &VulkanDevice,
+        device: &VulkanInstance,
     ) -> Result<bool, <Vulkan as Backend>::Error> {
         Ok(unsafe {
             device
@@ -1526,7 +1540,7 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         } == *self.current_value.lock().unwrap() + 1)
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn signal(&mut self, device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn signal(&mut self, device: &VulkanInstance) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             device.shared.functions.supa_signal_semaphore(
                 &vk::SemaphoreSignalInfo::default()
@@ -1536,12 +1550,13 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         }
         Ok(())
     }
-    unsafe fn reset(&mut self, _device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn reset(&mut self, _device: &VulkanInstance) -> Result<(), <Vulkan as Backend>::Error> {
         *self.current_value.lock().unwrap() += 1;
         Ok(())
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn destroy(self, device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
+    unsafe fn destroy(self, device: &VulkanInstance) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
             device.shared.functions.destroy_semaphore(self.inner, None);
         }
