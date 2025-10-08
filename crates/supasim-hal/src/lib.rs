@@ -282,7 +282,7 @@ pub enum BufferCommand<'a, B: Backend> {
     /// * This is always safe
     MemoryBarrier { buffer: HalBufferSlice<'a, B> },
     /// # Safety
-    /// * The instance must support the form of import/export used
+    /// * The instance must support importing memory. The buffer must be imported.
     MemoryTransfer {
         buffer: HalBufferSlice<'a, B>,
         import: bool,

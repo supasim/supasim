@@ -787,6 +787,14 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         }
         Ok(())
     }
+    /// # Safety
+    /// Importing memory is inherently unsafe. You must manually use external semaphores and memory ownership transfers to synchronize.
+    pub unsafe fn import_buffer(
+        &self,
+        _desc: &ExternalBufferDescriptor,
+    ) -> SupaSimResult<B, Buffer<B>> {
+        todo!()
+    }
     pub fn destroy(&mut self) -> SupaSimResult<B, ()> {
         self._destroy()
     }
