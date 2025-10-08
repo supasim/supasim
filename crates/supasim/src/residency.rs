@@ -6,7 +6,7 @@ END LICENSE */
 
 use std::{collections::VecDeque, sync::Arc};
 
-use hal::Buffer;
+use hal::{Buffer, Semaphore as _};
 use parking_lot::{Condvar, Mutex};
 use smallvec::SmallVec;
 
@@ -14,26 +14,39 @@ use crate::{DEVICE_SMALLVEC_SIZE, Instance, sync::Semaphore};
 
 struct OutOfDateWait<B: hal::Backend> {
     semaphores: Vec<Arc<Semaphore<B>>>,
-    needs_more_copy: bool,
+    other_copy_range: Option<BufferAccessRange>,
 }
 #[derive(Default)]
 struct OutOfDateTracker<B: hal::Backend> {
     /// Sorted by range start. Ranges that will be out of date until their copy completes or is started.
+    ///
+    /// This represents ranges that are out of date after copies and operations finish.
     out_of_date_ranges: Vec<BufferAccessRange>,
+    /// Copies that will make ranges valid when complete
     current_copies: Vec<Arc<BufferAccessFinish<B>>>,
 }
 impl<B: hal::Backend> OutOfDateTracker<B> {
+    /// Mark range as up to date
     pub fn update_range_immediate(&mut self, _range: BufferAccessRange) {
         todo!()
     }
+    /// Mark range as not up to date
     pub fn invalidate_range(&mut self, _range: BufferAccessRange) {
         todo!()
     }
+    /// Mark range as up to date when something finishes
     pub fn update_range_delayed(&mut self, _finish: BufferAccessFinish<B>) {
         todo!()
     }
     pub fn get_needed_waits(&mut self, _range: BufferAccessRange) -> OutOfDateWait<B> {
         todo!()
+    }
+    pub fn check_all_current_copies(&mut self, instance: &Instance<B>) {
+        for i in (0..self.current_copies.len()).rev() {
+            if self.current_copies[i].is_complete_host(instance) {
+                self.current_copies.remove(i);
+            }
+        }
     }
 }
 
@@ -64,6 +77,20 @@ struct BufferAccessRange {
     pub start: u64,
     pub length: u64,
 }
+impl BufferAccessRange {
+    pub fn join(&self, other: &Self) -> Option<Self> {
+        if self.start < (other.start + other.length) && other.start < (self.start + self.length) {
+            let start = self.start.min(other.start);
+            Some(Self {
+                start: self.start.min(other.start),
+                length: (self.start + self.length).max(other.start + other.length) - start,
+            })
+        } else {
+            None
+        }
+    }
+}
+
 /// Contains data for waiting on a buffer access
 struct BufferAccessFinish<B: hal::Backend> {
     /// The conditional variable, only used in CPU->CPU synchronization
@@ -72,6 +99,35 @@ struct BufferAccessFinish<B: hal::Backend> {
     device_semaphore: Option<Semaphore<B>>,
     range: BufferAccessRange,
 }
+impl<B: hal::Backend> BufferAccessFinish<B> {
+    pub fn is_complete_host(&self, instance: &crate::Instance<B>) -> bool {
+        if let Some(cv) = self.condvar.as_ref() {
+            let mut lock = self.is_complete.lock();
+            loop {
+                if *lock {
+                    return true;
+                }
+                cv.wait(&mut lock);
+            }
+        } else if let Some(s) = self.device_semaphore.as_ref() {
+            let lock = self.is_complete.lock();
+            if *lock {
+                return true;
+            }
+            assert!(s.device_stream_submission.is_some());
+            unsafe {
+                s.inner
+                    .as_ref()
+                    .unwrap()
+                    .is_signalled(instance.inner().unwrap().instance.read().as_ref().unwrap());
+            }
+            todo!()
+        } else {
+            unreachable!()
+        }
+    }
+}
+
 pub struct BufferResidency<B: hal::Backend> {
     /// Residency state for each device
     pub devices: SmallVec<[DeviceResidencyState<B>; DEVICE_SMALLVEC_SIZE]>,

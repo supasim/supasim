@@ -21,7 +21,7 @@ impl<B: hal::Backend> Semaphore<B> {
             self.inner
                 .as_ref()
                 .unwrap()
-                .wait(self.instance.inner()?.instance.lock().as_ref().unwrap())
+                .wait(self.instance.inner()?.instance.read().as_ref().unwrap())
                 .map_supasim()
         }
     }
@@ -30,7 +30,7 @@ impl<B: hal::Backend> Semaphore<B> {
             self.inner
                 .as_ref()
                 .unwrap()
-                .is_signalled(self.instance.inner()?.instance.lock().as_ref().unwrap())
+                .is_signalled(self.instance.inner()?.instance.read().as_ref().unwrap())
                 .map_supasim()
         }
     }
@@ -75,7 +75,7 @@ pub fn submit_command_recorders<B: hal::Backend>(
             recorder_inners.push(&mut **r);
         }
 
-        let mut recorder = if let Some(mut r) = s.hal_command_recorders.lock().pop() {
+        let mut recorder = if let Some(mut r) = s.hal_command_recorders.write().pop() {
             unsafe {
                 r.clear(s.stream.lock().as_mut().unwrap()).map_supasim()?;
             }

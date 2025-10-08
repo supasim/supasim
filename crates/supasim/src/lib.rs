@@ -268,7 +268,7 @@ struct Device<B: hal::Backend> {
 }
 api_type!(Instance, {
     /// The inner hal instance
-    instance: Mutex<Option<B::Instance>>,
+    instance: RwLock<Option<B::Instance>>,
     /// The inner hal devices
     devices: SmallVec<[Device<B>; DEVICE_SMALLVEC_SIZE]>,
     /// The hal instance properties
@@ -276,15 +276,15 @@ api_type!(Instance, {
     /// The hal device properties
     device_properties: types::HalDeviceProperties,
     /// All created kernels
-    kernels: Mutex<Arena<KernelWeak<B>>>,
+    kernels: RwLock<Arena<KernelWeak<B>>>,
     /// All created buffers
-    buffers: Mutex<Arena<Option<BufferWeak<B>>>>,
+    buffers: RwLock<Arena<Option<BufferWeak<B>>>>,
     /// All wait handles created
-    wait_handles: Mutex<Arena<WaitHandleWeak<B>>>,
+    wait_handles: RwLock<Arena<WaitHandleWeak<B>>>,
     /// All created command recorders
-    command_recorders: Mutex<Arena<Option<CommandRecorderWeak<B>>>>,
+    command_recorders: RwLock<Arena<Option<CommandRecorderWeak<B>>>>,
     /// Hal command recorders not currently in use
-    hal_command_recorders: Mutex<Vec<B::CommandRecorder>>,
+    hal_command_recorders: RwLock<Vec<B::CommandRecorder>>,
     /// User accessible kernel compiler state
     kernel_compiler: Mutex<kernels::GlobalState>,
     /// A weak reference to self

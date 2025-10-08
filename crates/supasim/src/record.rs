@@ -400,18 +400,18 @@ pub fn assemble_streams<B: hal::Backend>(
 #[allow(clippy::type_complexity)]
 pub fn record_command_streams<B: hal::Backend>(
     streams: &StreamingCommands<B>,
-    instance: Instance<B>,
+    _instance: Instance<B>,
     recorder: &mut B::CommandRecorder,
     write_buffer: &Option<B::Buffer>,
     device_idx: usize,
     stream_idx: usize,
 ) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
-    let instance = instance.inner()?;
+    let instance = _instance.inner()?;
+    let instance_kernels = instance.kernels.read();
+    let instance_buffers = instance.buffers.read();
     let mut bindgroups = Vec::new();
     for bg in &streams.bind_groups {
-        let _k = instance
-            .kernels
-            .lock()
+        let _k = instance_kernels
             .get(bg.kernel_idx)
             .ok_or(SupaSimError::AlreadyDestroyed("Kernel".to_owned()))?
             .upgrade()?;
@@ -419,9 +419,7 @@ pub fn record_command_streams<B: hal::Backend>(
         let mut resources_a = Vec::new();
         for res in &bg.items {
             resources_a.push(
-                instance
-                    .buffers
-                    .lock()
+                instance_buffers
                     .get(res.0)
                     .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                     .as_ref()
@@ -468,9 +466,7 @@ pub fn record_command_streams<B: hal::Backend>(
                     ..
                 } => {
                     buffer_refs.push(
-                        instance
-                            .buffers
-                            .lock()
+                        instance_buffers
                             .get(*src_buffer)
                             .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                             .as_ref()
@@ -478,9 +474,7 @@ pub fn record_command_streams<B: hal::Backend>(
                             .upgrade()?,
                     );
                     buffer_refs.push(
-                        instance
-                            .buffers
-                            .lock()
+                        instance_buffers
                             .get(*dst_buffer)
                             .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                             .as_ref()
@@ -490,9 +484,7 @@ pub fn record_command_streams<B: hal::Backend>(
                 }
                 HalCommandBuilder::DispatchKernel { kernel, .. } => {
                     kernel_refs.push(
-                        instance
-                            .kernels
-                            .lock()
+                        instance_kernels
                             .get(*kernel)
                             .ok_or(SupaSimError::AlreadyDestroyed("Kernel".to_owned()))?
                             .upgrade()?,
@@ -500,9 +492,7 @@ pub fn record_command_streams<B: hal::Backend>(
                 }
                 HalCommandBuilder::MemoryBarrier { resource, .. } => {
                     buffer_refs.push(
-                        instance
-                            .buffers
-                            .lock()
+                        instance_buffers
                             .get(*resource)
                             .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                             .as_ref()
@@ -511,9 +501,7 @@ pub fn record_command_streams<B: hal::Backend>(
                     );
                 }
                 HalCommandBuilder::CopyFromTemp { dst_buffer, .. } => buffer_refs.push(
-                    instance
-                        .buffers
-                        .lock()
+                    instance_buffers
                         .get(*dst_buffer)
                         .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                         .as_ref()
@@ -521,9 +509,7 @@ pub fn record_command_streams<B: hal::Backend>(
                         .upgrade()?,
                 ),
                 HalCommandBuilder::ZeroBuffer { buffer, .. } => buffer_refs.push(
-                    instance
-                        .buffers
-                        .lock()
+                    instance_buffers
                         .get(*buffer)
                         .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                         .as_ref()
@@ -531,9 +517,7 @@ pub fn record_command_streams<B: hal::Backend>(
                         .upgrade()?,
                 ),
                 HalCommandBuilder::MemoryTransfer { resource, .. } => buffer_refs.push(
-                    instance
-                        .buffers
-                        .lock()
+                    instance_buffers
                         .get(*resource)
                         .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                         .as_ref()
