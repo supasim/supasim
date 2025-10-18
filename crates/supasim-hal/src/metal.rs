@@ -289,6 +289,7 @@ impl BackendInstance<Metal> for MetalInstance {
             map_buffers: true,
             map_buffer_while_gpu_use: true,
             upload_download_buffers: true,
+            atomic_int64: false,
         }
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]

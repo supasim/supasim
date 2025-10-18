@@ -93,10 +93,15 @@ impl Wgpu {
             compatible_surface: None,
         }))
         .map_err(WgpuError::NoSuitableAdapters)?;
-        let unified_memory = preset_unified_memory.unwrap_or(false);
 
-        let mut features =
-            wgpu::Features::SHADER_INT64 | wgpu::Features::SHADER_INT64_ATOMIC_ALL_OPS;
+        let mut features = wgpu::Features::SHADER_INT64;
+        if adapter
+            .features()
+            .contains(wgpu::Features::SHADER_INT64_ATOMIC_ALL_OPS)
+        {
+            features |= wgpu::Features::SHADER_INT64_ATOMIC_ALL_OPS;
+        }
+        let unified_memory = preset_unified_memory.unwrap_or(false);
         if unified_memory {
             features |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
         }
@@ -311,6 +316,10 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             map_buffers: true,
             map_buffer_while_gpu_use: false,
             upload_download_buffers: false,
+            atomic_int64: self
+                .device
+                .features()
+                .contains(wgpu::Features::SHADER_INT64_ATOMIC_ALL_OPS),
         }
     }
 

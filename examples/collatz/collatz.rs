@@ -33,7 +33,7 @@ impl<B: hal::Backend> AppState<B> {
         Self { instance }
     }
     pub fn run(&mut self) {
-        const WORKGROUP_DIM: u32 = 16;
+        const WORKGROUP_DIM: u32 = 4;
         const UNSOLVED_BUFFER_SIZE: u32 = WORKGROUP_DIM * WORKGROUP_DIM * WORKGROUP_DIM * 4;
         let kernel1 = self
             .instance

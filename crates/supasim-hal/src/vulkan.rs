@@ -223,6 +223,7 @@ impl Vulkan {
                     khr::get_physical_device_properties2::NAME,
                     vk::API_VERSION_1_1,
                 ),
+                (khr::shader_atomic_int64::NAME, vk::API_VERSION_1_2),
             ];
             let (phyd, queue_family_idx, api_version, extension_spirv_version) = {
                 let mut best_score = 0;
@@ -343,6 +344,9 @@ impl Vulkan {
                 vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
             let mut sync2 =
                 vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
+            let mut atomic_int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default()
+                .shader_shared_int64_atomics(true)
+                .shader_buffer_int64_atomics(true);
             let phyd_features = vk::PhysicalDeviceFeatures::default().shader_int64(true);
             // TODO: investigate multiple queues. currently we only use a general queue, but this could potentially be optimized by using special compute queues and special transfer queues
             let queue_priority = 1.0;
@@ -354,7 +358,8 @@ impl Vulkan {
                 .enabled_extension_names(&ext)
                 .enabled_features(&phyd_features)
                 .push_next(&mut timeline_semaphore)
-                .push_next(&mut sync2);
+                .push_next(&mut sync2)
+                .push_next(&mut atomic_int64);
             let device = instance.create_device(phyd, &dev_create_info, None)?;
             defer! {
                 if err.get() {
@@ -450,6 +455,7 @@ impl Vulkan {
                 }),
                 spirv_version,
                 _api_version: api_version,
+                atomic_int64: true,
             };
             let device = VulkanDevice {
                 shared: instance.shared.clone(),
@@ -600,6 +606,7 @@ impl Device<Vulkan> for VulkanDevice {
                 usage: vk_mem::MemoryUsage::Auto,
                 flags: if mapped {
                     AllocationCreateFlags::MAPPED
+                        | AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
                 } else {
                     AllocationCreateFlags::empty()
                 },
@@ -863,6 +870,7 @@ pub struct VulkanInstance {
     shared: Arc<SharedDeviceInfo>,
     spirv_version: types::SpirvVersion,
     _api_version: u32,
+    atomic_int64: bool,
 }
 impl Debug for VulkanInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -925,6 +933,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             map_buffers: true,
             map_buffer_while_gpu_use: true,
             upload_download_buffers: true,
+            atomic_int64: self.atomic_int64,
         }
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
@@ -1109,6 +1118,9 @@ impl Buffer<Vulkan> for VulkanBuffer {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(mut self, device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
+            if self.mapped_ptr.is_some() {
+                device.alloc.unmap_memory(&mut self.allocation);
+            }
             device
                 .alloc
                 .destroy_buffer(self.buffer, &mut self.allocation);
