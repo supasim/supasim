@@ -95,10 +95,8 @@ impl Wgpu {
         .map_err(WgpuError::NoSuitableAdapters)?;
         let unified_memory = preset_unified_memory.unwrap_or(false);
 
-        let mut features = wgpu::Features::SHADER_INT64;
-        if adapter.features().contains(wgpu::Features::PIPELINE_CACHE) {
-            features |= wgpu::Features::PIPELINE_CACHE;
-        }
+        let mut features =
+            wgpu::Features::SHADER_INT64 | wgpu::Features::SHADER_INT64_ATOMIC_ALL_OPS;
         if unified_memory {
             features |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
         }
