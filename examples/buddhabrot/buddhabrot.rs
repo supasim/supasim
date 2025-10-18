@@ -6,7 +6,7 @@ END LICENSE */
 
 use rand::random;
 use std::sync::Arc;
-use supasim::{Backend, SupaSimInstance};
+use supasim::{Backend, Instance as Instance};
 
 use winit::{
     application::ApplicationHandler,
@@ -33,7 +33,7 @@ pub struct AppState<B: hal::Backend> {
     config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
     window: Arc<Window>,
-    instance: SupaSimInstance<B>,
+    instance: Instance<B>,
     supasim_buffer: supasim::Buffer<B>,
     supasim_temp_buffer: supasim::Buffer<B>,
     supasim_width_height_buffer: supasim::Buffer<B>,
@@ -141,7 +141,7 @@ impl<B: hal::Backend> AppState<B> {
 
         let global_state = kernels::GlobalState::new_from_env().unwrap();
         let mut shader_binary = Vec::new();
-        let instance = SupaSimInstance::from_hal(hal_desc);
+        let instance = Instance::from_hal(hal_desc);
         let workgroup_size = [16, 16, 1];
         let mut compile_kernel = |entry: &str| {
             shader_binary.clear();
@@ -416,7 +416,7 @@ impl<B: hal::Backend> AppState<B> {
     pub fn create_buffer(
         width: u32,
         height: u32,
-        instance: &SupaSimInstance<B>,
+        instance: &Instance<B>,
         device: &wgpu::Device,
     ) -> (supasim::Buffer<B>, wgpu::Buffer) {
         let size = width as u64 * height as u64 * 4;

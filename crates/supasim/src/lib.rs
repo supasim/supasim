@@ -349,7 +349,7 @@ struct InstanceState<B: hal::Backend> {
     /// A handle to the thread used for syncing
     sync_thread: UnsafeCell<Option<SyncThreadHandle<B>>>,
     /// A weak reference to self
-    myself: UnsafeCell<Option<SupaSimInstanceWeak<B>>>,
+    myself: UnsafeCell<Option<InstanceWeak<B>>>,
 }
 impl<B: hal::Backend> InstanceState<B> {
     pub fn sync_thread(&self) -> &SyncThreadHandle<B> {
@@ -364,16 +364,16 @@ impl<B: hal::Backend> Drop for InstanceState<B> {
         }
     }
 }
-api_type!(SupaSimInstance, {
+api_type!(Instance, {
     _inner: Arc<InstanceState<B>>,
 },);
-impl<B: hal::Backend> Deref for SupaSimInstanceInner<B> {
+impl<B: hal::Backend> Deref for InstanceInner<B> {
     type Target = InstanceState<B>;
     fn deref(&self) -> &Self::Target {
         &self._inner
     }
 }
-impl<B: hal::Backend> SupaSimInstance<B> {
+impl<B: hal::Backend> Instance<B> {
     pub fn from_hal(desc: hal::InstanceDescriptor<B>) -> Self {
         let instance = desc.instance;
         let device = desc.devices.into_iter().next().unwrap();
@@ -388,7 +388,7 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         let device = device.device;
         let instance_properties = instance.get_properties();
         let device_properties = device.get_properties(&instance);
-        let s = Self::from_inner(SupaSimInstanceInner {
+        let s = Self::from_inner(InstanceInner {
             _phantom: Default::default(),
             _is_destroyed: false,
             _inner: Arc::new(InstanceState {
@@ -810,9 +810,8 @@ impl<B: hal::Backend> SupaSimInstance<B> {
         self._destroy()
     }
 }
-impl<B: hal::Backend> SupaSimInstanceInner<B> {
+impl<B: hal::Backend> InstanceInner<B> {
     fn destroy(&mut self) {
-        println!("Instance destroying");
         // We unsafely pass a mutable reference to the sync thread, knowing that this thread will "join" it,
         // meaning that at no point is the mutable reference used by both at the same time.
         let mut sync_thread =
@@ -868,13 +867,13 @@ impl<B: hal::Backend> SupaSimInstanceInner<B> {
         }
     }
 }
-impl<B: hal::Backend> Drop for SupaSimInstanceInner<B> {
+impl<B: hal::Backend> Drop for InstanceInner<B> {
     fn drop(&mut self) {
         self.destroy();
     }
 }
 api_type!(Kernel, {
-    instance: SupaSimInstance<B>,
+    instance: Instance<B>,
     inner: Option<B::Kernel>,
     reflection_info: KernelReflectionInfo,
     last_used: u64,
@@ -938,7 +937,7 @@ struct SubmittedCommandRecorder<B: hal::Backend> {
     used_buffers: Vec<BufferWeak<B>>,
 }
 api_type!(CommandRecorder, {
-    instance: SupaSimInstance<B>,
+    instance: Instance<B>,
     is_alive: bool,
     id: Index,
     commands: Vec<BufferCommand<B>>,
@@ -1202,7 +1201,7 @@ impl<B: hal::Backend> BufferBacking<B> {
     }
 }
 api_type!(Buffer, {
-    instance: SupaSimInstance<B>,
+    instance: Instance<B>,
     inner: Option<B::Buffer>,
     id: Index,
     _semaphores: Vec<(Index, BufferRange)>,
@@ -1376,7 +1375,7 @@ impl<B: hal::Backend> Drop for BufferInner<B> {
 /// If the entire buffer isn't the same type you are trying to read, read as bytes first then cast yourself.
 /// SupaSim does checks for alignments and validates offsets with the size of types
 pub struct MappedBuffer<'a, B: hal::Backend> {
-    instance: SupaSimInstance<B>,
+    instance: Instance<B>,
     inner: *mut u8,
     len: u64,
     buffer_align: u64,
@@ -1458,7 +1457,7 @@ impl<B: hal::Backend> Drop for MappedBuffer<'_, B> {
 }
 
 api_type!(WaitHandle, {
-    instance: SupaSimInstance<B>,
+    instance: Instance<B>,
     /// Index of the submission
     index: u64,
     id: Index,
@@ -1669,6 +1668,6 @@ impl BufferUser {
 }
 
 api_type!(ExternalSemaphore, {
-    instance: SupaSimInstance<B>,
+    instance: Instance<B>,
     id: Index,
 },);

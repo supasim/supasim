@@ -22,8 +22,8 @@ use types::SyncOperations;
 
 use crate::{
     Buffer, BufferCommand, BufferCommandInner, BufferRange, BufferSlice, BufferUserId,
-    CommandRecorderInner, InstanceState, Kernel, MapSupasimError, MappedBuffer,
-    SendableUserBufferAccessClosure, SupaSimError, SupaSimInstance, SupaSimResult,
+    CommandRecorderInner, Instance, InstanceState, Kernel, MapSupasimError, MappedBuffer,
+    SendableUserBufferAccessClosure, SupaSimError, SupaSimResult,
 };
 
 pub struct SubmissionResources<B: hal::Backend> {
@@ -421,7 +421,7 @@ pub fn assemble_streams<B: hal::Backend>(
 #[allow(clippy::type_complexity)]
 pub fn record_command_streams<B: hal::Backend>(
     streams: &StreamingCommands<B>,
-    instance: SupaSimInstance<B>,
+    instance: Instance<B>,
     recorder: &mut B::CommandRecorder,
     write_buffer: &Option<B::Buffer>,
 ) -> SupaSimResult<B, Vec<(B::BindGroup, Kernel<B>)>> {
@@ -907,7 +907,7 @@ impl<B: hal::Backend> SyncThreadHandle<B> {
     }
 }
 pub fn create_sync_thread<B: hal::Backend>(
-    instance: SupaSimInstance<B>,
+    instance: Instance<B>,
 ) -> SupaSimResult<B, SyncThreadHandle<B>> {
     let shared_thread = SyncThreadSharedData::<B> {
         next_job: 1,

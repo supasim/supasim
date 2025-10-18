@@ -48,5 +48,10 @@ wgpu = { workspace = true, features = ["wgsl"] }
 
 [[example]]
 name = "buddhabrot"
-path = "examples/buddhabrot/buddhabrot.rs"
+path = "../../examples/buddhabrot/buddhabrot.rs"
+required-features = ["wgpu", "vulkan", "metal"]
+
+[[example]]
+name = "collatz"
+path = "../../examples/collatz/collatz.rs"
 required-features = ["wgpu", "vulkan", "metal"]
