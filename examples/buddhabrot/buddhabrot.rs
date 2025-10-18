@@ -6,7 +6,7 @@ END LICENSE */
 
 use rand::random;
 use std::sync::Arc;
-use supasim::{Backend, Instance as Instance};
+use supasim::{Backend, Instance};
 
 use winit::{
     application::ApplicationHandler,
