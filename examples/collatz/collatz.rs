@@ -39,8 +39,14 @@ impl<B: hal::Backend> AppState<B> {
         Self { instance }
     }
     pub fn run(&mut self) {
-        const WORKGROUP_DIM: u32 = 32;
-        const UNSOLVED_BUFFER_SIZE: u32 = WORKGROUP_DIM * WORKGROUP_DIM * WORKGROUP_DIM * 4;
+        const WORKGROUP_DIM: u32 = 16;
+        const SHADER_WORKGROUP_DIM: u32 = 16;
+        const UNSOLVED_BUFFER_SIZE: u32 = WORKGROUP_DIM
+            * WORKGROUP_DIM
+            * WORKGROUP_DIM
+            * SHADER_WORKGROUP_DIM
+            * SHADER_WORKGROUP_DIM
+            * 4;
         let kernel1 = self
             .instance
             .compile_slang_kernel(include_str!("collatz.slang"), "collatzMain")

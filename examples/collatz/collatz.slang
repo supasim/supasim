@@ -33,7 +33,7 @@ struct Parameters
     RWStructuredBuffer<UnsolvedElement> unsolved;
 }
 
-static const int NUM_ITERATIONS = 256;
+static const int NUM_ITERATIONS = 16;
 
 groupshared uint64_t collatzNumUnsolved;
 [shader("compute")]
