@@ -39,7 +39,7 @@ impl<B: hal::Backend> AppState<B> {
         Self { instance }
     }
     pub fn run(&mut self) {
-        const WORKGROUP_DIM: u32 = 4;
+        const WORKGROUP_DIM: u32 = 32;
         const UNSOLVED_BUFFER_SIZE: u32 = WORKGROUP_DIM * WORKGROUP_DIM * WORKGROUP_DIM * 4;
         let kernel1 = self
             .instance
@@ -90,8 +90,8 @@ impl<B: hal::Backend> AppState<B> {
 
         let setup_recorder = self.instance.create_recorder().unwrap();
         let initial_global_data = GlobalData {
-            min_limit: 2,
-            max_limit: 2,
+            min_limit: 3,
+            max_limit: 3,
             num_unsolved: 0,
             new_num_unsolved: 0,
             smallest_unsolved: u64::MAX,

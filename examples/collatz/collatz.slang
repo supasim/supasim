@@ -4,7 +4,7 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-// You only need to check odd numbers.
+// You only need to check odd numbers. Even numbers instantly decrease
 
 struct GlobalData
 {
@@ -52,7 +52,7 @@ void collatzMain(uint3 id: SV_DispatchThreadID, ParameterBlock<Parameters> param
     else
     {
         element.attemptsSoFar = 0;
-        element.number = params.globalData[0].maxLimit - params.globalData[0].numUnsolved + index;
+        element.number = params.globalData[0].maxLimit - params.globalData[0].numUnsolved + index * 2;
         element.currentValue = element.number;
     }
     bool solved = false;
@@ -108,7 +108,7 @@ void sortUnsolved1(uint3 id: SV_DispatchThreadID, ParameterBlock<Parameters> par
     uint index = id.z * totalSize.x * totalSize.y + id.y * totalSize.x + id.x;
     if (index == 0)
     {
-        params.globalData[0].maxLimit += totalCount - params.globalData[0].numUnsolved;
+        params.globalData[0].maxLimit += 2 * (totalCount - params.globalData[0].numUnsolved);
         params.globalData[0].numUnsolved = params.globalData[0].newNumUnsolved;
         sortSmallest = uint64_t.maxValue;
     }
