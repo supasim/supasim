@@ -452,7 +452,7 @@ pub fn record_command_streams<B: hal::Backend>(
                         .lock()
                         .as_ref()
                         .unwrap(),
-                    kernel.per_device[device_idx].as_mut().unwrap(),
+                    kernel.inner.as_mut().unwrap(),
                     &resources,
                 )
                 .map_supasim()?
@@ -553,9 +553,7 @@ pub fn record_command_streams<B: hal::Backend>(
                 buffer
             };
             let mut get_kernel = || {
-                let kernel = kernel_locks[current_kernel_index].per_device[device_idx]
-                    .as_ref()
-                    .unwrap();
+                let kernel = kernel_locks[current_kernel_index].inner.as_ref().unwrap();
                 current_kernel_index += 1;
                 kernel
             };

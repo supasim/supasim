@@ -66,11 +66,10 @@ pub fn submit_command_recorders<B: hal::Backend>(
     instance: &Instance<B>,
     recorders: &[crate::CommandRecorder<B>],
 ) -> SupaSimResult<B, WaitHandle<B>> {
-    instance.check_destroyed()?;
+    let s = instance.inner()?;
+    s.check_destroyed()?;
     let submission_idx;
     {
-        let s = instance.inner()?;
-
         let mut recorder_locks = Vec::new();
         for r in recorders.iter_mut() {
             r.check_destroyed()?;
@@ -183,13 +182,12 @@ pub fn submit_command_recorders<B: hal::Backend>(
                 .update_user_submission(id, submission_idx, &s);
         }
     }
-
+    drop(s);
     for recorder in recorders {
-        recorder._destroy()?;
+        recorder.inner_mut()?.destroy(&s);
     }
     Ok(WaitHandle::from_inner(WaitHandleInner {
         _phantom: Default::default(),
-        _is_destroyed: false,
         instance: instance.clone(),
         id: Index::DANGLING,
         is_alive: true,

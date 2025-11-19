@@ -154,7 +154,6 @@ macro_rules! api_type {
             // Inner type
             pub(crate) struct [<$name Inner>] <B: hal::Backend> {
                 _phantom: PhantomData<B>, // Ensures B is always used
-                _is_destroyed: bool,
                 $($field)*
             }
 
@@ -188,22 +187,6 @@ macro_rules! api_type {
                 }
                 pub(crate) fn downgrade(&self) -> [<$name Weak>]<B> {
                     [<$name Weak>](Arc::downgrade(&self.0))
-                }
-                pub(crate) fn check_destroyed(&self) -> SupaSimResult<B, ()> {
-                    if self.0.read()._is_destroyed {
-                        Err(SupaSimError::AlreadyDestroyed(stringify!($name).to_owned()))
-                    } else {
-                        Ok(())
-                    }
-                }
-                pub(crate) fn _destroy(&self) -> SupaSimResult<B, ()> {
-                    let mut r = self.0.write();
-                    if r._is_destroyed {
-                        return Err(SupaSimError::AlreadyDestroyed(stringify!($name).to_owned()));
-                    }
-                    // Destroy shouldn't get called, thats only on drop
-                    r._is_destroyed = true;
-                    Ok(())
                 }
             }
             impl<B: hal::Backend> PartialEq for $name <B> {
@@ -289,7 +272,16 @@ api_type!(Instance, {
     kernel_compiler: Mutex<kernels::GlobalState>,
     /// A weak reference to self
     self_weak: Option<InstanceWeak<B>>,
+    is_destroyed: bool,
 },);
+impl<B: hal::Backend> InstanceInner<B> {
+    fn check_destroyed(&self) -> SupaSimResult<B, ()> {
+        if self.is_destroyed {
+            return Err(SupaSimError::AlreadyDestroyed("Instance".into()));
+        }
+        Ok(())
+    }
+}
 impl<B: hal::Backend> Instance<B> {
     pub fn from_hal(desc: hal::InstanceDescriptor<B>) -> Self {
         let instance = desc.instance;
@@ -307,7 +299,7 @@ impl<B: hal::Backend> Instance<B> {
         let device_properties = device.get_properties(&instance);
         let s = Self::from_inner(InstanceInner {
             _phantom: Default::default(),
-            _is_destroyed: false,
+            is_destroyed: false,
             hal_instance: RwLock::new(Some(instance)),
             hal_devices: smallvec![Device {
                 inner: Mutex::new(Some(device)),
@@ -333,8 +325,9 @@ impl<B: hal::Backend> Instance<B> {
         s
     }
     pub fn properties(&self) -> SupaSimResult<B, InstanceProperties> {
-        self.check_destroyed()?;
-        let v = self.inner()?.hal_instance_properties;
+        let s = self.inner()?;
+        s.check_destroyed()?;
+        let v = s.hal_instance_properties;
         Ok(InstanceProperties {
             kernel_lang: v.kernel_lang,
         })
@@ -344,9 +337,8 @@ impl<B: hal::Backend> Instance<B> {
         binary: &[u8],
         reflection: types::KernelReflectionInfo,
     ) -> SupaSimResult<B, Kernel<B>> {
-        self.check_destroyed()?;
-
         let s = self.inner()?;
+        s.check_destroyed()?;
         let kernel = unsafe {
             s.hal_instance
                 .write()
@@ -360,9 +352,8 @@ impl<B: hal::Backend> Instance<B> {
         .map_supasim()?;
         let k = Kernel::from_inner(KernelInner {
             _phantom: Default::default(),
-            _is_destroyed: false,
             instance: self.clone(),
-            per_device: smallvec![Some(kernel)],
+            inner: Some(kernel),
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
             reflection_info: reflection,
@@ -372,9 +363,9 @@ impl<B: hal::Backend> Instance<B> {
         Ok(k)
     }
     pub fn compile_slang_kernel(&self, slang: &str, entry: &str) -> SupaSimResult<B, Kernel<B>> {
-        self.check_destroyed()?;
-        let mut binary = Vec::new();
         let s = self.inner()?;
+        s.check_destroyed()?;
+        let mut binary = Vec::new();
         let reflection_info =
             s.kernel_compiler
                 .lock()
@@ -393,11 +384,10 @@ impl<B: hal::Backend> Instance<B> {
         self.compile_raw_kernel(&binary, reflection_info)
     }
     pub fn create_recorder(&self) -> SupaSimResult<B, CommandRecorder<B>> {
-        self.check_destroyed()?;
         let s = self.inner()?;
+        s.check_destroyed()?;
         let r = CommandRecorder::from_inner(CommandRecorderInner {
             _phantom: Default::default(),
-            _is_destroyed: false,
             instance: self.clone(),
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
@@ -411,17 +401,17 @@ impl<B: hal::Backend> Instance<B> {
         Ok(r)
     }
     pub fn create_buffer(&self, desc: &BufferDescriptor) -> SupaSimResult<B, Buffer<B>> {
-        self.check_destroyed()?;
         let s = self.inner()?;
+        s.check_destroyed()?;
         let b = Buffer::from_inner(BufferInner {
             _phantom: Default::default(),
-            _is_destroyed: false,
             instance: self.clone(),
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
             create_info: *desc,
             is_currently_external: false,
             residency: BufferResidency::new(1),
+            is_alive: true,
         });
         b.inner_mut()?.id = s.buffers.write().insert(Some(b.downgrade()));
         Ok(b)
@@ -433,20 +423,18 @@ impl<B: hal::Backend> Instance<B> {
         sync::submit_command_recorders(self, recorders)
     }
     pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
-        self.check_destroyed()?;
         todo!()
     }
     /// Do work which is queued but not yet started for batching reasons. Currently a NOOP
     pub fn do_busywork(&self) -> SupaSimResult<B, ()> {
-        self.check_destroyed()?;
-        Ok(())
+        todo!()
     }
     /// Clear cached resources. This would be useful if the usage requirements have just
     /// dramatically changed, for example after startup or between different simulations.
     /// Currently a NOOP.
     pub fn clear_cached_resources(&self) -> SupaSimResult<B, ()> {
-        self.check_destroyed()?;
         let s = self.inner()?;
+        s.check_destroyed()?;
         unsafe {
             s.hal_instance
                 .write()
@@ -467,7 +455,6 @@ impl<B: hal::Backend> Instance<B> {
         closure: UserBufferAccessClosure<B>,
         buffers: &[&BufferSlice<B>],
     ) -> SupaSimResult<B, ()> {
-        self.check_destroyed()?;
         let properties = self.inner()?.hal_instance_properties;
         let mut mapped_buffers = Vec::with_capacity(buffers.len());
         let mut ids = Vec::new();
@@ -477,6 +464,7 @@ impl<B: hal::Backend> Instance<B> {
         }
         if properties.map_buffers {
             let instance = self.inner()?;
+            instance.check_destroyed()?;
             #[allow(clippy::never_loop)]
             for (i, b) in buffers.iter().enumerate() {
                 let mut buffer_inner = b.buffer.inner_mut()?;
@@ -553,6 +541,7 @@ impl<B: hal::Backend> Instance<B> {
             // Memory issues if we don't unmap I guess
             let error = closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e));
             for b in buffer_contents {
+                // Buffer ownership has been taken by the `MappedBuffer` that frees when its done
                 std::mem::forget(b);
             }
             drop(mapped_buffers);
@@ -578,7 +567,10 @@ impl<B: hal::Backend> Instance<B> {
         todo!()
     }
     pub fn destroy(&mut self) -> SupaSimResult<B, ()> {
-        self._destroy()
+        let mut s = self.inner_mut()?;
+        s.check_destroyed()?;
+        s.is_destroyed = true;
+        Ok(())
     }
 }
 impl<B: hal::Backend> InstanceInner<B> {
@@ -602,7 +594,6 @@ impl<B: hal::Backend> InstanceInner<B> {
                 if let Ok(mut cr2) = cr.inner_mut() {
                     cr2.destroy(self);
                 }
-                let _ = cr._destroy();
             }
         }
         for (_, wh) in std::mem::take(&mut *self.wait_handles.write()) {
@@ -610,7 +601,6 @@ impl<B: hal::Backend> InstanceInner<B> {
                 if let Ok(mut wh2) = wh.inner_mut() {
                     wh2.destroy(self);
                 }
-                let _ = wh._destroy();
             }
         }
         for (_, b) in std::mem::take(&mut *self.buffers.write()) {
@@ -620,7 +610,6 @@ impl<B: hal::Backend> InstanceInner<B> {
                 if let Ok(mut b2) = b.inner_mut() {
                     b2.destroy(self);
                 }
-                let _ = b._destroy();
             }
         }
         for (_, k) in std::mem::take(&mut *self.kernels.write()) {
@@ -628,7 +617,6 @@ impl<B: hal::Backend> InstanceInner<B> {
                 if let Ok(mut k2) = k.inner_mut() {
                     k2.destroy(self);
                 }
-                let _ = k._destroy();
             }
         }
         unsafe {
@@ -651,7 +639,7 @@ impl<B: hal::Backend> Drop for InstanceInner<B> {
 }
 api_type!(Kernel, {
     instance: Instance<B>,
-    per_device: SmallVec<[Option<B::Kernel>; DEVICE_SMALLVEC_SIZE]>,
+    inner: Option<B::Kernel>,
     reflection_info: KernelReflectionInfo,
     last_used_per_device: SmallVec<[Vec<Semaphore<B>>; DEVICE_SMALLVEC_SIZE]>,
     id: Index,
@@ -664,18 +652,18 @@ impl<B: hal::Backend> std::fmt::Debug for Kernel<B> {
 impl<B: hal::Backend> KernelInner<B> {
     pub fn destroy(&mut self, instance: &InstanceInner<B>) {
         instance.kernels.write().remove(self.id).unwrap();
-        for thing in std::mem::take(&mut self.per_device) {
-            if let Some(k) = thing {
-                unsafe {
-                    k.destroy(instance.hal_instance.read().as_ref().unwrap());
-                }
+        if let Some(inner) = std::mem::take(&mut self.inner) {
+            unsafe {
+                inner.destroy(instance.hal_instance.read().as_ref().unwrap());
             }
         }
     }
 }
 impl<B: hal::Backend> Drop for KernelInner<B> {
     fn drop(&mut self) {
-        if let Ok(instance) = self.instance.clone().inner() {
+        if self.inner.is_some()
+            && let Ok(instance) = self.instance.clone().inner()
+        {
             self.destroy(&instance);
         }
     }
@@ -722,6 +710,12 @@ api_type!(CommandRecorder, {
     sem_signals: Vec<ExternalSemaphore<B>>,
 },);
 impl<B: hal::Backend> CommandRecorder<B> {
+    fn check_destroyed(&self) -> SupaSimResult<B, ()> {
+        if !self.inner()?.is_alive {
+            return Err(SupaSimError::AlreadyDestroyed("CommandRecorder".into()));
+        }
+        Ok(())
+    }
     /// Valid copies (automatic can replace any of these)
     /// * Upload -> download
     /// * Upload -> gpu
@@ -866,7 +860,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
 impl<B: hal::Backend> CommandRecorderInner<B> {
     fn destroy(&mut self, instance: &InstanceInner<B>) {
         instance.command_recorders.write().remove(self.id);
-        self.is_alive = true;
+        self.is_alive = false;
     }
 }
 impl<B: hal::Backend> Drop for CommandRecorderInner<B> {
@@ -967,6 +961,7 @@ api_type!(Buffer, {
     create_info: BufferDescriptor,
     residency: BufferResidency<B>,
     is_currently_external: bool,
+    is_alive: bool,
 },);
 impl<B: hal::Backend> Buffer<B> {
     pub fn write<T: bytemuck::Pod>(&self, offset: u64, data: &[T]) -> SupaSimResult<B, ()> {
@@ -1115,11 +1110,14 @@ impl<B: hal::Backend> BufferInner<B> {
         unsafe {
             self.residency.destroy(instance);
         }
+        self.is_alive = false;
     }
 }
 impl<B: hal::Backend> Drop for BufferInner<B> {
     fn drop(&mut self) {
-        if let Ok(instance) = self.instance.clone().inner() {
+        if self.is_alive
+            && let Ok(instance) = self.instance.clone().inner()
+        {
             self.destroy(&instance);
         }
     }
