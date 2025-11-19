@@ -5,8 +5,9 @@
 END LICENSE */
 
 use hal::Semaphore as _;
+use thunderdome::Index;
 
-use crate::{Instance, MapSupasimError, SupaSimResult, WaitHandle, record};
+use crate::{Instance, MapSupasimError, SupaSimResult, WaitHandle, WaitHandleInner, record};
 
 /// A semaphore with info about its device that returns to a pool on drop
 pub struct Semaphore<B: hal::Backend> {
@@ -117,7 +118,7 @@ pub fn submit_command_recorders<B: hal::Backend>(
             used_buffers.insert(buf_id);
         }
         drop(s);
-        let bind_groups = sync::record_command_streams(
+        let bind_groups = record::record_command_streams(
             &streams,
             self.clone(),
             &mut recorder,
@@ -174,9 +175,9 @@ pub fn submit_command_recorders<B: hal::Backend>(
     Ok(WaitHandle::from_inner(WaitHandleInner {
         _phantom: Default::default(),
         _is_destroyed: false,
-        instance: self.clone(),
-        index: submission_idx,
+        instance: instance.clone(),
         id: Index::DANGLING,
         is_alive: true,
+        semaphore: 
     }))
 }

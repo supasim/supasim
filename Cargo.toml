@@ -36,11 +36,11 @@ homepage = "https://supasim.github.io/"
 [workspace.dependencies]
 # Many of these aren't yet used by supasim
 anyhow = "1.0"
-bitflags = "2.9"
+bitflags = "2.10"
 bytemuck = { version = "1.24", features = ["derive"] }
 env_logger = "0.11"
 getrandom = "0.3"
-libloading = "0.8"
+libloading = "0.9"
 log = { version = "0.4" }
 rand = "0.9"
 rayon = "1.10"

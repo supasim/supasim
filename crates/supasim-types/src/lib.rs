@@ -166,6 +166,7 @@ pub struct HalInstanceProperties {
     pub map_buffer_while_gpu_use: bool,
     /// Whether it supports dual upload-download buffers
     pub upload_download_buffers: bool,
+    pub atomic_int64: bool,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct HalDeviceProperties {

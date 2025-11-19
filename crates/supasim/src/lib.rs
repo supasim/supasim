@@ -314,9 +314,9 @@ impl<B: hal::Backend> Instance<B> {
                 streams: smallvec![Stream {
                     inner: Mutex::new(Some(stream))
                 }],
+                properties: device_properties,
             }],
             hal_instance_properties: instance_properties,
-            hal_device_properties: device_properties,
             kernels: RwLock::new(Arena::default()),
             buffers: RwLock::new(Arena::default()),
             wait_handles: RwLock::new(Arena::default()),
@@ -434,9 +434,7 @@ impl<B: hal::Backend> Instance<B> {
     }
     pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
         self.check_destroyed()?;
-        let s = self.inner()?;
-        s.sync_thread().wait_for_idle()?;
-        Ok(())
+        todo!()
     }
     /// Do work which is queued but not yet started for batching reasons. Currently a NOOP
     pub fn do_busywork(&self) -> SupaSimResult<B, ()> {
@@ -585,7 +583,6 @@ impl<B: hal::Backend> Instance<B> {
 }
 impl<B: hal::Backend> InstanceInner<B> {
     fn destroy(&mut self) {
-        println!("Instance destroying");
         // We unsafely pass a mutable reference to the sync thread, knowing that this thread will "join" it,
         // meaning that at no point is the mutable reference used by both at the same time.
         let mut sync_thread = self.sync_thread.take().unwrap();
