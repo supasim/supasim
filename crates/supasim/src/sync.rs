@@ -4,10 +4,15 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-use hal::Semaphore as _;
-use thunderdome::Index;
+use std::collections::HashSet;
 
-use crate::{Instance, MapSupasimError, SupaSimResult, WaitHandle, WaitHandleInner, record};
+use hal::{CommandRecorder as _, Semaphore as _, Stream};
+use thunderdome::Index;
+use types::SyncMode;
+
+use crate::{
+    Instance, MapSupasimError, SupaSimError, SupaSimResult, WaitHandle, WaitHandleInner, record,
+};
 
 /// A semaphore with info about its device that returns to a pool on drop
 pub struct Semaphore<B: hal::Backend> {
@@ -78,23 +83,33 @@ pub fn submit_command_recorders<B: hal::Backend>(
 
         let mut recorder = if let Some(mut r) = s.hal_command_recorders.write().pop() {
             unsafe {
-                r.clear(s.stream.lock().as_mut().unwrap()).map_supasim()?;
+                r.clear(s.hal_devices[0].streams[0].inner.lock().as_ref().unwrap())
+                    .map_supasim()?;
             }
             r
         } else {
-            unsafe { s.stream.lock().as_mut().unwrap().create_recorder() }.map_supasim()?
+            unsafe {
+                s.hal_devices[0].streams[0]
+                    .inner
+                    .lock()
+                    .as_ref()
+                    .unwrap()
+                    .create_recorder()
+            }
+            .map_supasim()?
         };
         let mut used_buffers = HashSet::new();
         let mut used_buffer_ranges = Vec::new();
         let streams = record::assemble_streams(
             &mut recorder_inners,
-            &s,
+            &instance,
             s.hal_instance_properties.sync_mode == SyncMode::VulkanStyle,
+            0,
         )?;
         for (buf_id, ranges) in &streams.used_ranges {
             let b = s
                 .buffers
-                .lock()
+                .read()
                 .get(*buf_id)
                 .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                 .as_ref()
@@ -117,19 +132,19 @@ pub fn submit_command_recorders<B: hal::Backend>(
             }
             used_buffers.insert(buf_id);
         }
-        drop(s);
         let bind_groups = record::record_command_streams(
             &streams,
-            self.clone(),
+            instance.clone(),
             &mut recorder,
             &streams.resources.temp_copy_buffer,
+            0,
+            0,
         )?;
-        let s = self.inner()?;
         let used_buffers: Vec<_> = used_buffers
             .iter()
             .map(|a| {
                 s.buffers
-                    .lock()
+                    .read()
                     .get(**a)
                     .unwrap()
                     .as_ref()
@@ -153,7 +168,7 @@ pub fn submit_command_recorders<B: hal::Backend>(
         for (buf_id, _) in streams.used_ranges {
             let b = s
                 .buffers
-                .lock()
+                .read()
                 .get(buf_id)
                 .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
                 .as_ref()
@@ -178,6 +193,5 @@ pub fn submit_command_recorders<B: hal::Backend>(
         instance: instance.clone(),
         id: Index::DANGLING,
         is_alive: true,
-        semaphore: 
     }))
 }

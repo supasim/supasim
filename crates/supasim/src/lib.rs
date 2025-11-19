@@ -25,8 +25,8 @@ mod sync;
 
 use anyhow::anyhow;
 use hal::{
-    BackendInstance as _, Buffer as _, CommandRecorder as _, Device as _, Kernel as _, Stream as _,
-    StreamDescriptor, StreamType,
+    BackendInstance as _, Buffer as _, Device as _, Kernel as _, Stream as _, StreamDescriptor,
+    StreamType,
 };
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use smallvec::{SmallVec, smallvec};
@@ -662,21 +662,20 @@ impl<B: hal::Backend> std::fmt::Debug for Kernel<B> {
     }
 }
 impl<B: hal::Backend> KernelInner<B> {
-    pub fn destroy(&mut self, instance: &InstanceState<B>) {
-        let inner = std::mem::take(&mut self.inner).unwrap();
-        instance.kernels.lock().remove(self.id).unwrap();
-        unsafe {
-            inner
-                .destroy(instance.instance.lock().as_ref().unwrap())
-                .unwrap();
+    pub fn destroy(&mut self, instance: &InstanceInner<B>) {
+        instance.kernels.write().remove(self.id).unwrap();
+        for thing in std::mem::take(&mut self.per_device) {
+            if let Some(k) = thing {
+                unsafe {
+                    k.destroy(instance.hal_instance.read().as_ref().unwrap());
+                }
+            }
         }
     }
 }
 impl<B: hal::Backend> Drop for KernelInner<B> {
     fn drop(&mut self) {
-        if self.inner.is_some()
-            && let Ok(instance) = self.instance.clone().inner()
-        {
+        if let Ok(instance) = self.instance.clone().inner() {
             self.destroy(&instance);
         }
     }
@@ -865,8 +864,8 @@ impl<B: hal::Backend> CommandRecorder<B> {
     }
 }
 impl<B: hal::Backend> CommandRecorderInner<B> {
-    fn destroy(&mut self, instance: &InstanceState<B>) {
-        instance.command_recorders.lock().remove(self.id);
+    fn destroy(&mut self, instance: &InstanceInner<B>) {
+        instance.command_recorders.write().remove(self.id);
         self.is_alive = true;
     }
 }
@@ -1114,18 +1113,13 @@ impl<B: hal::Backend> BufferInner<B> {
     fn destroy(&mut self, instance: &InstanceInner<B>) {
         instance.buffers.write().remove(self.id);
         unsafe {
-            std::mem::take(&mut self.inner)
-                .unwrap()
-                .destroy(instance.device.lock().as_ref().unwrap())
-                .unwrap();
+            self.residency.destroy(instance);
         }
     }
 }
 impl<B: hal::Backend> Drop for BufferInner<B> {
     fn drop(&mut self) {
-        if self.inner.is_some()
-            && let Ok(instance) = self.instance.clone().inner()
-        {
+        if let Ok(instance) = self.instance.clone().inner() {
             self.destroy(&instance);
         }
     }
