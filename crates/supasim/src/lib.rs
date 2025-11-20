@@ -25,8 +25,8 @@ mod sync;
 
 use anyhow::anyhow;
 use hal::{
-    BackendInstance as _, Buffer as _, Device as _, Kernel as _, Stream as _, StreamDescriptor,
-    StreamType,
+    BackendInstance as _, Buffer as _, CommandRecorder as _, Device as _, Kernel as _,
+    Semaphore as _, Stream as _, StreamDescriptor, StreamType,
 };
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use smallvec::{SmallVec, smallvec};
@@ -245,6 +245,8 @@ pub struct InstanceProperties {
 }
 struct Stream<B: hal::Backend> {
     inner: Mutex<Option<B::Stream>>,
+    /// Hal command recorders not currently in use
+    unused_hal_command_recorders: Mutex<Vec<B::CommandRecorder>>,
 }
 struct Device<B: hal::Backend> {
     inner: Mutex<Option<B::Device>>,
@@ -266,8 +268,7 @@ api_type!(Instance, {
     wait_handles: RwLock<Arena<WaitHandleWeak<B>>>,
     /// All created command recorders
     command_recorders: RwLock<Arena<Option<CommandRecorderWeak<B>>>>,
-    /// Hal command recorders not currently in use
-    hal_command_recorders: RwLock<Vec<B::CommandRecorder>>,
+    unused_semaphores: Mutex<Vec<B::Semaphore>>,
     /// User accessible kernel compiler state
     kernel_compiler: Mutex<kernels::GlobalState>,
     /// A weak reference to self
@@ -304,7 +305,8 @@ impl<B: hal::Backend> Instance<B> {
             hal_devices: smallvec![Device {
                 inner: Mutex::new(Some(device)),
                 streams: smallvec![Stream {
-                    inner: Mutex::new(Some(stream))
+                    inner: Mutex::new(Some(stream)),
+                    unused_hal_command_recorders: Mutex::new(Vec::new()),
                 }],
                 properties: device_properties,
             }],
@@ -313,7 +315,7 @@ impl<B: hal::Backend> Instance<B> {
             buffers: RwLock::new(Arena::default()),
             wait_handles: RwLock::new(Arena::default()),
             command_recorders: RwLock::new(Arena::default()),
-            hal_command_recorders: RwLock::new(Vec::new()),
+            unused_semaphores: Mutex::new(Vec::new()),
             kernel_compiler: Mutex::new(kernels::GlobalState::new_from_env().unwrap()),
             self_weak: None,
         });
@@ -410,7 +412,7 @@ impl<B: hal::Backend> Instance<B> {
             id: Index::DANGLING,
             create_info: *desc,
             is_currently_external: false,
-            residency: BufferResidencyRef(Mutex::new(BufferResidency::new(self.clone(), 1))),
+            residency: BufferResidencyRef(RwLock::new(BufferResidency::new(self.clone(), 1))),
             is_alive: true,
         });
         b.inner_mut()?.id = s.buffers.write().insert(Some(b.downgrade()));
@@ -473,7 +475,7 @@ impl<B: hal::Backend> Instance<B> {
                         .inner
                         .as_mut()
                         .unwrap()
-                        .map(instance.device.lock().as_mut().unwrap())
+                        .map(instance.hal_devices[0].inner.lock().as_mut().unwrap())
                         .map_supasim()?
                 };
                 mapped_buffers.push(MappedBuffer {
@@ -511,7 +513,11 @@ impl<B: hal::Backend> Instance<B> {
                             .as_mut()
                             .unwrap()
                             .read(
-                                instance.inner()?.device.lock().as_ref().unwrap(),
+                                instance.inner()?.hal_devices[0]
+                                    .inner
+                                    .lock()
+                                    .as_ref()
+                                    .unwrap(),
                                 b.start,
                                 &mut data,
                             )
@@ -619,12 +625,20 @@ impl<B: hal::Backend> InstanceInner<B> {
                 }
             }
         }
+        for thing in std::mem::take(&mut *self.unused_semaphores.write()) {
+            thing.destroy(self.hal_instance.read().as_ref().unwrap());
+        }
         unsafe {
             let mut instance = self.hal_instance.get_mut().take().unwrap();
             for mut device in std::mem::take(&mut self.hal_devices) {
                 let mut dev = device.inner.get_mut().take().unwrap();
                 for mut stream in device.streams {
-                    stream.inner.get_mut().take().unwrap().destroy(&mut dev);
+                    let st = stream.inner.get_mut().take().unwrap();
+                    for cr in std::mem::take(&mut *stream.unused_hal_command_recorders.lock()) {
+                        cr.destroy(&st);
+                        todo!();
+                    }
+                    st.destroy(&mut dev);
                 }
                 dev.destroy(&mut instance);
             }
@@ -981,7 +995,11 @@ impl<B: hal::Backend> Buffer<B> {
             s.inner
                 .as_mut()
                 .unwrap()
-                .write(instance.device.lock().as_ref().unwrap(), offset, slice)
+                .write(
+                    instance.hal_devices[0].inner.lock().as_ref().unwrap(),
+                    offset,
+                    slice,
+                )
                 .map_supasim()?;
         }
         drop(s);
@@ -1005,7 +1023,11 @@ impl<B: hal::Backend> Buffer<B> {
             s.inner
                 .as_mut()
                 .unwrap()
-                .read(instance.device.lock().as_ref().unwrap(), offset, slice)
+                .read(
+                    instance.hal_devices[0].inner.lock().as_ref().unwrap(),
+                    offset,
+                    slice,
+                )
                 .map_supasim()?;
         }
         drop(s);
@@ -1035,7 +1057,7 @@ impl<B: hal::Backend> Buffer<B> {
                 s.inner
                     .as_mut()
                     .unwrap()
-                    .map(instance.device.lock().as_ref().unwrap())
+                    .map(instance.hal_devices[0].inner.lock().as_ref().unwrap())
                     .map_supasim()?
                     .add(offset as usize)
             };
@@ -1059,7 +1081,11 @@ impl<B: hal::Backend> Buffer<B> {
                 s.inner
                     .as_mut()
                     .unwrap()
-                    .read(instance.device.lock().as_ref().unwrap(), offset, &mut data)
+                    .read(
+                        instance.hal_devices[0].inner.lock().as_ref().unwrap(),
+                        offset,
+                        &mut data,
+                    )
                     .map_supasim()?;
             }
             drop(instance);
@@ -1108,7 +1134,7 @@ impl<B: hal::Backend> BufferInner<B> {
     fn destroy(&mut self, instance: &InstanceInner<B>) {
         instance.buffers.write().remove(self.id);
         unsafe {
-            self.residency.destroy(instance);
+            self.residency.0.write().destroy(instance);
         }
         self.is_alive = false;
     }
@@ -1195,7 +1221,7 @@ impl<B: hal::Backend> Drop for MappedBuffer<'_, B> {
                         .as_mut()
                         .unwrap()
                         .write(
-                            instance.device.lock().as_ref().unwrap(),
+                            instance.hal_devices[0].inner.lock().as_ref().unwrap(),
                             self.in_buffer_offset,
                             &vec,
                         )
@@ -1209,7 +1235,7 @@ impl<B: hal::Backend> Drop for MappedBuffer<'_, B> {
 
 api_type!(WaitHandle, {
     instance: Instance<B>,
-    semaphore: Semaphore<B>,
+    semaphore: Arc<Semaphore<B>>,
     id: Index,
     is_alive: bool,
 },);

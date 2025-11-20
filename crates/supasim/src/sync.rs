@@ -4,9 +4,9 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
-use hal::{CommandRecorder as _, Semaphore as _, Stream};
+use hal::{BackendInstance, CommandRecorder as _, Semaphore as _, Stream};
 use thunderdome::Index;
 use types::SyncMode;
 
@@ -43,6 +43,10 @@ impl<B: hal::Backend> Semaphore<B> {
 }
 impl<B: hal::Backend> Drop for Semaphore<B> {
     fn drop(&mut self) {
+        if self.inner.is_some() {
+            let s = self.instance.inner().unwrap();
+            s.unused_semaphores.lock().push(self.inner.take().unwrap());
+        }
         // TODO: Return the used semaphore to the instance
     }
 }
@@ -69,7 +73,18 @@ pub fn submit_command_recorders<B: hal::Backend>(
     let s = instance.inner()?;
     s.check_destroyed()?;
     let submission_idx;
+    let semaphore;
     {
+        let semaphore_raw = if let Some(s) = s.unused_semaphores.lock().pop() {
+            s
+        } else {
+            s.hal_instance
+                .read()
+                .as_ref()
+                .unwrap()
+                .create_semaphore()
+                .map_supasim()?
+        };
         let mut recorder_locks = Vec::new();
         for r in recorders.iter_mut() {
             r.check_destroyed()?;
@@ -80,7 +95,11 @@ pub fn submit_command_recorders<B: hal::Backend>(
             recorder_inners.push(&mut **r);
         }
 
-        let mut recorder = if let Some(mut r) = s.hal_command_recorders.write().pop() {
+        let mut recorder = if let Some(mut r) = s.hal_devices[0].streams[0]
+            .unused_hal_command_recorders
+            .lock()
+            .pop()
+        {
             unsafe {
                 r.clear(s.hal_devices[0].streams[0].inner.lock().as_ref().unwrap())
                     .map_supasim()?;
@@ -105,6 +124,11 @@ pub fn submit_command_recorders<B: hal::Backend>(
             s.hal_instance_properties.sync_mode == SyncMode::VulkanStyle,
             0,
         )?;
+        semaphore = Arc::new(Semaphore::<B> {
+            inner: Some(semaphore_raw),
+            device_stream_submission: todo!(),
+            instance: instance.clone(),
+        });
         for (buf_id, ranges) in &streams.used_ranges {
             let b = s
                 .buffers
@@ -116,18 +140,12 @@ pub fn submit_command_recorders<B: hal::Backend>(
                 .upgrade()?;
             let _b = b.clone();
             let b_mut = _b.inner()?;
-            for range in ranges {
-                let id = b_mut.slice_tracker.acquire(
-                    &s,
-                    *range,
-                    if b_mut.slice_tracker.mutex.lock().gpu_available {
-                        BufferUser::Gpu(u64::MAX)
-                    } else {
-                        BufferUser::Cross(u64::MAX)
-                    },
-                    false,
-                )?;
-                used_buffer_ranges.push((id, b.clone()))
+            for &range in ranges {
+                let ood_wait =
+                    b_mut
+                        .residency
+                        .add_gpu_use(range.into(), range.needs_mut, semaphore.clone());
+                used_buffer_ranges.push((ood_wait, b.clone()))
             }
             used_buffers.insert(buf_id);
         }
@@ -191,5 +209,6 @@ pub fn submit_command_recorders<B: hal::Backend>(
         instance: instance.clone(),
         id: Index::DANGLING,
         is_alive: true,
+        semaphore: semaphore.clone(),
     }))
 }

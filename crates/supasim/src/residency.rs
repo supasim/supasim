@@ -5,15 +5,15 @@
 END LICENSE */
 
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     sync::Arc,
 };
 
 use hal::{Buffer, Semaphore as _};
-use parking_lot::{Condvar, Mutex};
+use parking_lot::{Condvar, Mutex, RwLock};
 use smallvec::SmallVec;
 
-use crate::{DEVICE_SMALLVEC_SIZE, Instance, InstanceInner, sync::Semaphore};
+use crate::{BufferRange, DEVICE_SMALLVEC_SIZE, Instance, InstanceInner, sync::Semaphore};
 
 struct OutOfDateWait<B: hal::Backend> {
     semaphores: Vec<Arc<Semaphore<B>>>,
@@ -82,6 +82,14 @@ struct BufferAccessRange {
     pub start: u64,
     pub length: u64,
 }
+impl From<BufferRange> for BufferAccessRange {
+    fn from(value: BufferRange) -> Self {
+        Self {
+            start: value.start,
+            length: value.len,
+        }
+    }
+}
 impl BufferAccessRange {
     pub fn join(&self, other: &Self) -> Option<Self> {
         if self.start < (other.start + other.length) && other.start < (self.start + self.length) {
@@ -101,8 +109,9 @@ struct BufferAccessFinish<B: hal::Backend> {
     /// The conditional variable, only used in CPU->CPU synchronization
     condvar: Option<Condvar>,
     is_complete: Mutex<bool>,
-    device_semaphore: Option<Semaphore<B>>,
+    device_semaphore: Option<Arc<Semaphore<B>>>,
     range: BufferAccessRange,
+    id: u64,
 }
 impl<B: hal::Backend> BufferAccessFinish<B> {
     pub fn is_complete_host(&self, instance: &InstanceInner<B>) -> bool {
@@ -141,8 +150,10 @@ pub struct BufferResidency<B: hal::Backend> {
     pub host: DeviceResidencyState<B>,
     /// Alternative to residencystate buffer for host memory
     pub storage: Option<StorageResidencyState<B>>,
+    /// Used to create indices for buffer access finishes
+    pub current_index: u64,
     /// Sorted by range start
-    pub read_accesses: HashSet<Arc<BufferAccessFinish<B>>>,
+    pub read_accesses: HashMap<u64, Arc<BufferAccessFinish<B>>>,
     pub write_accesses: VecDeque<Arc<BufferAccessFinish<B>>>,
 }
 impl<B: hal::Backend> BufferResidency<B> {
@@ -156,7 +167,8 @@ impl<B: hal::Backend> BufferResidency<B> {
             devices,
             host: DeviceResidencyState::default(),
             storage: None,
-            read_accesses: HashSet::new(),
+            current_index: 0,
+            read_accesses: HashMap::new(),
             write_accesses: VecDeque::new(),
         }
     }
@@ -175,20 +187,20 @@ impl<B: hal::Backend> BufferResidency<B> {
         }
     }
 }
-pub struct BufferResidencyRef<B: hal::Backend>(pub Mutex<BufferResidency<B>>);
+pub struct BufferResidencyRef<B: hal::Backend>(pub RwLock<BufferResidency<B>>);
 impl<B: hal::Backend> BufferResidencyRef<B> {
     pub fn add_gpu_use(
         &self,
         range: BufferAccessRange,
         needs_mut: bool,
-        semaphore: Semaphore<B>,
+        semaphore: Arc<Semaphore<B>>,
     ) -> OutOfDateWait<B> {
         todo!()
     }
     pub fn get_cpu_access(
         &self,
         range: BufferAccessRange,
-        needs_mut: bool,
+        is_mut: bool,
     ) -> Arc<BufferAccessFinish<B>> {
         todo!()
     }
@@ -197,5 +209,6 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
         // Signal the condvar
         // Update the out of date things
         // Remove the access remove from list
+        todo!()
     }
 }

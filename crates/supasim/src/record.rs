@@ -4,10 +4,7 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-use std::{
-    collections::{HashMap, hash_map::Entry},
-    ops::Deref,
-};
+use std::collections::{HashMap, hash_map::Entry};
 
 use hal::{Buffer as _, CommandRecorder as _, Device as _, HalBufferSlice, Stream as _};
 use thunderdome::Index;
@@ -431,11 +428,16 @@ pub fn record_command_streams<B: hal::Backend>(
         for res in &resources_a {
             resource_locks.push(res.inner()?);
         }
+        let mut residency_locks = Vec::new();
+        for res in &resource_locks {
+            residency_locks.push(res.residency.0.read());
+        }
         let mut resources = Vec::new();
-        for (i, res) in resource_locks.iter().enumerate() {
+        for (i, res) in residency_locks.iter().enumerate() {
             let range = bg.items[i].1;
+
             resources.push(hal::HalBufferSlice {
-                buffer: res.residency.devices[device_idx].buffer.as_ref().unwrap(),
+                buffer: res.devices[device_idx].buffer.as_ref().unwrap(),
                 offset: range.start,
                 len: range.len,
             });
@@ -535,6 +537,10 @@ pub fn record_command_streams<B: hal::Backend>(
         for buffer_ref in &buffer_refs {
             buffer_locks.push(buffer_ref.inner()?);
         }
+        let mut buffer_res_locks = Vec::new();
+        for buffer_ref in &buffer_locks {
+            buffer_res_locks.push(buffer_ref.residency.0.read());
+        }
         let mut kernel_locks = Vec::new();
         for kernel_ref in &kernel_refs {
             kernel_locks.push(kernel_ref.inner()?);
@@ -544,8 +550,7 @@ pub fn record_command_streams<B: hal::Backend>(
             let mut current_buffer_index = 0;
             let mut current_kernel_index = 0;
             let mut get_buffer = || {
-                let buffer = buffer_locks[current_buffer_index].deref().residency.devices
-                    [device_idx]
+                let buffer = buffer_res_locks[current_buffer_index].devices[device_idx]
                     .buffer
                     .as_ref()
                     .unwrap();
