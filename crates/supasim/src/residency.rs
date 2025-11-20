@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 
 use crate::{BufferRange, DEVICE_SMALLVEC_SIZE, Instance, InstanceInner, sync::Semaphore};
 
-struct OutOfDateWait<B: hal::Backend> {
+pub struct OutOfDateWait<B: hal::Backend> {
     semaphores: Vec<Arc<Semaphore<B>>>,
     other_copy_range: Option<BufferAccessRange>,
 }
@@ -191,20 +191,20 @@ pub struct BufferResidencyRef<B: hal::Backend>(pub RwLock<BufferResidency<B>>);
 impl<B: hal::Backend> BufferResidencyRef<B> {
     pub fn add_gpu_use(
         &self,
-        range: BufferAccessRange,
-        needs_mut: bool,
-        semaphore: Arc<Semaphore<B>>,
+        _range: BufferAccessRange,
+        _needs_mut: bool,
+        _semaphore: Arc<Semaphore<B>>,
     ) -> OutOfDateWait<B> {
         todo!()
     }
     pub fn get_cpu_access(
         &self,
-        range: BufferAccessRange,
-        is_mut: bool,
+        _range: BufferAccessRange,
+        _is_mut: bool,
     ) -> Arc<BufferAccessFinish<B>> {
         todo!()
     }
-    pub fn release_cpu_access(&self, finish: Arc<BufferAccessFinish<B>>, is_mut: bool) {
+    pub fn release_cpu_access(&self, _finish: Arc<BufferAccessFinish<B>>, _is_mut: bool) {
         // Signal the finish in mutex
         // Signal the condvar
         // Update the out of date things

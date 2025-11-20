@@ -12,13 +12,14 @@ use types::SyncMode;
 
 use crate::{
     Instance, MapSupasimError, SupaSimError, SupaSimResult, WaitHandle, WaitHandleInner, record,
+    sync_thread::GpuSubmissionInfo,
 };
 
 /// A semaphore with info about its device that returns to a pool on drop
 pub struct Semaphore<B: hal::Backend> {
     pub inner: Option<B::Semaphore>,
     /// The device, stream and submission that will signal it. If None, then the host will signal.
-    pub device_stream_submission: Option<(usize, usize, usize)>,
+    pub device_stream_submission: Option<(u16, u16, u64)>,
     instance: Instance<B>,
 }
 impl<B: hal::Backend> Semaphore<B> {
@@ -78,15 +79,17 @@ pub fn submit_command_recorders<B: hal::Backend>(
         let semaphore_raw = if let Some(s) = s.unused_semaphores.lock().pop() {
             s
         } else {
-            s.hal_instance
-                .read()
-                .as_ref()
-                .unwrap()
-                .create_semaphore()
-                .map_supasim()?
+            unsafe {
+                s.hal_instance
+                    .read()
+                    .as_ref()
+                    .unwrap()
+                    .create_semaphore()
+                    .map_supasim()?
+            }
         };
         let mut recorder_locks = Vec::new();
-        for r in recorders.iter_mut() {
+        for r in recorders.iter() {
             r.check_destroyed()?;
             recorder_locks.push(r.inner_mut()?);
         }
@@ -124,9 +127,12 @@ pub fn submit_command_recorders<B: hal::Backend>(
             s.hal_instance_properties.sync_mode == SyncMode::VulkanStyle,
             0,
         )?;
+        let mut lock = s.hal_devices[0].streams[0].stream_handle.write();
+        submission_idx = lock.current_submitted_count;
+        lock.current_submitted_count += 1;
         semaphore = Arc::new(Semaphore::<B> {
             inner: Some(semaphore_raw),
-            device_stream_submission: todo!(),
+            device_stream_submission: Some((0, 0, submission_idx)),
             instance: instance.clone(),
         });
         for (buf_id, ranges) in &streams.used_ranges {
@@ -171,19 +177,20 @@ pub fn submit_command_recorders<B: hal::Backend>(
             })
             .collect();
         let kernels = streams.resources.kernels.clone();
-        submission_idx = s.sync_thread().submit_gpu(GpuSubmissionInfo {
-            command_recorders: vec![recorder],
+        lock.submit(GpuSubmissionInfo {
+            index: submission_idx,
+            command_recorder: recorder,
             bind_groups,
-            used_buffer_ranges: used_buffer_ranges.clone(),
+            used_buffer_ranges,
             used_buffers,
             used_resources: streams.resources,
         })?;
 
-        for kernel in &kernels {
-            kernel.inner_mut()?.last_used = submission_idx;
+        for _kernel in &kernels {
+            // Update the kernel's last usage
         }
         for (buf_id, _) in streams.used_ranges {
-            let b = s
+            let _b = s
                 .buffers
                 .read()
                 .get(buf_id)
@@ -191,16 +198,9 @@ pub fn submit_command_recorders<B: hal::Backend>(
                 .as_ref()
                 .unwrap()
                 .upgrade()?;
-            let mut b_mut = b.inner_mut()?;
-            b_mut.last_used = submission_idx;
-        }
-        for (id, b) in used_buffer_ranges {
-            b.inner()?
-                .slice_tracker
-                .update_user_submission(id, submission_idx, &s);
+            // Update the buffer's last usage
         }
     }
-    drop(s);
     for recorder in recorders {
         recorder.inner_mut()?.destroy(&s);
     }

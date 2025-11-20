@@ -22,6 +22,7 @@ mod tests;
 mod record;
 mod residency;
 mod sync;
+mod sync_thread;
 
 use anyhow::anyhow;
 use hal::{
@@ -49,6 +50,7 @@ pub use types::{
 
 use crate::residency::{BufferResidency, BufferResidencyRef};
 use crate::sync::Semaphore;
+use crate::sync_thread::StreamThreadHandle;
 
 pub(crate) const DEVICE_SMALLVEC_SIZE: usize = 4;
 pub(crate) const STREAM_SMALLVEC_SIZE: usize = 16;
@@ -247,6 +249,7 @@ struct Stream<B: hal::Backend> {
     inner: Mutex<Option<B::Stream>>,
     /// Hal command recorders not currently in use
     unused_hal_command_recorders: Mutex<Vec<B::CommandRecorder>>,
+    stream_handle: RwLock<StreamThreadHandle<B>>,
 }
 struct Device<B: hal::Backend> {
     inner: Mutex<Option<B::Device>>,
