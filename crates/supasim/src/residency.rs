@@ -4,13 +4,16 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-use std::{collections::VecDeque, sync::Arc};
+use std::{
+    collections::{HashSet, VecDeque},
+    sync::Arc,
+};
 
 use hal::{Buffer, Semaphore as _};
 use parking_lot::{Condvar, Mutex};
 use smallvec::SmallVec;
 
-use crate::{DEVICE_SMALLVEC_SIZE, InstanceInner, sync::Semaphore};
+use crate::{DEVICE_SMALLVEC_SIZE, Instance, InstanceInner, sync::Semaphore};
 
 struct OutOfDateWait<B: hal::Backend> {
     semaphores: Vec<Arc<Semaphore<B>>>,
@@ -38,9 +41,11 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
     pub fn update_range_delayed(&mut self, _finish: BufferAccessFinish<B>) {
         todo!()
     }
+    /// Returns what needs to be waited for and what needs to be copied
     pub fn get_needed_waits(&mut self, _range: BufferAccessRange) -> OutOfDateWait<B> {
         todo!()
     }
+    /// Applies updates from copies that have completed
     pub fn check_all_current_copies(&mut self, instance: &InstanceInner<B>) {
         for i in (0..self.current_copies.len()).rev() {
             if self.current_copies[i].is_complete_host(instance) {
@@ -129,6 +134,7 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
 }
 
 pub struct BufferResidency<B: hal::Backend> {
+    pub instance: Instance<B>,
     /// Residency state for each device
     pub devices: SmallVec<[DeviceResidencyState<B>; DEVICE_SMALLVEC_SIZE]>,
     /// Residency state for the host
@@ -136,20 +142,21 @@ pub struct BufferResidency<B: hal::Backend> {
     /// Alternative to residencystate buffer for host memory
     pub storage: Option<StorageResidencyState<B>>,
     /// Sorted by range start
-    pub read_accesses: Vec<Arc<BufferAccessFinish<B>>>,
+    pub read_accesses: HashSet<Arc<BufferAccessFinish<B>>>,
     pub write_accesses: VecDeque<Arc<BufferAccessFinish<B>>>,
 }
 impl<B: hal::Backend> BufferResidency<B> {
-    pub fn new(num_devices: u32) -> Self {
+    pub fn new(instance: Instance<B>, num_devices: u32) -> Self {
         let mut devices = SmallVec::with_capacity(num_devices as usize);
         for _ in 0..num_devices {
             devices.push(DeviceResidencyState::default());
         }
         Self {
+            instance,
             devices,
             host: DeviceResidencyState::default(),
             storage: None,
-            read_accesses: Vec::new(),
+            read_accesses: HashSet::new(),
             write_accesses: VecDeque::new(),
         }
     }
@@ -166,5 +173,29 @@ impl<B: hal::Backend> BufferResidency<B> {
                 }
             }
         }
+    }
+}
+pub struct BufferResidencyRef<B: hal::Backend>(pub Mutex<BufferResidency<B>>);
+impl<B: hal::Backend> BufferResidencyRef<B> {
+    pub fn add_gpu_use(
+        &self,
+        range: BufferAccessRange,
+        needs_mut: bool,
+        semaphore: Semaphore<B>,
+    ) -> OutOfDateWait<B> {
+        todo!()
+    }
+    pub fn get_cpu_access(
+        &self,
+        range: BufferAccessRange,
+        needs_mut: bool,
+    ) -> Arc<BufferAccessFinish<B>> {
+        todo!()
+    }
+    pub fn release_cpu_access(&self, finish: Arc<BufferAccessFinish<B>>, is_mut: bool) {
+        // Signal the finish in mutex
+        // Signal the condvar
+        // Update the out of date things
+        // Remove the access remove from list
     }
 }

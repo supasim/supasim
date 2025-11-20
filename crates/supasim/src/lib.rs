@@ -47,7 +47,7 @@ pub use types::{
     KernelReflectionInfo, KernelTarget, MetalVersion, ShaderModel, SpirvVersion,
 };
 
-use crate::residency::BufferResidency;
+use crate::residency::{BufferResidency, BufferResidencyRef};
 use crate::sync::Semaphore;
 
 pub(crate) const DEVICE_SMALLVEC_SIZE: usize = 4;
@@ -410,7 +410,7 @@ impl<B: hal::Backend> Instance<B> {
             id: Index::DANGLING,
             create_info: *desc,
             is_currently_external: false,
-            residency: BufferResidency::new(1),
+            residency: BufferResidencyRef(Mutex::new(BufferResidency::new(self.clone(), 1))),
             is_alive: true,
         });
         b.inner_mut()?.id = s.buffers.write().insert(Some(b.downgrade()));
@@ -959,7 +959,7 @@ api_type!(Buffer, {
     instance: Instance<B>,
     id: Index,
     create_info: BufferDescriptor,
-    residency: BufferResidency<B>,
+    residency: BufferResidencyRef<B>,
     is_currently_external: bool,
     is_alive: bool,
 },);
