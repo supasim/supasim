@@ -50,7 +50,7 @@ pub use types::{
 
 use crate::residency::{BufferResidency, BufferResidencyRef};
 use crate::sync::Semaphore;
-use crate::sync_thread::StreamThreadHandle;
+use crate::sync_thread::{StreamThreadHandle, StreamThreadMessage, create_sync_thread};
 
 pub(crate) const DEVICE_SMALLVEC_SIZE: usize = 4;
 pub(crate) const STREAM_SMALLVEC_SIZE: usize = 16;
@@ -249,7 +249,9 @@ struct Stream<B: hal::Backend> {
     inner: Mutex<Option<B::Stream>>,
     /// Hal command recorders not currently in use
     unused_hal_command_recorders: Mutex<Vec<B::CommandRecorder>>,
-    stream_handle: RwLock<StreamThreadHandle<B>>,
+    /// Is an option because this must be created after the instance and so
+    /// starts uninitialized.
+    stream_handle: Option<RwLock<StreamThreadHandle<B>>>,
 }
 struct Device<B: hal::Backend> {
     inner: Mutex<Option<B::Device>>,
@@ -310,6 +312,7 @@ impl<B: hal::Backend> Instance<B> {
                 streams: smallvec![Stream {
                     inner: Mutex::new(Some(stream)),
                     unused_hal_command_recorders: Mutex::new(Vec::new()),
+                    stream_handle: None,
                 }],
                 properties: device_properties,
             }],
@@ -326,6 +329,8 @@ impl<B: hal::Backend> Instance<B> {
         {
             let mut inner_mut = s.inner_mut().unwrap();
             inner_mut.self_weak = Some(s.downgrade());
+            inner_mut.hal_devices[0].streams[0].stream_handle =
+                Some(RwLock::new(create_sync_thread(s.clone(), 0, 0)));
         }
         s
     }
@@ -584,17 +589,20 @@ impl<B: hal::Backend> Instance<B> {
 }
 impl<B: hal::Backend> InstanceInner<B> {
     fn destroy(&mut self) {
-        // We unsafely pass a mutable reference to the sync thread, knowing that this thread will "join" it,
-        // meaning that at no point is the mutable reference used by both at the same time.
-        let mut sync_thread = self.sync_thread.take().unwrap();
-        let _ = sync_thread.wait_for_idle();
-        let _ = sync_thread
-            .sender
-            .get_mut()
-            .send(sync::SendSyncThreadEvent::WaitFinishAndShutdown);
-        let _ = sync_thread.thread.join();
-        if sync_thread.shared_thread.0.lock().error.is_some() {
-            println!("Instance attempting to shutdown gracefully despite sync thread error");
+        // Tell all streams to shutdown
+        for stream in self.hal_devices.iter().flat_map(|a| &a.streams) {
+            stream
+                .stream_handle
+                .as_ref()
+                .unwrap()
+                .write()
+                .sender
+                .send(StreamThreadMessage::ShutDown);
+        }
+        // Wait for all streams to shutdown
+        for stream in self.hal_devices.iter_mut().flat_map(|a| &mut a.streams) {
+            let handle = stream.stream_handle.take().unwrap().into_inner();
+            handle.thread.join().unwrap();
         }
         for (_, cr) in std::mem::take(&mut *self.command_recorders.write()) {
             if let Some(cr) = cr
@@ -628,8 +636,10 @@ impl<B: hal::Backend> InstanceInner<B> {
                 }
             }
         }
-        for thing in std::mem::take(&mut *self.unused_semaphores.write()) {
-            thing.destroy(self.hal_instance.read().as_ref().unwrap());
+        for thing in std::mem::take(&mut *self.unused_semaphores.lock()) {
+            unsafe {
+                thing.destroy(self.hal_instance.read().as_ref().unwrap());
+            }
         }
         unsafe {
             let mut instance = self.hal_instance.get_mut().take().unwrap();
@@ -1259,17 +1269,10 @@ impl<B: hal::Backend> Drop for WaitHandleInner<B> {
 }
 impl<B: hal::Backend> WaitHandle<B> {
     pub fn wait(&self) -> SupaSimResult<B, ()> {
-        let s = self.inner()?;
-        let _i = s.instance.clone();
-        let instance = _i.inner()?;
-        instance.sync_thread().wait_for(s.index, true)?;
-        Ok(())
+        self.inner()?.semaphore.wait()
     }
     pub fn is_complete(&self) -> SupaSimResult<B, bool> {
-        let s = self.inner()?;
-        let _i = s.instance.clone();
-        let instance = _i.inner()?;
-        instance.sync_thread().wait_for(s.index, false)
+        self.inner()?.semaphore.is_signalled()
     }
 }
 #[allow(clippy::type_complexity)]

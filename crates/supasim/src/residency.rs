@@ -6,6 +6,7 @@ END LICENSE */
 
 use std::{
     collections::{HashMap, VecDeque},
+    fs::File,
     sync::Arc,
 };
 
@@ -74,7 +75,9 @@ impl<B: hal::Backend> Default for DeviceResidencyState<B> {
 }
 /// Stored in the file system
 struct StorageResidencyState<B: hal::Backend> {
-    file_name: String,
+    /// The file used to store the buffer's contents
+    file: File,
+    /// The tracker for out of date ranges for this copy of the data
     ood_tracker: OutOfDateTracker<B>,
 }
 /// Buffer range without read/write information
@@ -108,9 +111,17 @@ impl BufferAccessRange {
 struct BufferAccessFinish<B: hal::Backend> {
     /// The conditional variable, only used in CPU->CPU synchronization
     condvar: Option<Condvar>,
+    /// This is set by the CPU before ringing the condvar. This is set when
+    /// the work is first observed to be done, including for GPU work, to
+    /// avoid unnecessary underlying semaphore operations.
     is_complete: Mutex<bool>,
+    /// Always some for GPU work. CPU work will not set this itself, but
+    /// GPU work may come later and set this such that the CPU will signal
+    /// it when finished.
     device_semaphore: Option<Arc<Semaphore<B>>>,
+    /// The range that is being accessed
     range: BufferAccessRange,
+    /// The ID used to look this up in a more efficient hashmap
     id: u64,
 }
 impl<B: hal::Backend> BufferAccessFinish<B> {
@@ -154,6 +165,8 @@ pub struct BufferResidency<B: hal::Backend> {
     pub current_index: u64,
     /// Sorted by range start
     pub read_accesses: HashMap<u64, Arc<BufferAccessFinish<B>>>,
+    /// Sorted by order of submission. New accesses should start from the back to find the last
+    /// conflicting accesses and wait for those.
     pub write_accesses: VecDeque<Arc<BufferAccessFinish<B>>>,
 }
 impl<B: hal::Backend> BufferResidency<B> {

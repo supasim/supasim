@@ -17,8 +17,11 @@ use crate::{
 
 /// A semaphore with info about its device that returns to a pool on drop
 pub struct Semaphore<B: hal::Backend> {
+    /// This will be Some until the semaphore is destroyed.
     pub inner: Option<B::Semaphore>,
     /// The device, stream and submission that will signal it. If None, then the host will signal.
+    ///
+    /// TODO: evaluate if this is actually needed
     pub device_stream_submission: Option<(u16, u16, u64)>,
     instance: Instance<B>,
 }
@@ -48,13 +51,16 @@ impl<B: hal::Backend> Drop for Semaphore<B> {
             let s = self.instance.inner().unwrap();
             s.unused_semaphores.lock().push(self.inner.take().unwrap());
         }
-        // TODO: Return the used semaphore to the instance
     }
 }
 
+/// Resources used in a GPU submission that might need to be
+/// destroyed or something when the submission completes.
 pub struct SubmissionResources<B: hal::Backend> {
     pub kernels: Vec<crate::Kernel<B>>,
     pub buffers: Vec<crate::Buffer<B>>,
+    /// A buffer that is purely used for sugary data uploading, and is definitionally unused
+    /// anywhere else. Can always be destroyed immediately upon submission completion.
     pub temp_copy_buffer: Option<B::Buffer>,
 }
 impl<B: hal::Backend> Default for SubmissionResources<B> {
@@ -127,7 +133,11 @@ pub fn submit_command_recorders<B: hal::Backend>(
             s.hal_instance_properties.sync_mode == SyncMode::VulkanStyle,
             0,
         )?;
-        let mut lock = s.hal_devices[0].streams[0].stream_handle.write();
+        let mut lock = s.hal_devices[0].streams[0]
+            .stream_handle
+            .as_ref()
+            .unwrap()
+            .write();
         submission_idx = lock.current_submitted_count;
         lock.current_submitted_count += 1;
         semaphore = Arc::new(Semaphore::<B> {
@@ -163,26 +173,12 @@ pub fn submit_command_recorders<B: hal::Backend>(
             0,
             0,
         )?;
-        let used_buffers: Vec<_> = used_buffers
-            .iter()
-            .map(|a| {
-                s.buffers
-                    .read()
-                    .get(**a)
-                    .unwrap()
-                    .as_ref()
-                    .unwrap()
-                    .upgrade()
-                    .unwrap()
-            })
-            .collect();
         let kernels = streams.resources.kernels.clone();
         lock.submit(GpuSubmissionInfo {
             index: submission_idx,
             command_recorder: recorder,
             bind_groups,
             used_buffer_ranges,
-            used_buffers,
             used_resources: streams.resources,
         })?;
 

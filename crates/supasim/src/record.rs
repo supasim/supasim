@@ -4,6 +4,9 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
+//! Easily the least pleasant part of the codebase. All good, it just needs to do the bare minimum
+//! OK job. Should be revisited at some point.
+
 use std::collections::{HashMap, hash_map::Entry};
 
 use hal::{Buffer as _, CommandRecorder as _, Device as _, HalBufferSlice, Stream as _};
