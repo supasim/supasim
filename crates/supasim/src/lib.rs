@@ -316,7 +316,7 @@ impl<B: hal::Backend> Instance<B> {
     }
 
     pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
-        // This is about exlusive access not mutable access
+        // This is about exclusive access not mutable access
         let inner_mut = self.inner_mut()?;
         for stream in inner_mut.hal_devices.iter().flat_map(|a| &a.streams) {
             let handle = stream.stream_handle.as_ref().unwrap().read();
@@ -337,7 +337,7 @@ impl<B: hal::Backend> Instance<B> {
     pub fn clear_cached_resources(&self) -> SupaSimResult<B, ()> {
         // Not fully implemented
 
-        // This is about exlusive access not mutable access
+        // This is about exclusive access not mutable access
         let mut _s = self.inner_mut()?;
         let s = &mut *_s;
         s.check_destroyed()?;
