@@ -47,7 +47,7 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(
         recorder
             .copy_buffer(&gpu_buffer, &download_buffer, 0, 0, 16)
             .unwrap();
-        instance.submit_commands(&mut [recorder]).unwrap();
+        instance.submit_commands(&[recorder]).unwrap();
         instance.wait_for_idle(1.0).unwrap();
         assert_eq!(
             download_buffer

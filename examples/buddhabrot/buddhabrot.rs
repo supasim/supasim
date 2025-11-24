@@ -359,10 +359,9 @@ impl<B: hal::Backend> AppState<B> {
                     * workgroup_dim as u64
                     * workgroup_dim as u64
                     * workgroup_dim as u64,
-                buffer_type: supasim::BufferType::Gpu,
                 contents_align: 8,
                 priority: 1.0,
-                can_export: false,
+                preferred_device_index: None,
             })
             .unwrap();
 
@@ -372,10 +371,9 @@ impl<B: hal::Backend> AppState<B> {
         let supasim_width_height_buffer = instance
             .create_buffer(&supasim::BufferDescriptor {
                 size: size_of::<BuddhabrotInputOptions>() as u64,
-                buffer_type: supasim::BufferType::Gpu,
                 contents_align: 4,
                 priority: 1.0,
-                can_export: false,
+                preferred_device_index: None,
             })
             .unwrap();
 
@@ -423,10 +421,9 @@ impl<B: hal::Backend> AppState<B> {
         let supasim_buffer = instance
             .create_buffer(&supasim::BufferDescriptor {
                 size,
-                buffer_type: supasim::BufferType::Gpu,
                 contents_align: 4,
                 priority: 1.0,
-                can_export: true,
+                preferred_device_index: None,
             })
             .unwrap();
         let device_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -517,28 +514,10 @@ impl<B: hal::Backend> AppState<B> {
                 .dispatch_kernel(&self.finalize_kernel, &buffers, workgroup_dims)
                 .unwrap();
         }
-        let download_buffer = self
-            .instance
-            .create_buffer(&supasim::BufferDescriptor {
-                size: self.config.width as u64 * self.config.height as u64 * 4,
-                buffer_type: supasim::BufferType::Download,
-                contents_align: 4,
-                priority: 1.0,
-                can_export: false,
-            })
-            .unwrap();
-        recorder
-            .copy_buffer(
-                &self.supasim_buffer,
-                &download_buffer,
-                0,
-                0,
-                self.config.width as u64 * self.config.height as u64 * 4,
-            )
-            .unwrap();
-        self.instance.submit_commands(&mut [recorder]).unwrap();
+        self.instance.submit_commands(&[recorder]).unwrap();
         {
-            let access = download_buffer
+            let access = self
+                .supasim_buffer
                 .access(
                     0,
                     self.config.width as u64 * self.config.height as u64 * 4,

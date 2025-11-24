@@ -64,30 +64,27 @@ impl<B: hal::Backend> AppState<B> {
             .instance
             .create_buffer(&BufferDescriptor {
                 size: global_state_size,
-                buffer_type: supasim::BufferType::Gpu,
                 contents_align: 8,
                 priority: 0.0,
-                can_export: false,
+                preferred_device_index: None,
             })
             .unwrap();
         let unsolved_buffer = self
             .instance
             .create_buffer(&BufferDescriptor {
                 size: UNSOLVED_BUFFER_SIZE as u64 * size_of::<UnsolvedElement>() as u64,
-                buffer_type: supasim::BufferType::Gpu,
                 contents_align: 8,
                 priority: 0.0,
-                can_export: false,
+                preferred_device_index: None,
             })
             .unwrap();
         let download_buffers: Vec<_> = std::iter::repeat_with(|| {
             self.instance
                 .create_buffer(&BufferDescriptor {
                     size: global_state_size,
-                    buffer_type: supasim::BufferType::Gpu,
                     contents_align: 8,
                     priority: 0.0,
-                    can_export: false,
+                    preferred_device_index: None,
                 })
                 .unwrap()
         })
@@ -121,9 +118,7 @@ impl<B: hal::Backend> AppState<B> {
                 bytemuck::bytes_of(&initial_global_data),
             )
             .unwrap();
-        self.instance
-            .submit_commands(&mut [setup_recorder])
-            .unwrap();
+        self.instance.submit_commands(&[setup_recorder]).unwrap();
 
         let mut current_iteration = 0;
 
@@ -164,7 +159,7 @@ impl<B: hal::Backend> AppState<B> {
                 )
                 .unwrap();
             println!("A");
-            self.instance.submit_commands(&mut [recorder]).unwrap();
+            self.instance.submit_commands(&[recorder]).unwrap();
             println!("B");
 
             current_iteration += 1;

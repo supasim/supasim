@@ -129,7 +129,7 @@ pub fn submit_command_recorders<B: hal::Backend>(
         let mut used_buffer_ranges = Vec::new();
         let streams = record::assemble_streams(
             &mut recorder_inners,
-            &instance,
+            instance,
             s.hal_instance_properties.sync_mode == SyncMode::VulkanStyle,
             0,
         )?;

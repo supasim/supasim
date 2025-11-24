@@ -98,7 +98,7 @@ pub fn add_numbers<Backend: hal::Backend>(hal: hal::InstanceDescriptor<Backend>)
     recorder
         .copy_buffer(&buffer3, &download_buffer, 0, 0, 16)
         .unwrap();
-    instance.submit_commands(&mut [recorder]).unwrap();
+    instance.submit_commands(&[recorder]).unwrap();
 
     // Check the result from the download buffer
     assert_eq!(

@@ -26,8 +26,8 @@ mod sync_thread;
 
 use anyhow::anyhow;
 use hal::{
-    BackendInstance as _, Buffer as _, CommandRecorder as _, Device as _, Kernel as _,
-    Semaphore as _, Stream as _, StreamDescriptor, StreamType,
+    BackendInstance as _, CommandRecorder as _, Device as _, Kernel as _, Semaphore as _,
+    Stream as _, StreamDescriptor, StreamType,
 };
 use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use smallvec::{SmallVec, smallvec};
@@ -462,106 +462,10 @@ impl<B: hal::Backend> Instance<B> {
     #[allow(clippy::type_complexity)]
     pub fn access_buffers(
         &self,
-        closure: UserBufferAccessClosure<B>,
-        buffers: &[&BufferSlice<B>],
+        _closure: UserBufferAccessClosure<B>,
+        _buffers: &[&BufferSlice<B>],
     ) -> SupaSimResult<B, ()> {
-        let properties = self.inner()?.hal_instance_properties;
-        let mut mapped_buffers = Vec::with_capacity(buffers.len());
-        let mut ids = Vec::new();
-        for b in buffers {
-            b.validate()?;
-            ids.push(b.acquire(BufferUser::Cpu, false)?.id);
-        }
-        if properties.map_buffers {
-            let instance = self.inner()?;
-            instance.check_destroyed()?;
-            #[allow(clippy::never_loop)]
-            for (i, b) in buffers.iter().enumerate() {
-                let mut buffer_inner = b.buffer.inner_mut()?;
-                let mapping = unsafe {
-                    buffer_inner
-                        .inner
-                        .as_mut()
-                        .unwrap()
-                        .map(instance.hal_devices[0].inner.lock().as_mut().unwrap())
-                        .map_supasim()?
-                };
-                mapped_buffers.push(MappedBuffer {
-                    instance: self.clone(),
-                    inner: unsafe { mapping.add(b.start as usize) },
-                    len: b.len,
-                    buffer_align: buffer_inner.create_info.contents_align,
-                    has_mut: b.needs_mut,
-                    was_used_mut: false,
-                    in_buffer_offset: b.start,
-                    buffer: b.buffer.clone(),
-                    vec_capacity: None,
-                    user_id: ids[i],
-                    _p: Default::default(),
-                });
-            }
-            drop(instance);
-            // Memory issues if we don't unmap I guess
-            let error = closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e));
-            drop(mapped_buffers);
-            error?;
-        } else {
-            let mut buffer_contents = Vec::new();
-            for b in buffers {
-                let mut buffer = b.buffer.inner_mut()?;
-                let instance = buffer.instance.clone();
-                let mut data;
-                #[allow(clippy::uninit_vec)]
-                {
-                    data = Vec::with_capacity(b.len as usize);
-                    unsafe {
-                        data.set_len(b.len as usize);
-                        buffer
-                            .inner
-                            .as_mut()
-                            .unwrap()
-                            .read(
-                                instance.inner()?.hal_devices[0]
-                                    .inner
-                                    .lock()
-                                    .as_ref()
-                                    .unwrap(),
-                                b.start,
-                                &mut data,
-                            )
-                            .map_supasim()?;
-                    };
-                };
-                buffer_contents.push(data);
-            }
-            for (i, a) in buffer_contents.iter_mut().enumerate() {
-                let b = &buffers[i];
-                let buffer_inner = b.buffer.inner()?;
-                let mapped = MappedBuffer {
-                    instance: self.clone(),
-                    inner: a.as_mut_ptr(),
-                    len: b.len,
-                    buffer_align: buffer_inner.create_info.contents_align,
-                    has_mut: b.needs_mut,
-                    was_used_mut: false,
-                    in_buffer_offset: b.start,
-                    buffer: b.buffer.clone(),
-                    vec_capacity: Some(a.capacity()),
-                    user_id: ids[i],
-                    _p: Default::default(),
-                };
-                mapped_buffers.push(mapped);
-            }
-            // Memory issues if we don't unmap I guess
-            let error = closure(&mut mapped_buffers).map_err(|e| SupaSimError::UserClosure(e));
-            for b in buffer_contents {
-                // Buffer ownership has been taken by the `MappedBuffer` that frees when its done
-                std::mem::forget(b);
-            }
-            drop(mapped_buffers);
-            error?;
-        }
-        Ok(())
+        todo!()
     }
     /// # Safety
     /// Importing memory is inherently unsafe. You must manually use external semaphores and memory ownership transfers to synchronize.
@@ -597,7 +501,8 @@ impl<B: hal::Backend> InstanceInner<B> {
                 .unwrap()
                 .write()
                 .sender
-                .send(StreamThreadMessage::ShutDown);
+                .send(StreamThreadMessage::ShutDown)
+                .unwrap();
         }
         // Wait for all streams to shutdown
         for stream in self.hal_devices.iter_mut().flat_map(|a| &mut a.streams) {
@@ -607,38 +512,38 @@ impl<B: hal::Backend> InstanceInner<B> {
         for (_, cr) in std::mem::take(&mut *self.command_recorders.write()) {
             if let Some(cr) = cr
                 && let Ok(cr) = cr.upgrade()
+                && let Ok(mut cr2) = cr.inner_mut()
             {
-                if let Ok(mut cr2) = cr.inner_mut() {
-                    cr2.destroy(self);
-                }
+                cr2.destroy(self);
             }
         }
         for (_, wh) in std::mem::take(&mut *self.wait_handles.write()) {
-            if let Ok(wh) = wh.upgrade() {
-                if let Ok(mut wh2) = wh.inner_mut() {
-                    wh2.destroy(self);
-                }
+            if let Ok(wh) = wh.upgrade()
+                && let Ok(mut wh2) = wh.inner_mut()
+            {
+                wh2.destroy(self);
             }
         }
         for (_, b) in std::mem::take(&mut *self.buffers.write()) {
             if let Some(b) = b
                 && let Ok(b) = b.upgrade()
+                && let Ok(mut b2) = b.inner_mut()
             {
-                if let Ok(mut b2) = b.inner_mut() {
-                    b2.destroy(self);
-                }
+                b2.destroy(self);
             }
         }
         for (_, k) in std::mem::take(&mut *self.kernels.write()) {
-            if let Ok(k) = k.upgrade() {
-                if let Ok(mut k2) = k.inner_mut() {
-                    k2.destroy(self);
-                }
+            if let Ok(k) = k.upgrade()
+                && let Ok(mut k2) = k.inner_mut()
+            {
+                k2.destroy(self);
             }
         }
         for thing in std::mem::take(&mut *self.unused_semaphores.lock()) {
             unsafe {
-                thing.destroy(self.hal_instance.read().as_ref().unwrap());
+                thing
+                    .destroy(self.hal_instance.read().as_ref().unwrap())
+                    .unwrap();
             }
         }
         unsafe {
@@ -648,12 +553,12 @@ impl<B: hal::Backend> InstanceInner<B> {
                 for mut stream in device.streams {
                     let st = stream.inner.get_mut().take().unwrap();
                     for cr in std::mem::take(&mut *stream.unused_hal_command_recorders.lock()) {
-                        cr.destroy(&st);
+                        cr.destroy(&st).unwrap();
                         todo!();
                     }
-                    st.destroy(&mut dev);
+                    st.destroy(&mut dev).unwrap();
                 }
-                dev.destroy(&mut instance);
+                dev.destroy(&mut instance).unwrap();
             }
             instance.destroy().unwrap();
         }
@@ -681,7 +586,10 @@ impl<B: hal::Backend> KernelInner<B> {
         instance.kernels.write().remove(self.id).unwrap();
         if let Some(inner) = std::mem::take(&mut self.inner) {
             unsafe {
-                inner.destroy(instance.hal_instance.read().as_ref().unwrap());
+                MapSupasimError::<(), B>::map_supasim(
+                    inner.destroy(instance.hal_instance.read().as_ref().unwrap()),
+                )
+                .unwrap();
             }
         }
     }
@@ -724,7 +632,7 @@ struct SubmittedCommandRecorder<B: hal::Backend> {
     buffers_to_destroy: Vec<B::Buffer>,
     kernels_to_destroy: Vec<Index>,
     bind_groups: Vec<(B::BindGroup, Index)>,
-    used_buffer_ranges: Vec<(BufferUserId, BufferWeak<B>)>,
+    // used_buffer_ranges: Vec<(BufferUserId, BufferWeak<B>)>,
     used_buffers: Vec<BufferWeak<B>>,
 }
 api_type!(CommandRecorder, {
@@ -991,133 +899,19 @@ api_type!(Buffer, {
     is_alive: bool,
 },);
 impl<B: hal::Backend> Buffer<B> {
-    pub fn write<T: bytemuck::Pod>(&self, offset: u64, data: &[T]) -> SupaSimResult<B, ()> {
-        let buffer_slice = BufferSlice {
-            buffer: self.clone(),
-            start: offset,
-            len: data.len() as u64,
-            needs_mut: true,
-        };
-        buffer_slice.validate_with_align(size_of::<T>() as u64)?;
-        let id = buffer_slice.acquire(BufferUser::Cpu, false)?.id;
-        let mut s = self.inner_mut()?;
-        let _instance = s.instance.clone();
-        let instance = _instance.inner()?;
-        let slice = bytemuck::cast_slice::<T, u8>(data);
-        unsafe {
-            s.inner
-                .as_mut()
-                .unwrap()
-                .write(
-                    instance.hal_devices[0].inner.lock().as_ref().unwrap(),
-                    offset,
-                    slice,
-                )
-                .map_supasim()?;
-        }
-        drop(s);
-        buffer_slice.release(id)?;
-        Ok(())
+    pub fn write<T: bytemuck::Pod>(&self, _offset: u64, _data: &[T]) -> SupaSimResult<B, ()> {
+        todo!()
     }
-    pub fn read<T: bytemuck::Pod>(&self, offset: u64, out: &mut [T]) -> SupaSimResult<B, ()> {
-        let slice = BufferSlice {
-            buffer: self.clone(),
-            start: offset,
-            len: out.len() as u64,
-            needs_mut: false,
-        };
-        slice.validate_with_align(size_of::<T>() as u64)?;
-        let id = slice.acquire(BufferUser::Cpu, false)?;
-        let mut s = self.inner_mut()?;
-        let _instance = s.instance.clone();
-        let instance = _instance.inner()?;
-        let slice = bytemuck::cast_slice_mut::<T, u8>(out);
-        unsafe {
-            s.inner
-                .as_mut()
-                .unwrap()
-                .read(
-                    instance.hal_devices[0].inner.lock().as_ref().unwrap(),
-                    offset,
-                    slice,
-                )
-                .map_supasim()?;
-        }
-        drop(s);
-        self.inner()?.slice_tracker.release(id);
-        Ok(())
+    pub fn read<T: bytemuck::Pod>(&self, _offset: u64, _out: &mut [T]) -> SupaSimResult<B, ()> {
+        todo!()
     }
     pub fn access(
         &'_ self,
-        offset: u64,
-        len: u64,
-        needs_mut: bool,
+        _offset: u64,
+        _len: u64,
+        _needs_mut: bool,
     ) -> SupaSimResult<B, MappedBuffer<'_, B>> {
-        let slice = BufferSlice {
-            buffer: self.clone(),
-            start: offset,
-            len,
-            needs_mut,
-        };
-        slice.validate()?;
-        let id = slice.acquire(BufferUser::Cpu, false)?.id;
-        let _instance = self.inner()?.instance.clone();
-        let instance = _instance.inner()?;
-        let mut s = self.inner_mut()?;
-        let buffer_align = s.create_info.contents_align;
-        if instance.hal_instance_properties.map_buffers {
-            let mapped_ptr = unsafe {
-                s.inner
-                    .as_mut()
-                    .unwrap()
-                    .map(instance.hal_devices[0].inner.lock().as_ref().unwrap())
-                    .map_supasim()?
-                    .add(offset as usize)
-            };
-            drop(instance);
-            Ok(MappedBuffer {
-                instance: _instance,
-                inner: mapped_ptr,
-                len,
-                has_mut: needs_mut,
-                buffer: slice.buffer,
-                buffer_align,
-                in_buffer_offset: offset,
-                was_used_mut: false,
-                vec_capacity: None,
-                user_id: id,
-                _p: Default::default(),
-            })
-        } else {
-            let mut data = Vec::with_capacity(len as usize);
-            unsafe {
-                s.inner
-                    .as_mut()
-                    .unwrap()
-                    .read(
-                        instance.hal_devices[0].inner.lock().as_ref().unwrap(),
-                        offset,
-                        &mut data,
-                    )
-                    .map_supasim()?;
-            }
-            drop(instance);
-            let out = Ok(MappedBuffer {
-                instance: _instance,
-                inner: data.as_mut_ptr(),
-                len,
-                buffer_align,
-                in_buffer_offset: offset,
-                has_mut: needs_mut,
-                was_used_mut: false,
-                buffer: slice.buffer,
-                vec_capacity: Some(data.capacity()),
-                user_id: id,
-                _p: Default::default(),
-            });
-            std::mem::forget(data);
-            out
-        }
+        todo!()
     }
     pub fn slice(&self, range: impl std::ops::RangeBounds<u64>, needs_mut: bool) -> BufferSlice<B> {
         let start = match range.start_bound() {
@@ -1147,7 +941,7 @@ impl<B: hal::Backend> BufferInner<B> {
     fn destroy(&mut self, instance: &InstanceInner<B>) {
         instance.buffers.write().remove(self.id);
         unsafe {
-            self.residency.0.write().destroy(instance);
+            self.residency.0.write().destroy(instance).unwrap();
         }
         self.is_alive = false;
     }
@@ -1214,35 +1008,7 @@ impl<B: hal::Backend> MappedBuffer<'_, B> {
 }
 impl<B: hal::Backend> Drop for MappedBuffer<'_, B> {
     fn drop(&mut self) {
-        let instance = self.instance.inner().unwrap();
-        let slice = BufferSlice {
-            buffer: self.buffer.clone(),
-            start: self.in_buffer_offset,
-            len: self.len,
-            needs_mut: self.has_mut,
-        };
-        slice.release(self.user_id).unwrap();
-        let mut s = self.buffer.inner_mut().unwrap();
-        if instance.hal_instance_properties.map_buffers {
-            // Nothing needs to be done for now
-        } else {
-            unsafe {
-                let vec =
-                    Vec::from_raw_parts(self.inner, self.len as usize, self.vec_capacity.unwrap());
-                if self.was_used_mut {
-                    s.inner
-                        .as_mut()
-                        .unwrap()
-                        .write(
-                            instance.hal_devices[0].inner.lock().as_ref().unwrap(),
-                            self.in_buffer_offset,
-                            &vec,
-                        )
-                        .unwrap();
-                }
-                // And then the vec gets dropped. Tada!
-            }
-        }
+        todo!()
     }
 }
 

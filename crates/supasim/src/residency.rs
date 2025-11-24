@@ -14,7 +14,10 @@ use hal::{Buffer, Semaphore as _};
 use parking_lot::{Condvar, Mutex, RwLock};
 use smallvec::SmallVec;
 
-use crate::{BufferRange, DEVICE_SMALLVEC_SIZE, Instance, InstanceInner, sync::Semaphore};
+use crate::{
+    BufferRange, DEVICE_SMALLVEC_SIZE, Instance, InstanceInner, MapSupasimError, SupaSimResult,
+    sync::Semaphore,
+};
 
 pub struct OutOfDateWait<B: hal::Backend> {
     semaphores: Vec<Arc<Semaphore<B>>>,
@@ -57,7 +60,7 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
 }
 
 /// Handles all residency and synchronizatino for a buffer
-struct DeviceResidencyState<B: hal::Backend> {
+pub struct DeviceResidencyState<B: hal::Backend> {
     /// The backing memory
     pub buffer: Option<B::Buffer>,
     ood_tracker: OutOfDateTracker<B>,
@@ -74,14 +77,14 @@ impl<B: hal::Backend> Default for DeviceResidencyState<B> {
     }
 }
 /// Stored in the file system
-struct StorageResidencyState<B: hal::Backend> {
+pub struct StorageResidencyState<B: hal::Backend> {
     /// The file used to store the buffer's contents
     file: File,
     /// The tracker for out of date ranges for this copy of the data
     ood_tracker: OutOfDateTracker<B>,
 }
 /// Buffer range without read/write information
-struct BufferAccessRange {
+pub struct BufferAccessRange {
     pub start: u64,
     pub length: u64,
 }
@@ -108,7 +111,7 @@ impl BufferAccessRange {
 }
 
 /// Contains data for waiting on a buffer access
-struct BufferAccessFinish<B: hal::Backend> {
+pub struct BufferAccessFinish<B: hal::Backend> {
     /// The conditional variable, only used in CPU->CPU synchronization
     condvar: Option<Condvar>,
     /// This is set by the CPU before ringing the condvar. This is set when
@@ -144,7 +147,8 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
                 s.inner
                     .as_ref()
                     .unwrap()
-                    .is_signalled(instance.hal_instance.read().as_ref().unwrap());
+                    .is_signalled(instance.hal_instance.read().as_ref().unwrap())
+                    .unwrap();
             }
             todo!()
         } else {
@@ -185,7 +189,7 @@ impl<B: hal::Backend> BufferResidency<B> {
             write_accesses: VecDeque::new(),
         }
     }
-    pub unsafe fn destroy(&mut self, instance: &InstanceInner<B>) {
+    pub unsafe fn destroy(&mut self, instance: &InstanceInner<B>) -> SupaSimResult<B, ()> {
         for (dev_id, dev) in &mut self.devices.iter_mut().chain([&mut self.host]).enumerate() {
             if let Some(b) = dev.buffer.take() {
                 unsafe {
@@ -194,10 +198,12 @@ impl<B: hal::Backend> BufferResidency<B> {
                     } else {
                         0
                     };
-                    b.destroy(instance.hal_devices[dev_id].inner.lock().as_ref().unwrap());
+                    b.destroy(instance.hal_devices[dev_id].inner.lock().as_ref().unwrap())
+                        .map_supasim()?;
                 }
             }
         }
+        Ok(())
     }
 }
 pub struct BufferResidencyRef<B: hal::Backend>(pub RwLock<BufferResidency<B>>);
