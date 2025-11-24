@@ -4,16 +4,14 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-use std::{collections::HashSet, sync::Arc};
-
-use hal::{BackendInstance, CommandRecorder as _, Semaphore as _, Stream};
-use thunderdome::Index;
-use types::SyncMode;
-
 use crate::{
     Instance, MapSupasimError, SupaSimError, SupaSimResult, WaitHandle, WaitHandleInner, record,
     sync_thread::GpuSubmissionInfo,
 };
+use hal::{BackendInstance, CommandRecorder as _, Semaphore as _, Stream};
+use std::{collections::HashSet, sync::Arc};
+use thunderdome::Index;
+use types::SyncMode;
 
 /// A semaphore with info about its device that returns to a pool on drop
 pub struct Semaphore<B: hal::Backend> {
@@ -22,9 +20,10 @@ pub struct Semaphore<B: hal::Backend> {
     /// The device, stream and submission that will signal it. If None, then the host will signal.
     ///
     /// TODO: evaluate if this is actually needed
-    pub device_stream_submission: Option<(u16, u16, u64)>,
+    pub _device_stream_submission: Option<(u16, u16, u64)>,
     instance: Instance<B>,
 }
+
 impl<B: hal::Backend> Semaphore<B> {
     pub fn wait(&self) -> SupaSimResult<B, ()> {
         unsafe {
@@ -35,6 +34,7 @@ impl<B: hal::Backend> Semaphore<B> {
                 .map_supasim()
         }
     }
+
     pub fn is_signalled(&self) -> SupaSimResult<B, bool> {
         unsafe {
             self.inner
@@ -45,6 +45,7 @@ impl<B: hal::Backend> Semaphore<B> {
         }
     }
 }
+
 impl<B: hal::Backend> Drop for Semaphore<B> {
     fn drop(&mut self) {
         if self.inner.is_some() {
@@ -63,6 +64,7 @@ pub struct SubmissionResources<B: hal::Backend> {
     /// anywhere else. Can always be destroyed immediately upon submission completion.
     pub temp_copy_buffer: Option<B::Buffer>,
 }
+
 impl<B: hal::Backend> Default for SubmissionResources<B> {
     fn default() -> Self {
         Self {
@@ -142,7 +144,7 @@ pub fn submit_command_recorders<B: hal::Backend>(
         lock.current_submitted_count += 1;
         semaphore = Arc::new(Semaphore::<B> {
             inner: Some(semaphore_raw),
-            device_stream_submission: Some((0, 0, submission_idx)),
+            _device_stream_submission: Some((0, 0, submission_idx)),
             instance: instance.clone(),
         });
         for (buf_id, ranges) in &streams.used_ranges {
@@ -175,11 +177,11 @@ pub fn submit_command_recorders<B: hal::Backend>(
         )?;
         let kernels = streams.resources.kernels.clone();
         lock.submit(GpuSubmissionInfo {
-            index: submission_idx,
-            command_recorder: recorder,
-            bind_groups,
-            used_buffer_ranges,
-            used_resources: streams.resources,
+            _index: submission_idx,
+            _command_recorder: recorder,
+            _bind_groups: bind_groups,
+            _used_buffer_ranges: used_buffer_ranges,
+            _used_resources: streams.resources,
         })?;
 
         for _kernel in &kernels {

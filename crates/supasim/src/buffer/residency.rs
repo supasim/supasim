@@ -4,25 +4,24 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
+use crate::{
+    DEVICE_SMALLVEC_SIZE, Instance, InstanceInner, MapSupasimError, SupaSimResult,
+    buffer::BufferAccessRange, sync::Semaphore,
+};
+use hal::{Buffer, Semaphore as _};
+use parking_lot::{Condvar, Mutex, RwLock};
+use smallvec::SmallVec;
 use std::{
     collections::{HashMap, VecDeque},
     fs::File,
     sync::Arc,
 };
 
-use hal::{Buffer, Semaphore as _};
-use parking_lot::{Condvar, Mutex, RwLock};
-use smallvec::SmallVec;
-
-use crate::{
-    BufferRange, DEVICE_SMALLVEC_SIZE, Instance, InstanceInner, MapSupasimError, SupaSimResult,
-    sync::Semaphore,
-};
-
 pub struct OutOfDateWait<B: hal::Backend> {
     semaphores: Vec<Arc<Semaphore<B>>>,
     other_copy_range: Option<BufferAccessRange>,
 }
+
 #[derive(Default)]
 struct OutOfDateTracker<B: hal::Backend> {
     /// Sorted by range start. Ranges that will be out of date until their copy completes or is started.
@@ -32,23 +31,28 @@ struct OutOfDateTracker<B: hal::Backend> {
     /// Copies that will make ranges valid when complete
     current_copies: Vec<Arc<BufferAccessFinish<B>>>,
 }
+
 impl<B: hal::Backend> OutOfDateTracker<B> {
     /// Mark range as up to date
     pub fn update_range_immediate(&mut self, _range: BufferAccessRange) {
         todo!()
     }
+
     /// Mark range as not up to date
     pub fn invalidate_range(&mut self, _range: BufferAccessRange) {
         todo!()
     }
+
     /// Mark range as up to date when something finishes
     pub fn update_range_delayed(&mut self, _finish: BufferAccessFinish<B>) {
         todo!()
     }
+
     /// Returns what needs to be waited for and what needs to be copied
     pub fn get_needed_waits(&mut self, _range: BufferAccessRange) -> OutOfDateWait<B> {
         todo!()
     }
+
     /// Applies updates from copies that have completed
     pub fn check_all_current_copies(&mut self, instance: &InstanceInner<B>) {
         for i in (0..self.current_copies.len()).rev() {
@@ -65,6 +69,7 @@ pub struct DeviceResidencyState<B: hal::Backend> {
     pub buffer: Option<B::Buffer>,
     ood_tracker: OutOfDateTracker<B>,
 }
+
 impl<B: hal::Backend> Default for DeviceResidencyState<B> {
     fn default() -> Self {
         Self {
@@ -76,38 +81,13 @@ impl<B: hal::Backend> Default for DeviceResidencyState<B> {
         }
     }
 }
+
 /// Stored in the file system
 pub struct StorageResidencyState<B: hal::Backend> {
     /// The file used to store the buffer's contents
     file: File,
     /// The tracker for out of date ranges for this copy of the data
     ood_tracker: OutOfDateTracker<B>,
-}
-/// Buffer range without read/write information
-pub struct BufferAccessRange {
-    pub start: u64,
-    pub length: u64,
-}
-impl From<BufferRange> for BufferAccessRange {
-    fn from(value: BufferRange) -> Self {
-        Self {
-            start: value.start,
-            length: value.len,
-        }
-    }
-}
-impl BufferAccessRange {
-    pub fn join(&self, other: &Self) -> Option<Self> {
-        if self.start < (other.start + other.length) && other.start < (self.start + self.length) {
-            let start = self.start.min(other.start);
-            Some(Self {
-                start: self.start.min(other.start),
-                length: (self.start + self.length).max(other.start + other.length) - start,
-            })
-        } else {
-            None
-        }
-    }
 }
 
 /// Contains data for waiting on a buffer access
@@ -127,6 +107,7 @@ pub struct BufferAccessFinish<B: hal::Backend> {
     /// The ID used to look this up in a more efficient hashmap
     id: u64,
 }
+
 impl<B: hal::Backend> BufferAccessFinish<B> {
     pub fn is_complete_host(&self, instance: &InstanceInner<B>) -> bool {
         if let Some(cv) = self.condvar.as_ref() {
@@ -142,7 +123,7 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
             if *lock {
                 return true;
             }
-            assert!(s.device_stream_submission.is_some());
+            assert!(s._device_stream_submission.is_some());
             unsafe {
                 s.inner
                     .as_ref()
@@ -173,6 +154,7 @@ pub struct BufferResidency<B: hal::Backend> {
     /// conflicting accesses and wait for those.
     pub write_accesses: VecDeque<Arc<BufferAccessFinish<B>>>,
 }
+
 impl<B: hal::Backend> BufferResidency<B> {
     pub fn new(instance: Instance<B>, num_devices: u32) -> Self {
         let mut devices = SmallVec::with_capacity(num_devices as usize);
@@ -189,6 +171,7 @@ impl<B: hal::Backend> BufferResidency<B> {
             write_accesses: VecDeque::new(),
         }
     }
+
     pub unsafe fn destroy(&mut self, instance: &InstanceInner<B>) -> SupaSimResult<B, ()> {
         for (dev_id, dev) in &mut self.devices.iter_mut().chain([&mut self.host]).enumerate() {
             if let Some(b) = dev.buffer.take() {
@@ -216,14 +199,16 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
     ) -> OutOfDateWait<B> {
         todo!()
     }
-    pub fn get_cpu_access(
+
+    pub fn _get_cpu_access(
         &self,
         _range: BufferAccessRange,
         _is_mut: bool,
     ) -> Arc<BufferAccessFinish<B>> {
         todo!()
     }
-    pub fn release_cpu_access(&self, _finish: Arc<BufferAccessFinish<B>>, _is_mut: bool) {
+
+    pub fn _release_cpu_access(&self, _finish: Arc<BufferAccessFinish<B>>, _is_mut: bool) {
         // Signal the finish in mutex
         // Signal the condvar
         // Update the out of date things

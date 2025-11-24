@@ -4,14 +4,12 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-use std::sync::{Arc, mpsc::Sender};
-
-use parking_lot::{Condvar, Mutex};
-
 use crate::{
-    Buffer, Instance, Kernel, SupaSimError, SupaSimResult, residency::OutOfDateWait,
+    Buffer, Instance, Kernel, SupaSimError, SupaSimResult, buffer::residency::OutOfDateWait,
     sync::SubmissionResources,
 };
+use parking_lot::{Condvar, Mutex};
+use std::sync::{Arc, mpsc::Sender};
 
 pub enum StreamThreadMessage<B: hal::Backend> {
     Submission(GpuSubmissionInfo<B>),
@@ -21,14 +19,14 @@ pub enum StreamThreadMessage<B: hal::Backend> {
 
 pub struct GpuSubmissionInfo<B: hal::Backend> {
     /// Probably not strictly necessary, mainly for sanity purposes
-    pub index: u64,
-    pub command_recorder: B::CommandRecorder,
+    pub _index: u64,
+    pub _command_recorder: B::CommandRecorder,
     /// The bind groups used that may be destroyed upon submission completion
-    pub bind_groups: Vec<(B::BindGroup, Kernel<B>)>,
+    pub _bind_groups: Vec<(B::BindGroup, Kernel<B>)>,
     /// Ranges that may be freed up for other use upon submission completion
-    pub used_buffer_ranges: Vec<(OutOfDateWait<B>, Buffer<B>)>,
+    pub _used_buffer_ranges: Vec<(OutOfDateWait<B>, Buffer<B>)>,
     /// Other resources that might be affected by submission completion
-    pub used_resources: SubmissionResources<B>,
+    pub _used_resources: SubmissionResources<B>,
 }
 
 pub struct StreamThreadHandle<B: hal::Backend> {
@@ -39,6 +37,7 @@ pub struct StreamThreadHandle<B: hal::Backend> {
     pub sender: Sender<StreamThreadMessage<B>>,
     pub thread: std::thread::JoinHandle<()>,
 }
+
 impl<B: hal::Backend> StreamThreadHandle<B> {
     pub fn submit(&mut self, submission: GpuSubmissionInfo<B>) -> SupaSimResult<B, ()> {
         self.sender
@@ -46,6 +45,7 @@ impl<B: hal::Backend> StreamThreadHandle<B> {
             .map_err(|e| SupaSimError::SyncThreadPanic(e.to_string()))?;
         Ok(())
     }
+
     pub fn wait_for_submission(&self, idx: u64) {
         // Panic here because this shouldn't be publicly accessible
         if idx >= self.current_submitted_count {

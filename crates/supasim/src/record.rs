@@ -7,16 +7,15 @@ END LICENSE */
 //! Easily the least pleasant part of the codebase. All good, it just needs to do the bare minimum
 //! OK job. Should be revisited at some point.
 
-use std::collections::{HashMap, hash_map::Entry};
-
+use crate::{
+    BufferCommand, BufferCommandInner, BufferSlice, CommandRecorderInner, Instance, Kernel,
+    MapSupasimError as _, SupaSimError, SupaSimResult, buffer::BufferRange,
+    sync::SubmissionResources,
+};
 use hal::{Buffer as _, CommandRecorder as _, Device as _, HalBufferSlice, Stream as _};
+use std::collections::{HashMap, hash_map::Entry};
 use thunderdome::Index;
 use types::SyncOperations;
-
-use crate::{
-    BufferCommand, BufferCommandInner, BufferRange, BufferSlice, CommandRecorderInner, Instance,
-    Kernel, MapSupasimError as _, SupaSimError, SupaSimResult, sync::SubmissionResources,
-};
 
 pub enum HalCommandBuilder {
     CopyBuffer {
@@ -60,7 +59,7 @@ pub enum HalCommandBuilder {
         len: u64,
         import: bool,
     },
-    UpdateBindGroup {
+    _UpdateBindGroup {
         bg: Index,
         kernel: Index,
         resources: Vec<Index>,
@@ -73,6 +72,7 @@ pub struct BindGroupDesc {
     kernel_idx: Index,
     items: Vec<(Index, BufferRange)>,
 }
+
 impl BindGroupDesc {
     fn uninit() -> Self {
         Self {
@@ -81,9 +81,11 @@ impl BindGroupDesc {
         }
     }
 }
+
 pub struct CommandStream {
     pub commands: Vec<HalCommandBuilder>,
 }
+
 /// These are split into multiple streams so that certain operations can be waited without waiting for all
 pub struct StreamingCommands<B: hal::Backend> {
     /// Contains the index of the kernel, the index of the buffer, and the range of the buffer
@@ -98,6 +100,7 @@ struct StreamBlock<'a, B: hal::Backend> {
     /// Indices of commands needing sync
     needing_sync: BufferUsageTracker,
 }
+
 impl<'a, B: hal::Backend> StreamBlock<'a, B> {
     pub fn new() -> Self {
         Self {
@@ -105,6 +108,7 @@ impl<'a, B: hal::Backend> StreamBlock<'a, B> {
             needing_sync: BufferUsageTracker::default(),
         }
     }
+
     pub fn overlapping_buffers(&mut self, cmd: &BufferCommand<B>) -> Vec<BufferSlice<B>> {
         let mut slices = Vec::new();
         for &other_cmd in &self.commands {
@@ -125,11 +129,9 @@ impl<'a, B: hal::Backend> StreamBlock<'a, B> {
         }
         slices
     }
+
     pub fn append_command(&mut self, cmd: &'a BufferCommand<B>) {
         self.commands.push(cmd);
-    }
-    pub fn remove_command(&mut self, index: usize) {
-        self.commands.remove(index);
     }
 }
 
@@ -137,6 +139,7 @@ impl<'a, B: hal::Backend> StreamBlock<'a, B> {
 struct BufferUsageTracker {
     inner: HashMap<Index, Vec<BufferRange>>,
 }
+
 impl BufferUsageTracker {
     pub fn add<B: hal::Backend>(&mut self, b: &BufferSlice<B>) -> SupaSimResult<B, ()> {
         let id = b.buffer.inner()?.id;
@@ -150,6 +153,7 @@ impl BufferUsageTracker {
         }
         Ok(())
     }
+
     pub fn compact(&mut self) {
         for v in self.inner.values_mut() {
             // The idea here is to minimize the number of individual usage elements
@@ -346,7 +350,6 @@ pub fn assemble_streams<B: hal::Backend>(
                         workgroup_dims,
                     }
                 }
-                BufferCommandInner::Dummy => continue,
                 BufferCommandInner::CopyBufferToBuffer => HalCommandBuilder::CopyBuffer {
                     src_buffer: cmd.buffers[0].buffer.inner()?.id,
                     dst_buffer: cmd.buffers[1].buffer.inner()?.id,
@@ -397,6 +400,7 @@ pub fn assemble_streams<B: hal::Backend>(
         resources,
     })
 }
+
 #[allow(clippy::type_complexity)]
 pub fn record_command_streams<B: hal::Backend>(
     streams: &StreamingCommands<B>,
@@ -653,7 +657,7 @@ pub fn record_command_streams<B: hal::Backend>(
                             import: *import,
                         }
                     }
-                    HalCommandBuilder::UpdateBindGroup { .. } => todo!(),
+                    HalCommandBuilder::_UpdateBindGroup { .. } => todo!(),
                     HalCommandBuilder::Dummy => hal::BufferCommand::Dummy,
                 };
                 hal_commands.push(cmd);
