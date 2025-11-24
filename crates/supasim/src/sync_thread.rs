@@ -46,6 +46,16 @@ impl<B: hal::Backend> StreamThreadHandle<B> {
             .map_err(|e| SupaSimError::SyncThreadPanic(e.to_string()))?;
         Ok(())
     }
+    pub fn wait_for_submission(&self, idx: u64) {
+        // Panic here because this shouldn't be publicly accessible
+        if idx >= self.current_submitted_count {
+            panic!("Submission index too high");
+        }
+        let mut lock = self.current_completed_index.0.lock();
+        while *lock < idx {
+            self.current_completed_index.1.wait(&mut lock);
+        }
+    }
 }
 
 pub fn create_sync_thread<B: hal::Backend>(

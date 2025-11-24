@@ -433,26 +433,42 @@ impl<B: hal::Backend> Instance<B> {
         sync::submit_command_recorders(self, recorders)
     }
     pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
-        todo!()
+        // This is about exlusive access not mutable access
+        let inner_mut = self.inner_mut()?;
+        for stream in inner_mut.hal_devices.iter().flat_map(|a| &a.streams) {
+            let handle = stream.stream_handle.as_ref().unwrap().read();
+            handle.wait_for_submission(handle.current_submitted_count - 1);
+        }
+        Ok(())
     }
     /// Do work which is queued but not yet started for batching reasons. Currently a NOOP
     pub fn do_busywork(&self) -> SupaSimResult<B, ()> {
-        todo!()
+        // Not implemented
+        Ok(())
     }
     /// Clear cached resources. This would be useful if the usage requirements have just
     /// dramatically changed, for example after startup or between different simulations.
     /// Currently a NOOP.
     pub fn clear_cached_resources(&self) -> SupaSimResult<B, ()> {
-        let s = self.inner()?;
+        // Not fully implemented
+
+        // This is about exlusive access not mutable access
+        let mut _s = self.inner_mut()?;
+        let s = &mut *_s;
         s.check_destroyed()?;
+        let mut _hal_instance = s.hal_instance.write();
+        let hal_instance = _hal_instance.as_mut().unwrap();
         unsafe {
-            s.hal_instance
-                .write()
-                .as_mut()
-                .unwrap()
-                .cleanup_cached_resources()
+            hal_instance.cleanup_cached_resources().map_supasim()?;
+            for d in &mut s.hal_devices {
+                d.inner
+                    .get_mut()
+                    .as_ref()
+                    .unwrap()
+                    .cleanup_cached_resources(hal_instance)
+                    .map_supasim()?;
+            }
         }
-        .map_supasim()?;
         Ok(())
     }
 
@@ -554,8 +570,8 @@ impl<B: hal::Backend> InstanceInner<B> {
                     let st = stream.inner.get_mut().take().unwrap();
                     for cr in std::mem::take(&mut *stream.unused_hal_command_recorders.lock()) {
                         cr.destroy(&st).unwrap();
-                        todo!();
                     }
+                    // TODO: clean up everything related to this stream
                     st.destroy(&mut dev).unwrap();
                 }
                 dev.destroy(&mut instance).unwrap();
