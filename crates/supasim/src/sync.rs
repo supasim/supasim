@@ -175,10 +175,12 @@ pub fn submit_command_recorders<B: hal::Backend>(
             let _b = b.clone();
             let b_mut = _b.inner()?;
             for &range in ranges {
-                let ood_wait =
-                    b_mut
-                        .residency
-                        .add_gpu_use(range.into(), range.needs_mut, semaphore.clone());
+                let ood_wait = b_mut.residency.add_gpu_use(
+                    range.into(),
+                    range.needs_mut,
+                    semaphore.clone(),
+                    0,
+                );
                 used_buffer_ranges.push((ood_wait, b.clone()))
             }
             used_buffers.insert(buf_id);

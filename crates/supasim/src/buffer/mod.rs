@@ -73,6 +73,7 @@ pub struct BufferRange {
 }
 
 /// Just an interval
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct BufferAccessRange {
     pub _start: u64,
     pub _length: u64,

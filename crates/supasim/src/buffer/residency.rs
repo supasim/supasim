@@ -5,8 +5,8 @@
 END LICENSE */
 
 use crate::{
-    DEVICE_SMALLVEC_SIZE, Instance, InstanceInner, MapSupasimError, SupaSimResult,
-    buffer::BufferAccessRange, sync::Semaphore,
+    DEVICE_SMALLVEC_SIZE, InstanceInner, MapSupasimError, SupaSimResult, buffer::BufferAccessRange,
+    sync::Semaphore,
 };
 use hal::Buffer;
 use parking_lot::{Condvar, Mutex, RwLock};
@@ -54,9 +54,9 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
     }
 
     /// Applies updates from copies that have completed
-    pub fn check_all_current_copies(&mut self, instance: &InstanceInner<B>) {
+    pub fn check_all_current_copies(&mut self) {
         for i in (0..self.current_copies.len()).rev() {
-            if self.current_copies[i].is_complete_host(instance) {
+            if self.current_copies[i].is_complete_host() {
                 self.current_copies.remove(i);
             }
         }
@@ -109,7 +109,7 @@ pub struct BufferAccessFinish<B: hal::Backend> {
 }
 
 impl<B: hal::Backend> BufferAccessFinish<B> {
-    pub fn is_complete_host(&self, instance: &InstanceInner<B>) -> bool {
+    pub fn is_complete_host(&self) -> bool {
         if let Some(cv) = self.condvar.as_ref() {
             let mut lock = self.is_complete.lock();
             loop {
@@ -132,7 +132,6 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
 }
 
 pub struct BufferResidency<B: hal::Backend> {
-    pub instance: Instance<B>,
     /// Residency state for each device
     pub devices: SmallVec<[DeviceResidencyState<B>; DEVICE_SMALLVEC_SIZE]>,
     /// Residency state for the host
@@ -149,13 +148,12 @@ pub struct BufferResidency<B: hal::Backend> {
 }
 
 impl<B: hal::Backend> BufferResidency<B> {
-    pub fn new(instance: Instance<B>, num_devices: u32) -> Self {
+    pub fn new(num_devices: u32) -> Self {
         let mut devices = SmallVec::with_capacity(num_devices as usize);
         for _ in 0..num_devices {
             devices.push(DeviceResidencyState::default());
         }
         Self {
-            instance,
             devices,
             host: DeviceResidencyState::default(),
             storage: None,
@@ -163,6 +161,34 @@ impl<B: hal::Backend> BufferResidency<B> {
             read_accesses: HashMap::new(),
             write_accesses: VecDeque::new(),
         }
+    }
+
+    pub fn update_all_accesses(&mut self) -> SupaSimResult<B, ()> {
+        let mut ids = Vec::with_capacity(64);
+        for (id, access) in &self.read_accesses {
+            if access.is_complete_host() {
+                ids.push(*id);
+            }
+        }
+        for id in ids {
+            self.read_accesses.remove(&id);
+        }
+
+        let mut i = 0;
+        while i < self.write_accesses.len() {
+            if self.write_accesses[i].is_complete_host() {
+                self.write_accesses.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        for dev in &mut self.devices {
+            if dev.buffer.is_some() {
+                dev.ood_tracker.check_all_current_copies();
+            }
+        }
+        Ok(())
     }
 
     pub unsafe fn destroy(&mut self, instance: &InstanceInner<B>) -> SupaSimResult<B, ()> {
@@ -186,11 +212,48 @@ pub struct BufferResidencyRef<B: hal::Backend>(pub RwLock<BufferResidency<B>>);
 impl<B: hal::Backend> BufferResidencyRef<B> {
     pub fn add_gpu_use(
         &self,
-        _range: BufferAccessRange,
-        _needs_mut: bool,
-        _semaphore: Arc<Semaphore<B>>,
+        range: BufferAccessRange,
+        is_mut: bool,
+        semaphore: Arc<Semaphore<B>>,
+        device_index: u32,
     ) -> OutOfDateWait<B> {
-        todo!()
+        // Push buffer access
+        // Make each dependency signal a semaphore and hook into those
+        // Update out of date ranges
+        let mut _s = self.0.write();
+        let s = &mut *_s;
+        let finish = Arc::new(BufferAccessFinish::<B> {
+            condvar: None,
+            is_complete: Mutex::new(false),
+            device_semaphore: Some(semaphore),
+            range,
+            id: s.current_index,
+        });
+        s.current_index += 1;
+        if is_mut {
+            s.read_accesses.insert(finish.id, finish.clone());
+            for (i, d) in s
+                .devices
+                .iter_mut()
+                .chain(std::iter::once(&mut s.host))
+                .enumerate()
+            {
+                if (i as u32) != device_index && d.buffer.is_some() {
+                    d.ood_tracker.invalidate_range(range);
+                }
+            }
+            if let Some(d) = &mut s.storage {
+                d.ood_tracker.invalidate_range(range);
+            }
+        } else {
+            s.write_accesses.push_back(finish.clone());
+        }
+        // This is just for copying
+
+        // TODO: push other dependencies to this wait
+        s.devices[device_index as usize]
+            .ood_tracker
+            .get_needed_waits(range)
     }
 
     pub fn _get_cpu_access(
@@ -212,19 +275,23 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
 
         if is_mut {
             s.read_accesses.insert(finish.id, finish.clone());
+            for d in &mut s.devices {
+                d.ood_tracker.invalidate_range(range);
+            }
+            if let Some(d) = &mut s.storage {
+                d.ood_tracker.invalidate_range(range);
+            }
         } else {
             s.write_accesses.push_back(finish.clone());
         }
-        // TODO: update out of date ranges
         drop(s);
         // TODO: wait for dependencies to finish
 
-        todo!()
+        finish
     }
 
     pub fn _release_cpu_access(&self, finish: Arc<BufferAccessFinish<B>>, is_mut: bool) {
         // Update the finish, condvar, and possibly semaphore
-        // Update out of date stuff
         // Remove from access list
         {
             let mut lock = finish.is_complete.lock();
@@ -234,7 +301,6 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
         if let Some(sem) = &finish.device_semaphore {
             sem.signal().unwrap();
         }
-        // TODO: update out of date stuff
         let mut s = self.0.write();
         if is_mut {
             let idx = s.write_accesses.iter().position(|a| {
@@ -247,6 +313,5 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
         } else {
             s.read_accesses.remove(&finish.id);
         }
-        todo!()
     }
 }

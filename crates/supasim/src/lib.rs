@@ -301,7 +301,7 @@ impl<B: hal::Backend> Instance<B> {
             id: Index::DANGLING,
             create_info: *desc,
             _is_currently_external: false,
-            residency: BufferResidencyRef(RwLock::new(BufferResidency::new(self.clone(), 1))),
+            residency: BufferResidencyRef(RwLock::new(BufferResidency::new(1))),
             is_alive: true,
         });
         b.inner_mut()?.id = s.buffers.write().insert(Some(b.downgrade()));
