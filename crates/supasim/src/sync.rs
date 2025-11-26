@@ -9,6 +9,7 @@ use crate::{
     sync_thread::GpuSubmissionInfo,
 };
 use hal::{BackendInstance, CommandRecorder as _, Semaphore as _, Stream};
+use parking_lot::RwLock;
 use std::{collections::HashSet, sync::Arc};
 use thunderdome::Index;
 use types::SyncMode;
@@ -16,7 +17,7 @@ use types::SyncMode;
 /// A semaphore with info about its device that returns to a pool on drop
 pub struct Semaphore<B: hal::Backend> {
     /// This will be Some until the semaphore is destroyed.
-    pub inner: Option<B::Semaphore>,
+    pub inner: Option<RwLock<B::Semaphore>>,
     /// The device, stream and submission that will signal it. If None, then the host will signal.
     ///
     /// TODO: evaluate if this is actually needed
@@ -30,6 +31,7 @@ impl<B: hal::Backend> Semaphore<B> {
             self.inner
                 .as_ref()
                 .unwrap()
+                .read()
                 .wait(self.instance.inner()?.hal_instance.read().as_ref().unwrap())
                 .map_supasim()
         }
@@ -40,7 +42,19 @@ impl<B: hal::Backend> Semaphore<B> {
             self.inner
                 .as_ref()
                 .unwrap()
+                .read()
                 .is_signalled(self.instance.inner()?.hal_instance.read().as_ref().unwrap())
+                .map_supasim()
+        }
+    }
+
+    pub fn signal(&self) -> SupaSimResult<B, ()> {
+        unsafe {
+            self.inner
+                .as_ref()
+                .unwrap()
+                .write()
+                .signal(self.instance.inner()?.hal_instance.read().as_ref().unwrap())
                 .map_supasim()
         }
     }
@@ -50,7 +64,9 @@ impl<B: hal::Backend> Drop for Semaphore<B> {
     fn drop(&mut self) {
         if self.inner.is_some() {
             let s = self.instance.inner().unwrap();
-            s.unused_semaphores.lock().push(self.inner.take().unwrap());
+            s.unused_semaphores
+                .lock()
+                .push(self.inner.take().unwrap().into_inner());
         }
     }
 }
@@ -143,7 +159,7 @@ pub fn submit_command_recorders<B: hal::Backend>(
         submission_idx = lock.current_submitted_count;
         lock.current_submitted_count += 1;
         semaphore = Arc::new(Semaphore::<B> {
-            inner: Some(semaphore_raw),
+            inner: Some(RwLock::new(semaphore_raw)),
             _device_stream_submission: Some((0, 0, submission_idx)),
             instance: instance.clone(),
         });

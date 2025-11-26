@@ -8,7 +8,7 @@ use crate::{
     DEVICE_SMALLVEC_SIZE, Instance, InstanceInner, MapSupasimError, SupaSimResult,
     buffer::BufferAccessRange, sync::Semaphore,
 };
-use hal::{Buffer, Semaphore as _};
+use hal::Buffer;
 use parking_lot::{Condvar, Mutex, RwLock};
 use smallvec::SmallVec;
 use std::{
@@ -124,14 +124,7 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
                 return true;
             }
             assert!(s._device_stream_submission.is_some());
-            unsafe {
-                s.inner
-                    .as_ref()
-                    .unwrap()
-                    .is_signalled(instance.hal_instance.read().as_ref().unwrap())
-                    .unwrap();
-            }
-            todo!()
+            s.is_signalled().unwrap()
         } else {
             unreachable!()
         }
@@ -202,17 +195,58 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
 
     pub fn _get_cpu_access(
         &self,
-        _range: BufferAccessRange,
-        _is_mut: bool,
+        range: BufferAccessRange,
+        is_mut: bool,
     ) -> Arc<BufferAccessFinish<B>> {
+        // Push this buffer access, update out of date ranges
+        // Wait for dependencies to finish
+        let mut s = self.0.write();
+        let finish = Arc::new(BufferAccessFinish::<B> {
+            condvar: Some(Condvar::new()),
+            is_complete: Mutex::new(false),
+            device_semaphore: None,
+            range,
+            id: s.current_index,
+        });
+        s.current_index += 1;
+
+        if is_mut {
+            s.read_accesses.insert(finish.id, finish.clone());
+        } else {
+            s.write_accesses.push_back(finish.clone());
+        }
+        // TODO: update out of date ranges
+        drop(s);
+        // TODO: wait for dependencies to finish
+
         todo!()
     }
 
-    pub fn _release_cpu_access(&self, _finish: Arc<BufferAccessFinish<B>>, _is_mut: bool) {
-        // Signal the finish in mutex
-        // Signal the condvar
-        // Update the out of date things
-        // Remove the access remove from list
+    pub fn _release_cpu_access(&self, finish: Arc<BufferAccessFinish<B>>, is_mut: bool) {
+        // Update the finish, condvar, and possibly semaphore
+        // Update out of date stuff
+        // Remove from access list
+        {
+            let mut lock = finish.is_complete.lock();
+            *lock = true;
+            finish.condvar.as_ref().unwrap().notify_all();
+        }
+        if let Some(sem) = &finish.device_semaphore {
+            sem.signal().unwrap();
+        }
+        // TODO: update out of date stuff
+        let mut s = self.0.write();
+        if is_mut {
+            let idx = s.write_accesses.iter().position(|a| {
+                let a: &BufferAccessFinish<B> = a.as_ref();
+                let b: &BufferAccessFinish<B> = finish.as_ref();
+                (a as *const BufferAccessFinish<B>).addr()
+                    == (b as *const BufferAccessFinish<B>).addr()
+            });
+            s.write_accesses.remove(idx.unwrap());
+        } else {
+            s.read_accesses.remove(&finish.id);
+        }
         todo!()
     }
 }
