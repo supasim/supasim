@@ -246,7 +246,6 @@ impl<B: hal::Backend> Instance<B> {
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
             reflection_info: reflection,
-            _last_used_per_device: smallvec![Vec::new()],
         });
         k.inner_mut()?.id = s.kernels.write().insert(k.downgrade());
         Ok(k)
@@ -468,8 +467,6 @@ api_type!(Kernel, {
     instance: Instance<B>,
     inner: Option<B::Kernel>,
     reflection_info: KernelReflectionInfo,
-    // TODO: use this or remove it
-    _last_used_per_device: SmallVec<[Vec<Semaphore<B>>; DEVICE_SMALLVEC_SIZE]>,
     id: Index,
 },);
 
