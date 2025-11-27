@@ -75,28 +75,26 @@ pub struct BufferRange {
 /// Just an interval
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct BufferAccessRange {
-    pub _start: u64,
-    pub _length: u64,
+    pub start: u64,
+    pub length: u64,
 }
 
 impl From<BufferRange> for BufferAccessRange {
     fn from(value: BufferRange) -> Self {
         Self {
-            _start: value.start,
-            _length: value.len,
+            start: value.start,
+            length: value.len,
         }
     }
 }
 
 impl BufferAccessRange {
     pub fn _join(&self, other: &Self) -> Option<Self> {
-        if self._start < (other._start + other._length)
-            && other._start < (self._start + self._length)
-        {
-            let start = self._start.min(other._start);
+        if self.start < (other.start + other.length) && other.start < (self.start + self.length) {
+            let start = self.start.min(other.start);
             Some(Self {
-                _start: self._start.min(other._start),
-                _length: (self._start + self._length).max(other._start + other._length) - start,
+                start: self.start.min(other.start),
+                length: (self.start + self.length).max(other.start + other.length) - start,
             })
         } else {
             None

@@ -31,12 +31,14 @@ thiserror.workspace = true
 bytemuck.workspace = true
 thunderdome.workspace = true
 paste.workspace = true
+tempfile.workspace = true
 parking_lot = "0.12"
+smallvec = "1.15"
+memmap2 = "0.9"
 
 types.workspace = true
 kernels.workspace = true
 hal = { workspace = true, default-features = false }
-smallvec = "1.15.1"
 
 [dev-dependencies]
 log.workspace = true

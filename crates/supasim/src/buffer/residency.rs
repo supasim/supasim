@@ -9,6 +9,7 @@ use crate::{
     sync::Semaphore,
 };
 use hal::Buffer;
+use memmap2::{MmapMut, MmapOptions};
 use parking_lot::{Condvar, Mutex, RwLock};
 use smallvec::SmallVec;
 use std::{
@@ -33,6 +34,13 @@ struct OutOfDateTracker<B: hal::Backend> {
 }
 
 impl<B: hal::Backend> OutOfDateTracker<B> {
+    pub fn uninit(length: u64) -> Self {
+        Self {
+            out_of_date_ranges: vec![BufferAccessRange { start: 0, length }],
+            current_copies: Vec::new(),
+        }
+    }
+
     /// Mark range as up to date
     pub fn update_range_immediate(&mut self, _range: BufferAccessRange) {
         todo!()
@@ -81,13 +89,50 @@ impl<B: hal::Backend> Default for DeviceResidencyState<B> {
         }
     }
 }
+impl<B: hal::Backend> DeviceResidencyState<B> {
+    fn destroy(self, instance: &InstanceInner<B>, device_idx: u32) -> SupaSimResult<B, ()> {
+        unsafe {
+            self.buffer
+                .unwrap()
+                .destroy(
+                    instance.hal_devices[device_idx as usize]
+                        .inner
+                        .lock()
+                        .as_ref()
+                        .unwrap(),
+                )
+                .map_supasim()
+        }
+    }
+}
 
 /// Stored in the file system
 pub struct StorageResidencyState<B: hal::Backend> {
-    /// The file used to store the buffer's contents
+    /// The temporary file, it should be dropped last
     file: File,
+    /// The file used to store the buffer's contents
+    mapped_file: MmapMut,
     /// The tracker for out of date ranges for this copy of the data
     ood_tracker: OutOfDateTracker<B>,
+}
+impl<B: hal::Backend> StorageResidencyState<B> {
+    pub fn new(len: u64) -> Self {
+        let file = tempfile::tempfile().unwrap();
+        file.set_len(len).unwrap();
+
+        let mapped_file = unsafe { MmapOptions::new().map_mut(&file).unwrap() };
+        Self {
+            file,
+            mapped_file,
+            ood_tracker: OutOfDateTracker::uninit(len),
+        }
+    }
+
+    /// Technically unnecessary and redundant
+    pub fn destroy(self) {
+        drop(self.mapped_file);
+        drop(self.file);
+    }
 }
 
 /// Contains data for waiting on a buffer access
