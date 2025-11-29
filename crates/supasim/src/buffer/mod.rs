@@ -198,7 +198,6 @@ api_type!(Buffer, {
     pub id: Index,
     pub create_info: BufferDescriptor,
     pub residency: BufferResidencyRef<B>,
-    pub _is_currently_external: bool,
     pub is_alive: bool,
 },);
 

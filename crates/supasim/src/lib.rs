@@ -299,7 +299,6 @@ impl<B: hal::Backend> Instance<B> {
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
             create_info: *desc,
-            _is_currently_external: false,
             residency: BufferResidencyRef(RwLock::new(BufferResidency::new(1))),
             is_alive: true,
         });
@@ -387,19 +386,20 @@ impl<B: hal::Backend> InstanceInner<B> {
     fn destroy(&mut self) {
         // Tell all streams to shutdown
         for stream in self.hal_devices.iter().flat_map(|a| &a.streams) {
-            stream
-                .stream_handle
-                .as_ref()
-                .unwrap()
-                .write()
-                .sender
-                .send(StreamThreadMessage::ShutDown)
-                .unwrap();
+            // This will only not occur if this an error occurs during creation
+            if let Some(sync_handle) = stream.stream_handle.as_ref() {
+                sync_handle
+                    .write()
+                    .sender
+                    .send(StreamThreadMessage::ShutDown)
+                    .unwrap()
+            }
         }
         // Wait for all streams to shutdown
         for stream in self.hal_devices.iter_mut().flat_map(|a| &mut a.streams) {
-            let handle = stream.stream_handle.take().unwrap().into_inner();
-            handle.thread.join().unwrap();
+            if let Some(handle) = stream.stream_handle.take() {
+                handle.into_inner().thread.join().unwrap();
+            }
         }
         for (_, cr) in std::mem::take(&mut *self.command_recorders.write()) {
             if let Some(cr) = cr
@@ -447,7 +447,6 @@ impl<B: hal::Backend> InstanceInner<B> {
                     for cr in std::mem::take(&mut *stream.unused_hal_command_recorders.lock()) {
                         cr.destroy(&st).unwrap();
                     }
-                    // TODO: clean up everything related to this stream
                     st.destroy(&mut dev).unwrap();
                 }
                 dev.destroy(&mut instance).unwrap();
