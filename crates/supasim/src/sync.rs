@@ -19,14 +19,13 @@ pub struct Semaphore<B: hal::Backend> {
     /// This will be Some until the semaphore is destroyed.
     pub inner: Option<RwLock<B::Semaphore>>,
     /// The device, stream and submission that will signal it. If None, then the host will signal.
-    ///
-    /// TODO: evaluate if this is actually needed
-    pub _device_stream_submission: Option<(u16, u16, u64)>,
+    pub device_stream_submission: Option<(u16, u16, u64)>,
     instance: Instance<B>,
 }
 
 impl<B: hal::Backend> Semaphore<B> {
     pub fn wait(&self) -> SupaSimResult<B, ()> {
+        assert!(self.device_stream_submission.is_some());
         unsafe {
             self.inner
                 .as_ref()
@@ -49,6 +48,7 @@ impl<B: hal::Backend> Semaphore<B> {
     }
 
     pub fn signal(&self) -> SupaSimResult<B, ()> {
+        assert!(self.device_stream_submission.is_none());
         unsafe {
             self.inner
                 .as_ref()
@@ -160,7 +160,7 @@ pub fn submit_command_recorders<B: hal::Backend>(
         lock.current_submitted_count += 1;
         semaphore = Arc::new(Semaphore::<B> {
             inner: Some(RwLock::new(semaphore_raw)),
-            _device_stream_submission: Some((0, 0, submission_idx)),
+            device_stream_submission: Some((0, 0, submission_idx)),
             instance: instance.clone(),
         });
         for (buf_id, ranges) in &streams.used_ranges {

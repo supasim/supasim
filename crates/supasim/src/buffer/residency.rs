@@ -168,7 +168,7 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
             if *lock {
                 return true;
             }
-            assert!(s._device_stream_submission.is_some());
+            assert!(s.device_stream_submission.is_some());
             s.is_signalled().unwrap()
         } else {
             unreachable!()
