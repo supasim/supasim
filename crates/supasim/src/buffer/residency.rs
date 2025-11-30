@@ -4,11 +4,13 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
+// TODO: handle WGPU where combined upload & download buffers are unsupported
+
 use crate::{
     DEVICE_SMALLVEC_SIZE, InstanceInner, MapSupasimError, SupaSimResult, buffer::BufferAccessRange,
     sync::Semaphore,
 };
-use hal::Buffer;
+use hal::{Buffer, Device as _};
 use memmap2::{MmapMut, MmapOptions};
 use parking_lot::{Condvar, Mutex, RwLock};
 use smallvec::SmallVec;
@@ -17,6 +19,7 @@ use std::{
     fs::File,
     sync::Arc,
 };
+use types::{HalBufferDescriptor, HalBufferType};
 
 pub struct OutOfDateWait<B: hal::Backend> {
     semaphores: Vec<Arc<Semaphore<B>>>,
@@ -78,8 +81,21 @@ pub struct DeviceResidencyState<B: hal::Backend> {
     ood_tracker: OutOfDateTracker<B>,
 }
 
-impl<B: hal::Backend> Default for DeviceResidencyState<B> {
-    fn default() -> Self {
+impl<B: hal::Backend> DeviceResidencyState<B> {
+    fn new(size: u64) -> Self {
+        Self {
+            buffer: None,
+            ood_tracker: OutOfDateTracker {
+                out_of_date_ranges: vec![BufferAccessRange {
+                    start: 0,
+                    length: size,
+                }],
+                current_copies: vec![],
+            },
+        }
+    }
+
+    fn empty() -> Self {
         Self {
             buffer: None,
             ood_tracker: OutOfDateTracker {
@@ -88,8 +104,22 @@ impl<B: hal::Backend> Default for DeviceResidencyState<B> {
             },
         }
     }
-}
-impl<B: hal::Backend> DeviceResidencyState<B> {
+
+    fn remove_buffer(&mut self, instance: &InstanceInner<B>, device_idx: Option<u32>) {
+        unsafe {
+            let buffer = self.buffer.take().unwrap();
+            buffer
+                .destroy(
+                    instance.hal_devices[device_idx.unwrap_or(0) as usize]
+                        .inner
+                        .lock()
+                        .as_ref()
+                        .unwrap(),
+                )
+                .unwrap();
+        }
+    }
+
     fn destroy(self, instance: &InstanceInner<B>, device_idx: u32) -> SupaSimResult<B, ()> {
         unsafe {
             if let Some(b) = self.buffer {
@@ -199,10 +229,12 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
 }
 
 pub struct BufferResidency<B: hal::Backend> {
+    pub size: u64,
+    pub min_alignment: u32,
     /// Residency state for each device
     pub devices: SmallVec<[DeviceResidencyState<B>; DEVICE_SMALLVEC_SIZE]>,
-    /// Residency state for the host. Optional for destruction purposes
-    pub host: Option<DeviceResidencyState<B>>,
+    /// Residency state for the host.
+    pub host: DeviceResidencyState<B>,
     /// Alternative to residencystate buffer for host memory
     pub storage: Option<StorageResidencyState<B>>,
     /// Used to create indices for buffer access finishes
@@ -217,19 +249,51 @@ pub struct BufferResidency<B: hal::Backend> {
 }
 
 impl<B: hal::Backend> BufferResidency<B> {
-    pub fn new(num_devices: u32) -> Self {
+    pub fn new(num_devices: u32, size: u64, min_alignment: u32) -> Self {
         let mut devices = SmallVec::with_capacity(num_devices as usize);
         for _ in 0..num_devices {
-            devices.push(DeviceResidencyState::default());
+            devices.push(DeviceResidencyState::new(size));
         }
         Self {
+            size,
+            min_alignment,
             devices,
-            host: Some(DeviceResidencyState::default()),
+            host: DeviceResidencyState::new(size),
             storage: None,
             current_index: 0,
             read_accesses: HashMap::new(),
             write_accesses: VecDeque::new(),
             num_mappings: 0,
+        }
+    }
+
+    pub fn setup_buffer(&mut self, device_idx: Option<u32>, instance: &InstanceInner<B>) {
+        let thing = if let Some(d) = device_idx {
+            &mut self.devices[d as usize]
+        } else {
+            &mut self.host
+        };
+        if thing.buffer.is_none() {
+            thing.buffer = unsafe {
+                Some(
+                    instance.hal_devices[0]
+                        .inner
+                        .lock()
+                        .as_mut()
+                        .unwrap()
+                        .create_buffer(&HalBufferDescriptor {
+                            size: self.size,
+                            min_alignment: self.min_alignment as usize,
+                            memory_type: if device_idx.is_none() {
+                                HalBufferType::UploadDownload
+                            } else {
+                                HalBufferType::Storage
+                            },
+                        })
+                        .unwrap(),
+                )
+            };
+            thing.ood_tracker = DeviceResidencyState::new(self.size).ood_tracker;
         }
     }
 
@@ -264,7 +328,10 @@ impl<B: hal::Backend> BufferResidency<B> {
     pub unsafe fn destroy(&mut self, instance: &InstanceInner<B>) -> SupaSimResult<B, ()> {
         for (dev_id, dev) in std::mem::take(&mut self.devices)
             .into_iter()
-            .chain([self.host.take().unwrap()])
+            .chain([std::mem::replace(
+                &mut self.host,
+                DeviceResidencyState::empty(),
+            )])
             .enumerate()
         {
             let dev_id = if dev_id < instance.hal_devices.len() {
@@ -287,8 +354,9 @@ impl<B: hal::Backend> BufferResidency<B> {
         is_mut: bool,
         semaphore: Arc<Semaphore<B>>,
         device_index: u32,
+        instance: &InstanceInner<B>,
     ) -> OutOfDateWait<B> {
-        // TODO: make sure buffer is created
+        self.setup_buffer(Some(device_index), instance);
         // Push buffer access
         // Make each dependency signal a semaphore and hook into those
         // Update out of date ranges
@@ -305,7 +373,7 @@ impl<B: hal::Backend> BufferResidency<B> {
             for (i, d) in self
                 .devices
                 .iter_mut()
-                .chain(std::iter::once(self.host.as_mut().unwrap()))
+                .chain(std::iter::once(&mut self.host))
                 .enumerate()
             {
                 if (i as u32) != device_index && d.buffer.is_some() {
@@ -376,12 +444,12 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
         &self,
         range: BufferAccessRange,
         is_mut: bool,
+        instance: &InstanceInner<B>,
     ) -> Arc<BufferAccessFinish<B>> {
-        // TODO: make sure buffer is created
-
         // TODO: wgpu doesn't support buffer mapping while its in a command on the GPU.
         // We should in these cases request access to the entire buffer.
         let mut s = self.0.write();
+        s.setup_buffer(None, instance);
         s.num_mappings += 1;
         // Push this buffer access, update out of date ranges
         // Wait for dependencies to finish
@@ -406,13 +474,14 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
         } else {
             s.write_accesses.push_back(finish.clone());
         }
-        let mut residency = Some(s);
+        drop(s);
+        let mut s = Some(self.0.read());
         let mut any_waits = false;
         loop {
             let mut wait_is_mut = false;
             let mut wait = None;
             if is_mut {
-                for read in residency.as_ref().unwrap().read_accesses.values() {
+                for read in s.as_ref().unwrap().read_accesses.values() {
                     if read.range.intersects(&range) && read.id < my_id {
                         wait = Some(read.clone());
                         break;
@@ -420,7 +489,7 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
                 }
             }
             if wait.is_none() {
-                for write in residency.as_ref().unwrap().write_accesses.iter().rev() {
+                for write in s.as_ref().unwrap().write_accesses.iter().rev() {
                     if write.range.intersects(&range) && write.id < my_id {
                         wait_is_mut = true;
                         wait = Some(write.clone());
@@ -429,32 +498,48 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
                 }
             }
             if let Some(f) = wait {
-                drop(residency);
+                drop(s);
                 f.wait_host();
-                residency = Some(self.0.write());
                 if f.condvar.is_none() {
-                    residency
-                        .as_mut()
-                        .unwrap()
-                        .try_remove_gpu_access(f, wait_is_mut);
+                    self.0.write().try_remove_gpu_access(f, wait_is_mut);
                 }
+                s = Some(self.0.read());
                 any_waits = true;
             } else {
                 break;
             }
         }
-        let mut residency = residency.unwrap();
+        drop(s);
+        let mut s = self.0.write();
         if any_waits {
-            residency.update_all_accesses().unwrap();
+            s.update_all_accesses().unwrap();
         }
-        let _needed_waits = residency
-            .host
-            .as_mut()
-            .unwrap()
-            .ood_tracker
-            .get_needed_waits(range);
+        let _needed_waits = s.host.ood_tracker.get_needed_waits(range);
 
         // TODO: finalize copies for out of date stuff
         finish
+    }
+
+    pub fn _switch_to_storage(&self, instance: &InstanceInner<B>) {
+        let length = self.0.read().size;
+
+        let usage = self.get_cpu_access(BufferAccessRange { start: 0, length }, false, instance);
+        let mut _s = self.0.write();
+        let s = &mut *_s;
+        s.storage = Some(StorageResidencyState::new(s.size));
+        unsafe {
+            s.host
+                .buffer
+                .as_mut()
+                .unwrap()
+                .read(
+                    instance.hal_devices[0].inner.lock().as_ref().unwrap(),
+                    0,
+                    &mut s.storage.as_mut().unwrap().mapped_file,
+                )
+                .unwrap();
+        }
+        s.host.remove_buffer(instance, None);
+        s.release_cpu_access(usage, false);
     }
 }

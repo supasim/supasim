@@ -180,6 +180,7 @@ pub fn submit_command_recorders<B: hal::Backend>(
                     range.needs_mut,
                     semaphore.clone(),
                     0,
+                    &s,
                 );
                 used_buffer_ranges.push((ood_wait, b.clone()))
             }

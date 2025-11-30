@@ -299,7 +299,11 @@ impl<B: hal::Backend> Instance<B> {
             // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
             create_info: *desc,
-            residency: BufferResidencyRef(RwLock::new(BufferResidency::new(1))),
+            residency: BufferResidencyRef(RwLock::new(BufferResidency::new(
+                1,
+                desc.size,
+                desc.contents_align as u32,
+            ))),
             is_alive: true,
         });
         b.inner_mut()?.id = s.buffers.write().insert(Some(b.downgrade()));

@@ -61,12 +61,11 @@ impl<B: hal::Backend> Buffer<B> {
                 length: data.len() as u64,
             },
             true,
+            &*s.instance.inner()?,
         );
         let mut lock = s.residency.0.write();
         unsafe {
             lock.host
-                .as_mut()
-                .unwrap()
                 .buffer
                 .as_mut()
                 .unwrap()
@@ -93,12 +92,11 @@ impl<B: hal::Backend> Buffer<B> {
                 length: data.len() as u64,
             },
             false,
+            &*s.instance.inner()?,
         );
         let mut lock = s.residency.0.write();
         unsafe {
             lock.host
-                .as_mut()
-                .unwrap()
                 .buffer
                 .as_mut()
                 .unwrap()
@@ -125,16 +123,16 @@ impl<B: hal::Backend> Buffer<B> {
         let s = self.inner()?;
         let instance_props = s.instance.inner()?.hal_instance_properties;
 
-        let access = s
-            .residency
-            .get_cpu_access(BufferAccessRange { start, length }, needs_mut);
+        let access = s.residency.get_cpu_access(
+            BufferAccessRange { start, length },
+            needs_mut,
+            &*s.instance.inner()?,
+        );
         let mut residency = s.residency.0.write();
         let (mapping, vec_capacity) = if instance_props.map_buffers {
             let mapping = unsafe {
                 residency
                     .host
-                    .as_mut()
-                    .unwrap()
                     .buffer
                     .as_mut()
                     .unwrap()
@@ -246,8 +244,6 @@ impl<B: hal::Backend> Drop for MappedBuffer<'_, B> {
             unsafe {
                 residency
                     .host
-                    .as_mut()
-                    .unwrap()
                     .buffer
                     .as_mut()
                     .unwrap()
