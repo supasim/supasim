@@ -274,6 +274,9 @@ impl<B: hal::Backend> BufferResidency<B> {
             };
             dev.destroy(instance, dev_id as u32)?;
         }
+        if let Some(storage) = self.storage.take() {
+            storage.destroy();
+        }
         Ok(())
     }
 }
