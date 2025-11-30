@@ -5,8 +5,8 @@
 END LICENSE */
 
 use crate::{
-    DEVICE_SMALLVEC_SIZE, InstanceInner, MapSupasimError, SupaSimResult, buffer::BufferAccessRange,
-    sync::Semaphore,
+    buffer::BufferAccessRange, sync::Semaphore, InstanceInner, MapSupasimError, SupaSimResult,
+    DEVICE_SMALLVEC_SIZE,
 };
 use hal::Buffer;
 use memmap2::{MmapMut, MmapOptions};
