@@ -5,8 +5,8 @@
 END LICENSE */
 
 use crate::{
-    buffer::BufferAccessRange, sync::Semaphore, InstanceInner, MapSupasimError, SupaSimResult,
-    DEVICE_SMALLVEC_SIZE,
+    DEVICE_SMALLVEC_SIZE, InstanceInner, MapSupasimError, SupaSimResult, buffer::BufferAccessRange,
+    sync::Semaphore,
 };
 use hal::Buffer;
 use memmap2::{MmapMut, MmapOptions};
@@ -92,9 +92,8 @@ impl<B: hal::Backend> Default for DeviceResidencyState<B> {
 impl<B: hal::Backend> DeviceResidencyState<B> {
     fn destroy(self, instance: &InstanceInner<B>, device_idx: u32) -> SupaSimResult<B, ()> {
         unsafe {
-            self.buffer
-                .unwrap()
-                .destroy(
+            if let Some(b) = self.buffer {
+                b.destroy(
                     instance.hal_devices[device_idx as usize]
                         .inner
                         .lock()
@@ -102,6 +101,9 @@ impl<B: hal::Backend> DeviceResidencyState<B> {
                         .unwrap(),
                 )
                 .map_supasim()
+            } else {
+                Ok(())
+            }
         }
     }
 }
@@ -155,21 +157,41 @@ pub struct BufferAccessFinish<B: hal::Backend> {
 
 impl<B: hal::Backend> BufferAccessFinish<B> {
     pub fn is_complete_host(&self) -> bool {
-        if let Some(cv) = self.condvar.as_ref() {
-            let mut lock = self.is_complete.lock();
-            loop {
-                if *lock {
-                    return true;
-                }
-                cv.wait(&mut lock);
-            }
+        if self.condvar.is_some() {
+            let lock = self.is_complete.lock();
+            *lock
         } else if let Some(s) = self.device_semaphore.as_ref() {
             let lock = self.is_complete.lock();
             if *lock {
                 return true;
             }
             assert!(s.device_stream_submission.is_some());
-            s.is_signalled().unwrap()
+            let res = s.is_signalled().unwrap();
+            if res {
+                *self.is_complete.lock() = true;
+            }
+            res
+        } else {
+            unreachable!()
+        }
+    }
+    pub fn wait_host(&self) {
+        if let Some(cv) = self.condvar.as_ref() {
+            let mut lock = self.is_complete.lock();
+            loop {
+                if *lock {
+                    return;
+                }
+                cv.wait(&mut lock);
+            }
+        } else if let Some(s) = self.device_semaphore.as_ref() {
+            let lock = self.is_complete.lock();
+            if *lock {
+                return;
+            }
+            assert!(s.device_stream_submission.is_some());
+            s.wait().unwrap();
+            *self.is_complete.lock() = true;
         } else {
             unreachable!()
         }
@@ -179,8 +201,8 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
 pub struct BufferResidency<B: hal::Backend> {
     /// Residency state for each device
     pub devices: SmallVec<[DeviceResidencyState<B>; DEVICE_SMALLVEC_SIZE]>,
-    /// Residency state for the host
-    pub host: DeviceResidencyState<B>,
+    /// Residency state for the host. Optional for destruction purposes
+    pub host: Option<DeviceResidencyState<B>>,
     /// Alternative to residencystate buffer for host memory
     pub storage: Option<StorageResidencyState<B>>,
     /// Used to create indices for buffer access finishes
@@ -190,6 +212,8 @@ pub struct BufferResidency<B: hal::Backend> {
     /// Sorted by order of submission. New accesses should start from the back to find the last
     /// conflicting accesses and wait for those.
     pub write_accesses: VecDeque<Arc<BufferAccessFinish<B>>>,
+    /// Used to determine when to unmap
+    pub num_mappings: u64,
 }
 
 impl<B: hal::Backend> BufferResidency<B> {
@@ -200,11 +224,12 @@ impl<B: hal::Backend> BufferResidency<B> {
         }
         Self {
             devices,
-            host: DeviceResidencyState::default(),
+            host: Some(DeviceResidencyState::default()),
             storage: None,
             current_index: 0,
             read_accesses: HashMap::new(),
             write_accesses: VecDeque::new(),
+            num_mappings: 0,
         }
     }
 
@@ -237,78 +262,126 @@ impl<B: hal::Backend> BufferResidency<B> {
     }
 
     pub unsafe fn destroy(&mut self, instance: &InstanceInner<B>) -> SupaSimResult<B, ()> {
-        for (dev_id, dev) in &mut self.devices.iter_mut().chain([&mut self.host]).enumerate() {
-            if let Some(b) = dev.buffer.take() {
-                unsafe {
-                    let dev_id = if dev_id < instance.hal_devices.len() {
-                        dev_id
-                    } else {
-                        0
-                    };
-                    b.destroy(instance.hal_devices[dev_id].inner.lock().as_ref().unwrap())
-                        .map_supasim()?;
-                }
-            }
+        for (dev_id, dev) in std::mem::take(&mut self.devices)
+            .into_iter()
+            .chain([self.host.take().unwrap()])
+            .enumerate()
+        {
+            let dev_id = if dev_id < instance.hal_devices.len() {
+                dev_id
+            } else {
+                0
+            };
+            dev.destroy(instance, dev_id as u32)?;
         }
         Ok(())
     }
 }
-pub struct BufferResidencyRef<B: hal::Backend>(pub RwLock<BufferResidency<B>>);
-impl<B: hal::Backend> BufferResidencyRef<B> {
+impl<B: hal::Backend> BufferResidency<B> {
     pub fn add_gpu_use(
-        &self,
+        &mut self,
         range: BufferAccessRange,
         is_mut: bool,
         semaphore: Arc<Semaphore<B>>,
         device_index: u32,
     ) -> OutOfDateWait<B> {
+        // TODO: make sure buffer is created
         // Push buffer access
         // Make each dependency signal a semaphore and hook into those
         // Update out of date ranges
-        let mut _s = self.0.write();
-        let s = &mut *_s;
         let finish = Arc::new(BufferAccessFinish::<B> {
             condvar: None,
             is_complete: Mutex::new(false),
             device_semaphore: Some(semaphore),
             range,
-            id: s.current_index,
+            id: self.current_index,
         });
-        s.current_index += 1;
+        self.current_index += 1;
         if is_mut {
-            s.read_accesses.insert(finish.id, finish.clone());
-            for (i, d) in s
+            self.read_accesses.insert(finish.id, finish.clone());
+            for (i, d) in self
                 .devices
                 .iter_mut()
-                .chain(std::iter::once(&mut s.host))
+                .chain(std::iter::once(self.host.as_mut().unwrap()))
                 .enumerate()
             {
                 if (i as u32) != device_index && d.buffer.is_some() {
                     d.ood_tracker.invalidate_range(range);
                 }
             }
-            if let Some(d) = &mut s.storage {
+            if let Some(d) = &mut self.storage {
                 d.ood_tracker.invalidate_range(range);
             }
         } else {
-            s.write_accesses.push_back(finish.clone());
+            self.write_accesses.push_back(finish.clone());
         }
-        // This is just for copying
 
-        // TODO: push other dependencies to this wait
-        s.devices[device_index as usize]
+        self.update_all_accesses().unwrap();
+
+        // TODO: push other dependencies to this wait, these are only for copies
+        self.devices[device_index as usize]
             .ood_tracker
             .get_needed_waits(range)
     }
 
-    pub fn _get_cpu_access(
+    pub fn release_cpu_access(&mut self, finish: Arc<BufferAccessFinish<B>>, is_mut: bool) {
+        self.num_mappings -= 1;
+        // Update the finish, condvar, and possibly semaphore
+        // Remove from access list
+        {
+            let mut lock = finish.is_complete.lock();
+            *lock = true;
+            finish.condvar.as_ref().unwrap().notify_all();
+        }
+        if let Some(sem) = &finish.device_semaphore {
+            sem.signal().unwrap();
+        }
+        if is_mut {
+            let idx = self.write_accesses.iter().position(|a| {
+                let a: &BufferAccessFinish<B> = a.as_ref();
+                let b: &BufferAccessFinish<B> = finish.as_ref();
+                (a as *const BufferAccessFinish<B>).addr()
+                    == (b as *const BufferAccessFinish<B>).addr()
+            });
+            self.write_accesses.remove(idx.unwrap());
+        } else {
+            self.read_accesses.remove(&finish.id);
+        }
+    }
+
+    pub fn try_remove_gpu_access(&mut self, finish: Arc<BufferAccessFinish<B>>, is_mut: bool) {
+        if is_mut {
+            let idx = self.write_accesses.iter().position(|a| {
+                let a: &BufferAccessFinish<B> = a.as_ref();
+                let b: &BufferAccessFinish<B> = finish.as_ref();
+                (a as *const BufferAccessFinish<B>).addr()
+                    == (b as *const BufferAccessFinish<B>).addr()
+            });
+            if let Some(idx) = idx {
+                self.write_accesses.remove(idx);
+            }
+        } else {
+            self.read_accesses.remove(&finish.id);
+        }
+    }
+}
+
+pub struct BufferResidencyRef<B: hal::Backend>(pub RwLock<BufferResidency<B>>);
+impl<B: hal::Backend> BufferResidencyRef<B> {
+    /// This doesn't need access for a long time, in fact that would cause deadlocks
+    pub fn get_cpu_access(
         &self,
         range: BufferAccessRange,
         is_mut: bool,
     ) -> Arc<BufferAccessFinish<B>> {
+        // TODO: make sure buffer is created
+
+        // TODO: wgpu doesn't support buffer mapping while its in a command on the GPU.
+        // We should in these cases request access to the entire buffer.
+        let mut s = self.0.write();
+        s.num_mappings += 1;
         // Push this buffer access, update out of date ranges
         // Wait for dependencies to finish
-        let mut s = self.0.write();
         let finish = Arc::new(BufferAccessFinish::<B> {
             condvar: Some(Condvar::new()),
             is_complete: Mutex::new(false),
@@ -317,6 +390,7 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
             id: s.current_index,
         });
         s.current_index += 1;
+        let my_id = finish.id;
 
         if is_mut {
             s.read_accesses.insert(finish.id, finish.clone());
@@ -329,34 +403,55 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
         } else {
             s.write_accesses.push_back(finish.clone());
         }
-        drop(s);
-        // TODO: wait for dependencies to finish
+        let mut residency = Some(s);
+        let mut any_waits = false;
+        loop {
+            let mut wait_is_mut = false;
+            let mut wait = None;
+            if is_mut {
+                for read in residency.as_ref().unwrap().read_accesses.values() {
+                    if read.range.intersects(&range) && read.id < my_id {
+                        wait = Some(read.clone());
+                        break;
+                    }
+                }
+            }
+            if wait.is_none() {
+                for write in residency.as_ref().unwrap().write_accesses.iter().rev() {
+                    if write.range.intersects(&range) && write.id < my_id {
+                        wait_is_mut = true;
+                        wait = Some(write.clone());
+                        break;
+                    }
+                }
+            }
+            if let Some(f) = wait {
+                drop(residency);
+                f.wait_host();
+                residency = Some(self.0.write());
+                if f.condvar.is_none() {
+                    residency
+                        .as_mut()
+                        .unwrap()
+                        .try_remove_gpu_access(f, wait_is_mut);
+                }
+                any_waits = true;
+            } else {
+                break;
+            }
+        }
+        let mut residency = residency.unwrap();
+        if any_waits {
+            residency.update_all_accesses().unwrap();
+        }
+        let _needed_waits = residency
+            .host
+            .as_mut()
+            .unwrap()
+            .ood_tracker
+            .get_needed_waits(range);
 
+        // TODO: finalize copies for out of date stuff
         finish
-    }
-
-    pub fn _release_cpu_access(&self, finish: Arc<BufferAccessFinish<B>>, is_mut: bool) {
-        // Update the finish, condvar, and possibly semaphore
-        // Remove from access list
-        {
-            let mut lock = finish.is_complete.lock();
-            *lock = true;
-            finish.condvar.as_ref().unwrap().notify_all();
-        }
-        if let Some(sem) = &finish.device_semaphore {
-            sem.signal().unwrap();
-        }
-        let mut s = self.0.write();
-        if is_mut {
-            let idx = s.write_accesses.iter().position(|a| {
-                let a: &BufferAccessFinish<B> = a.as_ref();
-                let b: &BufferAccessFinish<B> = finish.as_ref();
-                (a as *const BufferAccessFinish<B>).addr()
-                    == (b as *const BufferAccessFinish<B>).addr()
-            });
-            s.write_accesses.remove(idx.unwrap());
-        } else {
-            s.read_accesses.remove(&finish.id);
-        }
     }
 }

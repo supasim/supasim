@@ -100,6 +100,10 @@ impl BufferAccessRange {
             None
         }
     }
+
+    pub fn intersects(&self, other: &Self) -> bool {
+        self.start < other.start + other.length && other.start < self.start + self.length
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
