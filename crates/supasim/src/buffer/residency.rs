@@ -24,6 +24,7 @@ use types::{HalBufferDescriptor, HalBufferType};
 pub struct OutOfDateWait<B: hal::Backend> {
     semaphores: Vec<Arc<Semaphore<B>>>,
     other_copy_range: Option<BufferAccessRange>,
+    other_copy_finish: BufferAccessFinish<B>,
 }
 
 #[derive(Default)]
@@ -468,9 +469,7 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
             for d in &mut s.devices {
                 d.ood_tracker.invalidate_range(range);
             }
-            if let Some(d) = &mut s.storage {
-                d.ood_tracker.invalidate_range(range);
-            }
+            s.host.ood_tracker.update_range_immediate(range);
         } else {
             s.write_accesses.push_back(finish.clone());
         }
