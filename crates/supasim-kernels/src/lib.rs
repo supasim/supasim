@@ -512,8 +512,6 @@ impl GlobalState {
         let program = session
             .create_composite_component_type(&[module.downcast().clone(), ep.downcast().clone()])?;
 
-        // TODO: get reflection info about params
-
         let mut reflection_params = Vec::new();
         let mut workgroup_size = [0; 3];
         let subgroup_size;
