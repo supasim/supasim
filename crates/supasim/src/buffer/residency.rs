@@ -171,19 +171,19 @@ impl<B: hal::Backend> StorageResidencyState<B> {
 /// Contains data for waiting on a buffer access
 pub struct BufferAccessFinish<B: hal::Backend> {
     /// The conditional variable, only used in CPU->CPU synchronization
-    condvar: Option<Condvar>,
+    pub condvar: Option<Condvar>,
     /// This is set by the CPU before ringing the condvar. This is set when
     /// the work is first observed to be done, including for GPU work, to
     /// avoid unnecessary underlying semaphore operations.
-    is_complete: Mutex<bool>,
+    pub is_complete: Mutex<bool>,
     /// Always some for GPU work. CPU work will not set this itself, but
     /// GPU work may come later and set this such that the CPU will signal
     /// it when finished.
-    device_semaphore: Option<Arc<Semaphore<B>>>,
+    pub device_semaphore: Option<Arc<Semaphore<B>>>,
     /// The range that is being accessed
-    range: BufferAccessRange,
+    pub range: BufferAccessRange,
     /// The ID used to look this up in a more efficient hashmap
-    id: u64,
+    pub id: u64,
 }
 
 impl<B: hal::Backend> BufferAccessFinish<B> {
@@ -396,6 +396,42 @@ impl<B: hal::Backend> BufferResidency<B> {
             .get_needed_waits(range)
     }
 
+    /// This doesn't actually wait for anything
+    pub fn get_cpu_access(
+        &mut self,
+        range: BufferAccessRange,
+        is_mut: bool,
+        instance: &InstanceInner<B>,
+    ) -> Arc<BufferAccessFinish<B>> {
+        // TODO: wgpu doesn't support buffer mapping while its in a command on the GPU.
+        // We should in these cases request access to the entire buffer.
+        self.setup_buffer(None, instance);
+        self.num_mappings += 1;
+        // Push this buffer access, update out of date ranges
+        // Wait for dependencies to finish
+        let finish = Arc::new(BufferAccessFinish::<B> {
+            condvar: Some(Condvar::new()),
+            is_complete: Mutex::new(false),
+            device_semaphore: None,
+            range,
+            id: self.current_index,
+        });
+        self.current_index += 1;
+
+        if is_mut {
+            self.read_accesses.insert(finish.id, finish.clone());
+            for d in &mut self.devices {
+                d.ood_tracker.invalidate_range(range);
+            }
+            self.host.ood_tracker.update_range_immediate(range);
+        } else {
+            self.write_accesses.push_back(finish.clone());
+        }
+
+        // TODO: finalize copies for out of date stuff
+        finish
+    }
+
     pub fn release_cpu_access(&mut self, finish: Arc<BufferAccessFinish<B>>, is_mut: bool) {
         self.num_mappings -= 1;
         // Update the finish, condvar, and possibly semaphore
@@ -440,40 +476,7 @@ impl<B: hal::Backend> BufferResidency<B> {
 
 pub struct BufferResidencyRef<B: hal::Backend>(pub RwLock<BufferResidency<B>>);
 impl<B: hal::Backend> BufferResidencyRef<B> {
-    /// This doesn't need access for a long time, in fact that would cause deadlocks
-    pub fn get_cpu_access(
-        &self,
-        range: BufferAccessRange,
-        is_mut: bool,
-        instance: &InstanceInner<B>,
-    ) -> Arc<BufferAccessFinish<B>> {
-        // TODO: wgpu doesn't support buffer mapping while its in a command on the GPU.
-        // We should in these cases request access to the entire buffer.
-        let mut s = self.0.write();
-        s.setup_buffer(None, instance);
-        s.num_mappings += 1;
-        // Push this buffer access, update out of date ranges
-        // Wait for dependencies to finish
-        let finish = Arc::new(BufferAccessFinish::<B> {
-            condvar: Some(Condvar::new()),
-            is_complete: Mutex::new(false),
-            device_semaphore: None,
-            range,
-            id: s.current_index,
-        });
-        s.current_index += 1;
-        let my_id = finish.id;
-
-        if is_mut {
-            s.read_accesses.insert(finish.id, finish.clone());
-            for d in &mut s.devices {
-                d.ood_tracker.invalidate_range(range);
-            }
-            s.host.ood_tracker.update_range_immediate(range);
-        } else {
-            s.write_accesses.push_back(finish.clone());
-        }
-        drop(s);
+    pub fn wait_for_cpu_access(&self, range: BufferAccessRange, is_mut: bool, my_id: u64) {
         let mut s = Some(self.0.read());
         let mut any_waits = false;
         loop {
@@ -514,15 +517,16 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
             s.update_all_accesses().unwrap();
         }
         let _needed_waits = s.host.ood_tracker.get_needed_waits(range);
-
-        // TODO: finalize copies for out of date stuff
-        finish
     }
 
     pub fn _switch_to_storage(&self, instance: &InstanceInner<B>) {
         let length = self.0.read().size;
 
-        let usage = self.get_cpu_access(BufferAccessRange { start: 0, length }, false, instance);
+        let usage =
+            self.0
+                .write()
+                .get_cpu_access(BufferAccessRange { start: 0, length }, false, instance);
+        self.wait_for_cpu_access(BufferAccessRange { start: 0, length }, false, usage.id);
         let mut _s = self.0.write();
         let s = &mut *_s;
         s.storage = Some(StorageResidencyState::new(s.size));

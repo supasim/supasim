@@ -8,19 +8,22 @@ use hal::Buffer as _;
 
 use crate::{
     Buffer, BufferSlice, Instance, MapSupasimError, SupaSimError, SupaSimResult,
-    buffer::{BufferAccessRange, residency::BufferAccessFinish},
+    buffer::{
+        BufferAccessRange,
+        residency::{BufferAccessFinish, BufferResidency},
+    },
 };
-use std::{marker::PhantomData, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 pub type UserBufferAccessClosure<'a, B> =
-    Box<dyn FnOnce(&mut [MappedBuffer<'a, B>]) -> anyhow::Result<()>>;
+    Box<dyn FnOnce(&mut [MappedBuffer<B>]) -> anyhow::Result<()>>;
 
 pub type SendableUserBufferAccessClosure<B> =
-    Box<dyn Send + FnOnce(&mut [MappedBuffer<'_, B>]) -> anyhow::Result<()>>;
+    Box<dyn Send + FnOnce(&mut [MappedBuffer<B>]) -> anyhow::Result<()>>;
 
 /// If the entire buffer isn't the same type you are trying to read, read as bytes first then cast yourself.
 /// SupaSim does checks for alignments and validates offsets with the size of types
-pub struct MappedBuffer<'a, B: hal::Backend> {
+pub struct MappedBuffer<B: hal::Backend> {
     _instance: Instance<B>,
     inner: *mut u8,
     len: u64,
@@ -32,7 +35,6 @@ pub struct MappedBuffer<'a, B: hal::Backend> {
     access: Arc<BufferAccessFinish<B>>,
     /// Size of the vector in which the data is allocated for non memory mapping scenarios
     vec_capacity: Option<usize>,
-    _p: PhantomData<&'a ()>,
 }
 
 impl<B: hal::Backend> Instance<B> {
@@ -43,11 +45,48 @@ impl<B: hal::Backend> Instance<B> {
     /// This should only used to do quick operations on memory.
     #[allow(clippy::type_complexity)]
     pub fn access_buffers(
-        &self,
-        _closure: UserBufferAccessClosure<B>,
-        _buffers: &[&BufferSlice<B>],
-    ) -> SupaSimResult<B, ()> {
-        todo!()
+        &'_ self,
+        buffers: &[&BufferSlice<B>],
+    ) -> SupaSimResult<B, Vec<MappedBuffer<B>>> {
+        let instance = self.inner()?;
+        // This function will be absolutely gross
+        let mut buffer_locks = HashMap::new();
+        let mut residency_locks = HashMap::new();
+        let mut first_id = HashMap::new();
+        let mut accesses = Vec::with_capacity(buffers.len());
+        for buffer in buffers {
+            let b_inner = buffer.buffer.inner()?;
+            buffer_locks.entry(b_inner.id).or_insert(b_inner);
+        }
+        for (id, lock) in &mut buffer_locks {
+            residency_locks.insert(id, lock.residency.0.write());
+        }
+        for b in buffers {
+            let id = b.buffer.inner()?.id;
+
+            let residency = residency_locks.get_mut(&id).unwrap();
+            let access = residency.get_cpu_access(b.range().into(), b.needs_mut, &instance);
+            first_id.entry(id).or_insert(access.id);
+            accesses.push((access, id, b.needs_mut, b.buffer.clone()));
+        }
+        drop(residency_locks);
+        let mut mapped_buffers = Vec::with_capacity(buffers.len());
+        for &(ref access, buffer_id, is_mut, ref buffer) in &accesses {
+            let my_id = first_id[&buffer_id];
+            let residency = &buffer_locks[&buffer_id].residency;
+
+            residency.wait_for_cpu_access(access.range, is_mut, my_id);
+            let mapped = MappedBuffer::new(
+                &mut residency.0.write(),
+                buffer.clone(),
+                access.range.start,
+                access.range.length,
+                is_mut,
+                access.clone(),
+            );
+            mapped_buffers.push(mapped);
+        }
+        Ok(mapped_buffers)
     }
 }
 
@@ -55,13 +94,21 @@ impl<B: hal::Backend> Buffer<B> {
     pub fn write<T: bytemuck::Pod>(&self, start: u64, data: &[T]) -> SupaSimResult<B, ()> {
         let s = self.inner()?;
         let data = bytemuck::cast_slice::<T, u8>(data);
-        let access = s.residency.get_cpu_access(
+        let access = s.residency.0.write().get_cpu_access(
             BufferAccessRange {
                 start,
                 length: data.len() as u64,
             },
             true,
             &*s.instance.inner()?,
+        );
+        s.residency.wait_for_cpu_access(
+            BufferAccessRange {
+                start,
+                length: data.len() as u64,
+            },
+            true,
+            access.id,
         );
         let mut lock = s.residency.0.write();
         unsafe {
@@ -86,13 +133,21 @@ impl<B: hal::Backend> Buffer<B> {
     pub fn read<T: bytemuck::Pod>(&self, start: u64, out: &mut [T]) -> SupaSimResult<B, ()> {
         let s = self.inner()?;
         let data = bytemuck::cast_slice_mut::<T, u8>(out);
-        let access = s.residency.get_cpu_access(
+        let access = s.residency.0.write().get_cpu_access(
             BufferAccessRange {
                 start,
                 length: data.len() as u64,
             },
             false,
             &*s.instance.inner()?,
+        );
+        s.residency.wait_for_cpu_access(
+            BufferAccessRange {
+                start,
+                length: data.len() as u64,
+            },
+            false,
+            access.id,
         );
         let mut lock = s.residency.0.write();
         unsafe {
@@ -119,60 +174,30 @@ impl<B: hal::Backend> Buffer<B> {
         start: u64,
         length: u64,
         needs_mut: bool,
-    ) -> SupaSimResult<B, MappedBuffer<'_, B>> {
+    ) -> SupaSimResult<B, MappedBuffer<B>> {
         let s = self.inner()?;
-        let instance_props = s.instance.inner()?.hal_instance_properties;
 
-        let access = s.residency.get_cpu_access(
+        let access = s.residency.0.write().get_cpu_access(
             BufferAccessRange { start, length },
             needs_mut,
             &*s.instance.inner()?,
         );
+        s.residency
+            .wait_for_cpu_access(BufferAccessRange { start, length }, needs_mut, access.id);
+
         let mut residency = s.residency.0.write();
-        let (mapping, vec_capacity) = if instance_props.map_buffers {
-            let mapping = unsafe {
-                residency
-                    .host
-                    .buffer
-                    .as_mut()
-                    .unwrap()
-                    .map(
-                        s.instance.inner()?.hal_devices[0]
-                            .inner
-                            .lock()
-                            .as_ref()
-                            .unwrap(),
-                    )
-                    .map_supasim()?
-                    .add(start as usize)
-            };
-            (mapping, None)
-        } else {
-            let mut vec = vec![0u8; length as usize];
-            self.read(start, &mut vec)?;
-            let ptr = vec.as_mut_ptr();
-            let cap = vec.capacity();
-            std::mem::forget(vec);
-            (ptr, Some(cap))
-        };
-        drop(residency);
-        Ok(MappedBuffer {
-            _instance: s.instance.clone(),
-            inner: mapping,
-            len: length,
-            buffer_align: s.create_info.contents_align,
-            in_buffer_offset: start,
-            has_mut: needs_mut,
-            was_used_mut: false,
-            buffer: self.clone(),
+        Ok(MappedBuffer::new(
+            &mut residency,
+            self.clone(),
+            start,
+            length,
+            needs_mut,
             access,
-            vec_capacity,
-            _p: Default::default(),
-        })
+        ))
     }
 }
 
-impl<B: hal::Backend> MappedBuffer<'_, B> {
+impl<B: hal::Backend> MappedBuffer<B> {
     pub fn readable<T: bytemuck::Pod>(&self) -> SupaSimResult<B, &[T]> {
         let s = unsafe { std::slice::from_raw_parts(self.inner, self.len as usize) };
         // Length of the slice is a multiple of the length of the type
@@ -206,9 +231,63 @@ impl<B: hal::Backend> MappedBuffer<'_, B> {
             Err(SupaSimError::BufferRegionNotValid)
         }
     }
+
+    fn new(
+        residency: &mut BufferResidency<B>,
+        buffer: Buffer<B>,
+        start: u64,
+        length: u64,
+        needs_mut: bool,
+        access: Arc<BufferAccessFinish<B>>,
+    ) -> Self {
+        let b = buffer.inner().unwrap();
+        let instance_props = b.instance.inner().unwrap().hal_instance_properties;
+        let (mapping, vec_capacity) = if instance_props.map_buffers {
+            let mapping = unsafe {
+                residency
+                    .host
+                    .buffer
+                    .as_mut()
+                    .unwrap()
+                    .map(
+                        b.instance.inner().unwrap().hal_devices[0]
+                            .inner
+                            .lock()
+                            .as_ref()
+                            .unwrap(),
+                    )
+                    .unwrap()
+                    .add(start as usize)
+            };
+            (mapping, None)
+        } else {
+            let mut vec = vec![0u8; length as usize];
+            buffer.read(start, &mut vec).unwrap();
+            let ptr = vec.as_mut_ptr();
+            let cap = vec.capacity();
+            std::mem::forget(vec);
+            (ptr, Some(cap))
+        };
+        let buffer_align = b.create_info.contents_align;
+        let _instance = b.instance.clone();
+        drop(b);
+
+        MappedBuffer {
+            _instance,
+            inner: mapping,
+            len: length,
+            buffer_align,
+            in_buffer_offset: start,
+            has_mut: needs_mut,
+            was_used_mut: false,
+            buffer,
+            access,
+            vec_capacity,
+        }
+    }
 }
 
-impl<B: hal::Backend> Drop for MappedBuffer<'_, B> {
+impl<B: hal::Backend> Drop for MappedBuffer<B> {
     fn drop(&mut self) {
         let s = self.buffer.inner().unwrap();
         let mut residency = s.residency.0.write();
