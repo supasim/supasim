@@ -86,13 +86,7 @@ impl<B: hal::Backend> DeviceResidencyState<B> {
     fn new(size: u64) -> Self {
         Self {
             buffer: None,
-            ood_tracker: OutOfDateTracker {
-                out_of_date_ranges: vec![BufferAccessRange {
-                    start: 0,
-                    length: size,
-                }],
-                current_copies: vec![],
-            },
+            ood_tracker: OutOfDateTracker::uninit(size),
         }
     }
 
@@ -294,7 +288,7 @@ impl<B: hal::Backend> BufferResidency<B> {
                         .unwrap(),
                 )
             };
-            thing.ood_tracker = DeviceResidencyState::new(self.size).ood_tracker;
+            thing.ood_tracker = OutOfDateTracker::uninit(self.size);
         }
     }
 
