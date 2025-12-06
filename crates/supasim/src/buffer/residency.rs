@@ -33,8 +33,9 @@ struct OutOfDateTracker<B: hal::Backend> {
     ///
     /// This represents ranges that are out of date after copies and operations finish.
     out_of_date_ranges: Vec<BufferAccessRange>,
-    /// Copies that will make ranges valid when complete
-    current_copies: Vec<Arc<BufferAccessFinish<B>>>,
+    /// Copies that will make ranges valid when complete. Second element is the actual range that will be updated.
+    /// This may be shortened as immediate updates occur.
+    current_copies: Vec<(Arc<BufferAccessFinish<B>>, BufferAccessRange)>,
 }
 
 impl<B: hal::Backend> OutOfDateTracker<B> {
@@ -68,7 +69,7 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
     /// Applies updates from copies that have completed
     pub fn check_all_current_copies(&mut self) {
         for i in (0..self.current_copies.len()).rev() {
-            if self.current_copies[i].is_complete_host() {
+            if self.current_copies[i].1.length == 0 || self.current_copies[i].0.is_complete_host() {
                 self.current_copies.remove(i);
             }
         }
