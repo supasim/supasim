@@ -753,12 +753,6 @@ impl<B: hal::Backend> WaitHandle<B> {
     }
 }
 
-#[allow(clippy::type_complexity)]
-pub type CpuCallback<B> = (
-    Box<dyn Fn(Vec<MappedBuffer<B>>) -> Result<(), SupaSimError<B>>>,
-    Vec<Buffer<B>>,
-);
-
 api_type!(ExternalSemaphore, {
     _instance: Instance<B>,
     _id: Index,

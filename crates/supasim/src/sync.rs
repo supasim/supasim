@@ -18,6 +18,7 @@ use types::SyncMode;
 pub struct Semaphore<B: hal::Backend> {
     /// This will be Some until the semaphore is destroyed.
     pub inner: Option<RwLock<B::Semaphore>>,
+    // TODO: should this just be bool for whether its GPU?
     /// The device, stream and submission that will signal it. If None, then the host will signal.
     pub device_stream_submission: Option<(u16, u16, u64)>,
     instance: Instance<B>,
