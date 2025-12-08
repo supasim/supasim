@@ -5,7 +5,7 @@
 END LICENSE */
 
 use crate::{
-    Buffer, Instance, Kernel, SupaSimError, SupaSimResult, buffer::residency::OutOfDateWait,
+    Buffer, Instance, Kernel, SupaSimError, SupaSimResult, buffer::ood::OutOfDateWait,
     sync::SubmissionResources,
 };
 use parking_lot::{Condvar, Mutex};

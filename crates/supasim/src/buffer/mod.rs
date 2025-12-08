@@ -5,6 +5,7 @@
 END LICENSE */
 
 pub mod access;
+pub mod ood;
 pub mod residency;
 
 use crate::{Instance, InstanceInner, SupaSimError, SupaSimResult};
