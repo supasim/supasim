@@ -163,6 +163,21 @@ impl<B: hal::Backend> InstanceInner<B> {
         }
         Ok(())
     }
+
+    fn get_semaphore(&self) -> SupaSimResult<B, B::Semaphore> {
+        Ok(if let Some(s) = self.unused_semaphores.lock().pop() {
+            s
+        } else {
+            unsafe {
+                self.hal_instance
+                    .read()
+                    .as_ref()
+                    .unwrap()
+                    .create_semaphore()
+                    .map_supasim()?
+            }
+        })
+    }
 }
 
 impl<B: hal::Backend> Instance<B> {

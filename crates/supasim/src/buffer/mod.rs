@@ -89,7 +89,7 @@ impl From<BufferRange> for BufferAccessRange {
 }
 
 impl BufferAccessRange {
-    pub fn _join(&self, other: &Self) -> Option<Self> {
+    pub fn join(&self, other: &Self) -> Option<Self> {
         if self.start < (other.start + other.length) && other.start < (self.start + self.length) {
             let start = self.start.min(other.start);
             Some(Self {
@@ -103,6 +103,44 @@ impl BufferAccessRange {
 
     pub fn intersects(&self, other: &Self) -> bool {
         self.start < other.start + other.length && other.start < self.start + self.length
+    }
+
+    pub fn subtract(&self, other: &Self) -> (Self, Option<Self>) {
+        let self_end = self.start + self.length;
+        let other_end = other.start + other.length;
+        if !self.intersects(other) {
+            return (*self, None);
+        }
+
+        let mut r1 = None;
+        let mut r2 = None;
+
+        if self.start < other.start {
+            r1 = Some(BufferAccessRange {
+                start: self.start,
+                length: other.start - self.start,
+            });
+        }
+
+        if self_end > other_end {
+            let r = BufferAccessRange {
+                start: other_end,
+                length: self_end - other_end,
+            };
+            if r1.is_none() {
+                r1 = Some(r);
+            } else {
+                r2 = Some(r);
+            }
+        }
+
+        (
+            r1.unwrap_or(BufferAccessRange {
+                start: 0,
+                length: 0,
+            }),
+            r2,
+        )
     }
 }
 

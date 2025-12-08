@@ -75,7 +75,7 @@ impl<B: hal::Backend> Instance<B> {
             let my_id = first_id[&buffer_id];
             let residency = &buffer_locks[&buffer_id].residency;
 
-            residency.wait_for_cpu_access(access.range, is_mut, my_id);
+            residency.wait_for_cpu_access(access.range, is_mut, my_id, &instance);
             let mapped = MappedBuffer::new(
                 &mut residency.0.write(),
                 buffer.clone(),
@@ -109,6 +109,7 @@ impl<B: hal::Backend> Buffer<B> {
             },
             true,
             access.id,
+            &*s.instance.inner()?,
         );
         let mut lock = s.residency.0.write();
         unsafe {
@@ -148,6 +149,7 @@ impl<B: hal::Backend> Buffer<B> {
             },
             false,
             access.id,
+            &*s.instance.inner()?,
         );
         let mut lock = s.residency.0.write();
         unsafe {
@@ -182,8 +184,12 @@ impl<B: hal::Backend> Buffer<B> {
             needs_mut,
             &*s.instance.inner()?,
         );
-        s.residency
-            .wait_for_cpu_access(BufferAccessRange { start, length }, needs_mut, access.id);
+        s.residency.wait_for_cpu_access(
+            BufferAccessRange { start, length },
+            needs_mut,
+            access.id,
+            &*s.instance.inner()?,
+        );
 
         let mut residency = s.residency.0.write();
         Ok(MappedBuffer::new(

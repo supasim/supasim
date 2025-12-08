@@ -6,6 +6,10 @@ END LICENSE */
 
 // TODO: handle WGPU where combined upload & download buffers are unsupported
 
+// TODO: switch to binary tree search for all kinds of stuff
+
+// TODO: optimize and validate all OOD logic
+
 use crate::{
     DEVICE_SMALLVEC_SIZE, InstanceInner, MapSupasimError, SupaSimResult, buffer::BufferAccessRange,
     sync::Semaphore,
@@ -23,8 +27,7 @@ use types::{HalBufferDescriptor, HalBufferType};
 
 pub struct OutOfDateWait<B: hal::Backend> {
     semaphores: Vec<Arc<Semaphore<B>>>,
-    other_copy_range: Option<BufferAccessRange>,
-    other_copy_finish: BufferAccessFinish<B>,
+    other_copy_range: Option<BufferAccessFinish<B>>,
 }
 
 #[derive(Default)]
@@ -47,23 +50,149 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
     }
 
     /// Mark range as up to date
-    pub fn update_range_immediate(&mut self, _range: BufferAccessRange) {
-        todo!()
+    pub fn update_range_immediate(&mut self, range: BufferAccessRange) {
+        // TODO: This is written terribly lol
+        let mut i = 0;
+        while i < self.out_of_date_ranges.len() {
+            let other = self.out_of_date_ranges[i];
+            let subtract = other.subtract(&range);
+            if subtract.0.length == 0 {
+                self.out_of_date_ranges.remove(i);
+                continue;
+            }
+            self.out_of_date_ranges[i] = subtract.0;
+            if let Some(second) = subtract.1 {
+                self.out_of_date_ranges.insert(i + 1, second);
+                i += 1;
+            }
+            i += 1;
+        }
     }
 
     /// Mark range as not up to date
-    pub fn invalidate_range(&mut self, _range: BufferAccessRange) {
-        todo!()
+    pub fn invalidate_range(&mut self, range: BufferAccessRange) {
+        // TODO: This is written terribly lol
+        if range.length == 0 {
+            return;
+        }
+        let mut index = usize::MAX;
+        let mut combined_range = range; // This will always be overridden
+        for i in 0..self.out_of_date_ranges.len() {
+            let other_range = self.out_of_date_ranges[i];
+            if let Some(joined) = other_range.join(&range) {
+                self.out_of_date_ranges[i] = joined;
+                index = i;
+                combined_range = joined;
+                break;
+            } else if range.start < other_range.start {
+                self.out_of_date_ranges.insert(i, range);
+                return;
+            }
+        }
+
+        if index == usize::MAX {
+            self.out_of_date_ranges.push(range);
+            return;
+        }
+
+        let mut last_index_to_join = index;
+        while last_index_to_join < self.out_of_date_ranges.len() - 1 {
+            last_index_to_join += 1;
+            if let Some(combined) =
+                combined_range.join(&self.out_of_date_ranges[last_index_to_join])
+            {
+                combined_range = combined;
+            } else {
+                last_index_to_join -= 1;
+                break;
+            }
+        }
+        self.out_of_date_ranges[index] = combined_range;
+        self.out_of_date_ranges
+            .drain(index + 1..=last_index_to_join);
     }
 
     /// Mark range as up to date when something finishes
-    pub fn update_range_delayed(&mut self, _finish: BufferAccessFinish<B>) {
-        todo!()
+    pub fn update_range_delayed(&mut self, finish: Arc<BufferAccessFinish<B>>) {
+        let range = finish.range;
+        self.update_range_immediate(range);
+        self.current_copies.push((finish, range));
     }
 
     /// Returns what needs to be waited for and what needs to be copied
-    pub fn get_needed_waits(&mut self, _range: BufferAccessRange) -> OutOfDateWait<B> {
-        todo!()
+    ///
+    /// It is the responsibility of the caller to setup the extra copy's
+    /// id and such.
+    pub fn get_needed_waits(
+        &mut self,
+        range: BufferAccessRange,
+        instance: &InstanceInner<B>,
+    ) -> OutOfDateWait<B> {
+        // TODO: This is written terribly lol
+        if range.length == 0 {
+            return OutOfDateWait {
+                semaphores: Vec::new(),
+                other_copy_range: None,
+            };
+        }
+        self.check_all_current_copies();
+        let mut waits = Vec::new();
+        let mut needing_copy = vec![range];
+        for &(ref copy, other_range) in &self.current_copies {
+            if range.intersects(&other_range) {
+                {
+                    let mut lock = copy.device_semaphore.lock();
+                    if lock.is_none() {
+                        *lock = Some(Arc::new(Semaphore {
+                            inner: Some(RwLock::new(instance.get_semaphore().unwrap())),
+                            device_stream_submission: Some((u16::MAX, u16::MAX, u64::MAX)),
+                            instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
+                        }))
+                    }
+                    waits.push(lock.clone().unwrap());
+                }
+
+                let mut i = 0;
+                while i < needing_copy.len() && !needing_copy.is_empty() {
+                    let diff = needing_copy[i].subtract(&other_range);
+                    if diff.0.length == 0 {
+                        needing_copy.remove(i);
+                        continue;
+                    }
+                    needing_copy[i] = diff.0;
+                    i += 1;
+                    if let Some(o) = diff.1 {
+                        needing_copy.insert(i, o);
+                        i += 1;
+                    }
+                }
+            }
+        }
+        let extra_copy = if needing_copy.is_empty() {
+            None
+        } else {
+            let start = needing_copy.iter().min_by_key(|a| a.start).unwrap().start;
+            let end = needing_copy
+                .iter()
+                .max_by_key(|a| a.start + a.length)
+                .unwrap();
+            let end = end.start + end.length;
+            let range = BufferAccessRange {
+                start,
+                length: end - start,
+            };
+            Some(BufferAccessFinish {
+                condvar: None,
+                is_complete: Mutex::new(false),
+                device_semaphore: Mutex::new(None),
+                range,
+                id: u64::MAX,
+            })
+        };
+        OutOfDateWait {
+            semaphores: waits,
+            other_copy_range: extra_copy,
+        }
     }
 
     /// Applies updates from copies that have completed
@@ -174,7 +303,7 @@ pub struct BufferAccessFinish<B: hal::Backend> {
     /// Always some for GPU work. CPU work will not set this itself, but
     /// GPU work may come later and set this such that the CPU will signal
     /// it when finished.
-    pub device_semaphore: Option<Arc<Semaphore<B>>>,
+    pub device_semaphore: Mutex<Option<Arc<Semaphore<B>>>>,
     /// The range that is being accessed
     pub range: BufferAccessRange,
     /// The ID used to look this up in a more efficient hashmap
@@ -186,7 +315,7 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
         if self.condvar.is_some() {
             let lock = self.is_complete.lock();
             *lock
-        } else if let Some(s) = self.device_semaphore.as_ref() {
+        } else if let Some(s) = self.device_semaphore.lock().as_ref() {
             let lock = self.is_complete.lock();
             if *lock {
                 return true;
@@ -210,7 +339,7 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
                 }
                 cv.wait(&mut lock);
             }
-        } else if let Some(s) = self.device_semaphore.as_ref() {
+        } else if let Some(s) = self.device_semaphore.lock().as_ref() {
             let lock = self.is_complete.lock();
             if *lock {
                 return;
@@ -359,7 +488,7 @@ impl<B: hal::Backend> BufferResidency<B> {
         let finish = Arc::new(BufferAccessFinish::<B> {
             condvar: None,
             is_complete: Mutex::new(false),
-            device_semaphore: Some(semaphore),
+            device_semaphore: Mutex::new(Some(semaphore)),
             range,
             id: self.current_index,
         });
@@ -385,10 +514,38 @@ impl<B: hal::Backend> BufferResidency<B> {
 
         self.update_all_accesses().unwrap();
 
-        // TODO: push other dependencies to this wait, these are only for copies
-        self.devices[device_index as usize]
+        let mut wait = self.devices[device_index as usize]
             .ood_tracker
-            .get_needed_waits(range)
+            .get_needed_waits(range, instance);
+        if is_mut {
+            for finish in self.read_accesses.values() {
+                if finish.range.intersects(&range) {
+                    let mut lock = finish.device_semaphore.lock();
+                    if lock.is_none() {
+                        *lock = Some(Arc::new(Semaphore {
+                            inner: Some(RwLock::new(instance.get_semaphore().unwrap())),
+                            device_stream_submission: Some((u16::MAX, u16::MAX, u64::MAX)),
+                            instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
+                        }))
+                    }
+                    wait.semaphores.push(lock.clone().unwrap());
+                }
+            }
+        }
+        for finish in &self.write_accesses {
+            if finish.range.intersects(&range) {
+                let mut lock = finish.device_semaphore.lock();
+                if lock.is_none() {
+                    *lock = Some(Arc::new(Semaphore {
+                        inner: Some(RwLock::new(instance.get_semaphore().unwrap())),
+                        device_stream_submission: Some((u16::MAX, u16::MAX, u64::MAX)),
+                        instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
+                    }))
+                }
+                wait.semaphores.push(lock.clone().unwrap());
+            }
+        }
+        wait
     }
 
     /// This doesn't actually wait for anything
@@ -407,7 +564,7 @@ impl<B: hal::Backend> BufferResidency<B> {
         let finish = Arc::new(BufferAccessFinish::<B> {
             condvar: Some(Condvar::new()),
             is_complete: Mutex::new(false),
-            device_semaphore: None,
+            device_semaphore: Mutex::new(None),
             range,
             id: self.current_index,
         });
@@ -436,7 +593,7 @@ impl<B: hal::Backend> BufferResidency<B> {
             *lock = true;
             finish.condvar.as_ref().unwrap().notify_all();
         }
-        if let Some(sem) = &finish.device_semaphore {
+        if let Some(sem) = &*finish.device_semaphore.lock() {
             sem.signal().unwrap();
         }
         if is_mut {
@@ -471,7 +628,13 @@ impl<B: hal::Backend> BufferResidency<B> {
 
 pub struct BufferResidencyRef<B: hal::Backend>(pub RwLock<BufferResidency<B>>);
 impl<B: hal::Backend> BufferResidencyRef<B> {
-    pub fn wait_for_cpu_access(&self, range: BufferAccessRange, is_mut: bool, my_id: u64) {
+    pub fn wait_for_cpu_access(
+        &self,
+        range: BufferAccessRange,
+        is_mut: bool,
+        my_id: u64,
+        instance: &InstanceInner<B>,
+    ) {
         let mut s = Some(self.0.read());
         let mut any_waits = false;
         loop {
@@ -511,7 +674,7 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
         if any_waits {
             s.update_all_accesses().unwrap();
         }
-        let _needed_waits = s.host.ood_tracker.get_needed_waits(range);
+        let _needed_waits = s.host.ood_tracker.get_needed_waits(range, instance);
     }
 
     pub fn _switch_to_storage(&self, instance: &InstanceInner<B>) {
@@ -521,7 +684,12 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
             self.0
                 .write()
                 .get_cpu_access(BufferAccessRange { start: 0, length }, false, instance);
-        self.wait_for_cpu_access(BufferAccessRange { start: 0, length }, false, usage.id);
+        self.wait_for_cpu_access(
+            BufferAccessRange { start: 0, length },
+            false,
+            usage.id,
+            instance,
+        );
         let mut _s = self.0.write();
         let s = &mut *_s;
         s.storage = Some(StorageResidencyState::new(s.size));

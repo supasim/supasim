@@ -8,7 +8,7 @@ use crate::{
     Instance, MapSupasimError, SupaSimError, SupaSimResult, WaitHandle, WaitHandleInner, record,
     sync_thread::GpuSubmissionInfo,
 };
-use hal::{BackendInstance, CommandRecorder as _, Semaphore as _, Stream};
+use hal::{CommandRecorder as _, Semaphore as _, Stream};
 use parking_lot::RwLock;
 use std::{collections::HashSet, sync::Arc};
 use thunderdome::Index;
@@ -21,7 +21,7 @@ pub struct Semaphore<B: hal::Backend> {
     // TODO: should this just be bool for whether its GPU?
     /// The device, stream and submission that will signal it. If None, then the host will signal.
     pub device_stream_submission: Option<(u16, u16, u64)>,
-    instance: Instance<B>,
+    pub instance: Instance<B>,
 }
 
 impl<B: hal::Backend> Semaphore<B> {
@@ -101,18 +101,7 @@ pub fn submit_command_recorders<B: hal::Backend>(
     let submission_idx;
     let semaphore;
     {
-        let semaphore_raw = if let Some(s) = s.unused_semaphores.lock().pop() {
-            s
-        } else {
-            unsafe {
-                s.hal_instance
-                    .read()
-                    .as_ref()
-                    .unwrap()
-                    .create_semaphore()
-                    .map_supasim()?
-            }
-        };
+        let semaphore_raw = s.get_semaphore()?;
         let mut recorder_locks = Vec::new();
         for r in recorders.iter() {
             r.check_destroyed()?;
