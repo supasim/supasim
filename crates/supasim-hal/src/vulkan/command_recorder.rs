@@ -1,3 +1,9 @@
+/* BEGIN LICENSE
+  SupaSim, a GPGPU and simulation toolkit.
+  Copyright (C) 2025 Magnus Larsson
+  SPDX-License-Identifier: MIT OR Apache-2.0
+END LICENSE */
+
 use crate::{
     Backend, BufferCommand, CommandRecorder, HalBufferSlice, Vulkan,
     vulkan::{VulkanBuffer, VulkanError, VulkanStream},
