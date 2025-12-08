@@ -105,7 +105,10 @@ impl Wgpu {
             features |= wgpu::Features::SHADER_INT64_ATOMIC_ALL_OPS;
         }
         let unified_memory = preset_unified_memory.unwrap_or(false);
-        if unified_memory {
+        if adapter
+            .features()
+            .contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS)
+        {
             features |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
         }
         let (device, queue) =
@@ -163,7 +166,12 @@ impl Device<Wgpu> for WgpuDevice {
                 HalBufferType::Upload => {
                     wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::MAP_WRITE
                 }
-                HalBufferType::UploadDownload => unreachable!(),
+                HalBufferType::UploadDownload => {
+                    wgpu::BufferUsages::MAP_READ
+                        | wgpu::BufferUsages::MAP_WRITE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST
+                }
             },
             mapped_at_creation: false,
         });
@@ -335,7 +343,10 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             semaphore_signal: false,
             map_buffers: true,
             map_buffer_while_gpu_use: false,
-            upload_download_buffers: false,
+            upload_download_buffers: self
+                .device
+                .features()
+                .contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS),
             atomic_int64: self
                 .device
                 .features()
