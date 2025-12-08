@@ -52,7 +52,7 @@ impl<B: hal::Backend> DeviceResidencyState<B> {
         }
     }
 
-    fn remove_buffer(&mut self, instance: &InstanceInner<B>, device_idx: Option<u32>) {
+    fn _remove_buffer(&mut self, instance: &InstanceInner<B>, device_idx: Option<u32>) {
         unsafe {
             let buffer = self.buffer.take().unwrap();
             buffer
@@ -95,7 +95,7 @@ pub struct StorageResidencyState<B: hal::Backend> {
     ood_tracker: OutOfDateTracker<B>,
 }
 impl<B: hal::Backend> StorageResidencyState<B> {
-    pub fn new(len: u64) -> Self {
+    pub fn _new(len: u64) -> Self {
         let file = tempfile::tempfile().unwrap();
         file.set_len(len).unwrap();
 
@@ -339,6 +339,9 @@ impl<B: hal::Backend> BufferResidency<B> {
         let mut wait = self.devices[device_index as usize]
             .ood_tracker
             .get_needed_waits(range, instance);
+        self.devices[device_index as usize]
+            .ood_tracker
+            .invalidate_range(range);
         if is_mut {
             for finish in self.read_accesses.values() {
                 if finish.range.intersects(&range) {
@@ -350,7 +353,7 @@ impl<B: hal::Backend> BufferResidency<B> {
                             instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
                         }))
                     }
-                    wait.semaphores.push(lock.clone().unwrap());
+                    wait.semaphores.push(finish.clone());
                 }
             }
         }
@@ -364,8 +367,13 @@ impl<B: hal::Backend> BufferResidency<B> {
                         instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
                     }))
                 }
-                wait.semaphores.push(lock.clone().unwrap());
+                wait.semaphores.push(finish.clone());
             }
+        }
+        if let Some(extra_copy) = &wait.other_copy_range {
+            self.devices[device_index as usize]
+                .ood_tracker
+                .update_range_delayed(extra_copy.clone());
         }
         wait
     }
@@ -403,6 +411,11 @@ impl<B: hal::Backend> BufferResidency<B> {
         }
 
         // TODO: finalize copies for out of date stuff
+        let wait = self.host.ood_tracker.get_needed_waits(range, instance);
+        for sem in wait.semaphores {
+            sem.wait_host();
+        }
+
         finish
     }
 
@@ -514,7 +527,7 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
         );
         let mut _s = self.0.write();
         let s = &mut *_s;
-        s.storage = Some(StorageResidencyState::new(s.size));
+        s.storage = Some(StorageResidencyState::_new(s.size));
         unsafe {
             s.host
                 .buffer
@@ -527,7 +540,7 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
                 )
                 .unwrap();
         }
-        s.host.remove_buffer(instance, None);
+        s.host._remove_buffer(instance, None);
         s.release_cpu_access(usage, false);
     }
 }

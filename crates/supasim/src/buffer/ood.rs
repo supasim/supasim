@@ -15,8 +15,8 @@ use std::sync::Arc;
 // TODO: optimize and validate all OOD logic
 
 pub struct OutOfDateWait<B: hal::Backend> {
-    pub semaphores: Vec<Arc<Semaphore<B>>>,
-    pub other_copy_range: Option<BufferAccessFinish<B>>,
+    pub semaphores: Vec<Arc<BufferAccessFinish<B>>>,
+    pub other_copy_range: Option<Arc<BufferAccessFinish<B>>>,
 }
 
 #[derive(Default)]
@@ -40,7 +40,6 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
 
     /// Mark range as up to date
     pub fn update_range_immediate(&mut self, range: BufferAccessRange) {
-        // TODO: This is written terribly lol
         let mut i = 0;
         while i < self.out_of_date_ranges.len() {
             let other = self.out_of_date_ranges[i];
@@ -60,7 +59,6 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
 
     /// Mark range as not up to date
     pub fn invalidate_range(&mut self, range: BufferAccessRange) {
-        // TODO: This is written terribly lol
         if range.length == 0 {
             return;
         }
@@ -117,7 +115,6 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
         range: BufferAccessRange,
         instance: &InstanceInner<B>,
     ) -> OutOfDateWait<B> {
-        // TODO: This is written terribly lol
         if range.length == 0 {
             return OutOfDateWait {
                 semaphores: Vec::new(),
@@ -138,8 +135,8 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
                             instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
                         }))
                     }
-                    waits.push(lock.clone().unwrap());
                 }
+                waits.push(copy.clone());
 
                 let mut i = 0;
                 while i < needing_copy.len() && !needing_copy.is_empty() {
@@ -170,17 +167,23 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
                 start,
                 length: end - start,
             };
+            let sem_raw = instance.get_semaphore().unwrap();
+            let sem = Arc::new(Semaphore {
+                inner: Some(RwLock::new(sem_raw)),
+                device_stream_submission: Some((u16::MAX, u16::MAX, u64::MAX)),
+                instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
+            });
             Some(BufferAccessFinish {
                 condvar: None,
                 is_complete: Mutex::new(false),
-                device_semaphore: Mutex::new(None),
+                device_semaphore: Mutex::new(Some(sem)),
                 range,
                 id: u64::MAX,
             })
         };
         OutOfDateWait {
             semaphores: waits,
-            other_copy_range: extra_copy,
+            other_copy_range: extra_copy.map(Arc::new),
         }
     }
 
