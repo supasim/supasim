@@ -58,14 +58,23 @@ jobs:
             os: ubuntu-latest
             run-tests: true
             check-deps: true
+            skip-vulkan: false
+            skip-dxil: false
+            skip-ptx: true
           - name: Windows
             os: windows-latest
             run-tests: true
             check-deps: false
+            skip-vulkan: true
+            skip-dxil: false
+            skip-ptx: true
           - name: MacOS
             os: macos-latest
             run-tests: true
             check-deps: false
+            skip-vulkan: true
+            skip-dxil: true
+            skip-ptx: true
     runs-on: ${{ matrix.os }}
     name: Check & Test (${{ matrix.name }})
     steps:
@@ -186,19 +195,19 @@ jobs:
         set -e
 
         # Skip backends
-        if [ ${{ matrix.os != 'ubuntu-latest' }} ]; then
+        if [ ${{ matrix.skip-vulkan }} ]; then
           echo "SUPASIM_SKIP_BACKEND_VULKAN=1" >> $GITHUB_ENV
           echo "SUPASIM_SKIP_BACKEND_WGPU_VULKAN=1" >> $GITHUB_ENV
         fi
-        #if [ ${{ matrix.os != 'windows-latest' }} ]; then
-          #echo "SUPASIM_SKIP_BACKEND_WGPU_DX12=1" >> $GITHUB_ENV
-        #fi
 
         # Skip kernel targets
-        echo "SUPASIM_SKIP_KERNELS_PTX=1" >> $GITHUB_ENV
-        if [ ${{ matrix.os == 'macos-latest' }} ]; then
+        if [ ${{ matrix.skip-ptx }} ]; then
+          echo "SUPASIM_SKIP_KERNELS_PTX=1" >> $GITHUB_ENV
+        fi
+        if [ ${{ matrix.skip-dxil }} ]; then
           echo "SUPASIM_SKIP_KERNELS_DXIL=1" >> $GITHUB_ENV
         fi
+
         echo "SUPASIM_LOG_FULL_TRACE=1" >> $GITHUB_ENV
       
     - name: Run tests (all features)
