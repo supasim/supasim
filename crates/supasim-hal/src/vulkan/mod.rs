@@ -18,7 +18,6 @@ use ash::{
     prelude::VkResult,
     vk::{self, Handle},
 };
-use log::warn;
 use std::{cell::Cell, ffi::CStr, ops::Deref, sync::Mutex};
 use std::{
     fmt::{Debug, Display},

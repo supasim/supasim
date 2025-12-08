@@ -5,6 +5,8 @@
 END LICENSE */
 
 use crate::*;
+
+#[allow(unused)]
 pub fn add_numbers<Backend: hal::Backend>(hal: hal::InstanceDescriptor<Backend>) -> Result<(), ()> {
     // Test specific stuff
     println!("Hello, world!");

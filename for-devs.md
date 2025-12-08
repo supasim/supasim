@@ -13,7 +13,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 ## Testing info
-Run the command `cargo test --all-feataures -- --nocapture`. The `--nocapture` allows certain logs to be sent(though this is quite verbose, particularly for wgpu).
+Run the command `cargo nextest run --all-features --all-targets --no-fail-fast`. Supasim doesn't have doctests at the time of writing but they would be run with the command `cargo test --doc --all-features`
 
 ## Synchronization things
 ### Metal

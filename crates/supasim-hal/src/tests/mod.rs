@@ -33,6 +33,7 @@ unsafe fn create_storage_buf<B: Backend>(
 static INSTANCE_CREATE_LOCK: LazyLock<std::sync::Mutex<()>> =
     LazyLock::new(|| std::sync::Mutex::new(()));
 
+#[allow(unused)]
 fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Result<(), B::Error> {
     let mut instance = descriptor.instance;
     let device = descriptor.devices.into_iter().next().unwrap();

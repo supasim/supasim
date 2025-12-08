@@ -6,6 +6,7 @@ END LICENSE */
 
 use crate::*;
 
+#[allow(unused)]
 pub fn basic_buffer_copy<Backend: hal::Backend>(
     hal: hal::InstanceDescriptor<Backend>,
 ) -> Result<(), ()> {

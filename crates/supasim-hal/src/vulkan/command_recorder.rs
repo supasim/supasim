@@ -3,7 +3,6 @@ use crate::{
     vulkan::{VulkanBuffer, VulkanError, VulkanStream},
 };
 use ash::vk;
-use log::warn;
 use std::fmt::Debug;
 use types::SyncOperations;
 
