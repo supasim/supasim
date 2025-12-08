@@ -70,6 +70,7 @@ macro_rules! all_backend_tests_inner {
             let instance = instance.expect(&format!("Failed to create {} instance", $backend_name));
             log::info!("Created {} instance", $backend_name);
             $test_name::<hal::$hal_backend>(instance).unwrap();
+            panic!("This shouldn't have passed!");
         }
     };
 }
