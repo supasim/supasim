@@ -9,7 +9,7 @@ END LICENSE */
 
 use crate::{
     BufferCommand, BufferCommandInner, BufferSlice, CommandRecorderInner, Instance, Kernel,
-    MapSupasimError as _, SupaSimError, SupaSimResult, buffer::BufferRange,
+    MapSupasimError as _, SupaSimError, SupaSimResult, buffer::BufferAccess,
     sync::SubmissionResources,
 };
 use hal::{Buffer as _, CommandRecorder as _, Device as _, HalBufferSlice, Stream as _};
@@ -51,7 +51,7 @@ pub enum HalCommandBuilder {
     MemoryBarrier {
         resource: Index,
         offset: u64,
-        len: u64,
+        length: u64,
     },
     MemoryTransfer {
         resource: Index,
@@ -70,7 +70,7 @@ pub enum HalCommandBuilder {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BindGroupDesc {
     kernel_idx: Index,
-    items: Vec<(Index, BufferRange)>,
+    items: Vec<(Index, BufferAccess)>,
 }
 
 impl BindGroupDesc {
@@ -91,7 +91,7 @@ pub struct StreamingCommands<B: hal::Backend> {
     /// Contains the index of the kernel, the index of the buffer, and the range of the buffer
     pub bind_groups: Vec<BindGroupDesc>,
     pub streams: Vec<CommandStream>,
-    pub used_ranges: HashMap<Index, Vec<BufferRange>>,
+    pub used_ranges: HashMap<Index, Vec<BufferAccess>>,
     pub resources: SubmissionResources<B>,
 }
 
@@ -115,13 +115,11 @@ impl<'a, B: hal::Backend> StreamBlock<'a, B> {
             for b1 in &cmd.buffers {
                 for b2 in &other_cmd.buffers {
                     if b1.buffer == b2.buffer
-                        && let Some(intersection) = b1.range().intersection(&b2.range())
+                        && let Some(intersection) = b1.access.intersection(&b2.access)
                     {
                         slices.push(BufferSlice {
                             buffer: b1.buffer.clone(),
-                            start: intersection.start,
-                            len: intersection.len,
-                            needs_mut: true,
+                            access: intersection,
                         });
                     }
                 }
@@ -137,7 +135,7 @@ impl<'a, B: hal::Backend> StreamBlock<'a, B> {
 
 #[derive(Default)]
 struct BufferUsageTracker {
-    inner: HashMap<Index, Vec<BufferRange>>,
+    inner: HashMap<Index, Vec<BufferAccess>>,
 }
 
 impl BufferUsageTracker {
@@ -145,10 +143,10 @@ impl BufferUsageTracker {
         let id = b.buffer.inner()?.id;
         match self.inner.entry(id) {
             Entry::Occupied(mut v) => {
-                v.get_mut().push(b.range());
+                v.get_mut().push(b.access);
             }
             Entry::Vacant(v) => {
-                v.insert(vec![b.range()]);
+                v.insert(vec![b.access]);
             }
         }
         Ok(())
@@ -312,8 +310,8 @@ pub fn assemble_streams<B: hal::Backend>(
                 for range in ranges {
                     out_commands.push(HalCommandBuilder::MemoryBarrier {
                         resource: b,
-                        offset: range.start,
-                        len: range.len,
+                        offset: range.range.start,
+                        length: range.range.length,
                     });
                 }
             }
@@ -322,7 +320,7 @@ pub fn assemble_streams<B: hal::Backend>(
             let mut items = Vec::new();
             for b in &cmd.buffers {
                 let id = b.buffer.inner()?.id;
-                items.push((id, b.range()));
+                items.push((id, b.access));
             }
             let new_cmd = match &cmd.inner {
                 &BufferCommandInner::KernelDispatch {
@@ -353,28 +351,28 @@ pub fn assemble_streams<B: hal::Backend>(
                 BufferCommandInner::CopyBufferToBuffer => HalCommandBuilder::CopyBuffer {
                     src_buffer: cmd.buffers[0].buffer.inner()?.id,
                     dst_buffer: cmd.buffers[1].buffer.inner()?.id,
-                    src_offset: cmd.buffers[0].start,
-                    dst_offset: cmd.buffers[1].start,
-                    len: cmd.buffers[0].len,
+                    src_offset: cmd.buffers[0].access.range.start,
+                    dst_offset: cmd.buffers[1].access.range.start,
+                    len: cmd.buffers[0].access.range.length,
                 },
                 &BufferCommandInner::CopyFromTemp { src_offset } => {
                     HalCommandBuilder::CopyFromTemp {
                         src_offset,
                         dst_buffer: cmd.buffers[0].buffer.inner()?.id,
-                        dst_offset: cmd.buffers[0].start,
-                        len: cmd.buffers[0].len,
+                        dst_offset: cmd.buffers[0].access.range.start,
+                        len: cmd.buffers[0].access.range.length,
                     }
                 }
                 BufferCommandInner::ZeroBuffer => HalCommandBuilder::ZeroBuffer {
                     buffer: cmd.buffers[0].buffer.inner()?.id,
-                    offset: cmd.buffers[0].start,
-                    size: cmd.buffers[0].len,
+                    offset: cmd.buffers[0].access.range.start,
+                    size: cmd.buffers[0].access.range.length,
                 },
                 BufferCommandInner::MemoryTransfer { import } => {
                     HalCommandBuilder::MemoryTransfer {
                         resource: cmd.buffers[0].buffer.inner()?.id,
-                        offset: cmd.buffers[0].start,
-                        len: cmd.buffers[0].len,
+                        offset: cmd.buffers[0].access.range.start,
+                        len: cmd.buffers[0].access.range.length,
                         import: *import,
                     }
                 }
@@ -445,8 +443,8 @@ pub fn record_command_streams<B: hal::Backend>(
 
             resources.push(hal::HalBufferSlice {
                 buffer: res.devices[device_idx].buffer.as_ref().unwrap(),
-                offset: range.start,
-                len: range.len,
+                offset: range.range.start,
+                length: range.range.length,
             });
         }
         let bg = unsafe {
@@ -588,7 +586,7 @@ pub fn record_command_streams<B: hal::Backend>(
                             buffer: HalBufferSlice {
                                 buffer: get_buffer(),
                                 offset: *offset,
-                                len: *size,
+                                length: *size,
                             },
                         }
                     }
@@ -603,15 +601,17 @@ pub fn record_command_streams<B: hal::Backend>(
                         push_constants,
                         workgroup_dims: *workgroup_dims,
                     },
-                    HalCommandBuilder::MemoryBarrier { offset, len, .. } => {
-                        hal::BufferCommand::MemoryBarrier {
-                            buffer: HalBufferSlice {
-                                buffer: get_buffer(),
-                                offset: *offset,
-                                len: *len,
-                            },
-                        }
-                    }
+                    HalCommandBuilder::MemoryBarrier {
+                        offset,
+                        length: len,
+                        ..
+                    } => hal::BufferCommand::MemoryBarrier {
+                        buffer: HalBufferSlice {
+                            buffer: get_buffer(),
+                            offset: *offset,
+                            length: *len,
+                        },
+                    },
                     HalCommandBuilder::PipelineBarrier { before, after } => {
                         hal::BufferCommand::PipelineBarrier {
                             before: *before,
@@ -652,7 +652,7 @@ pub fn record_command_streams<B: hal::Backend>(
                             buffer: HalBufferSlice {
                                 buffer: get_buffer(),
                                 offset: *offset,
-                                len: *len,
+                                length: *len,
                             },
                             import: *import,
                         }

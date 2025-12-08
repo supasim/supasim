@@ -11,7 +11,7 @@ END LICENSE */
 use crate::{
     DEVICE_SMALLVEC_SIZE, InstanceInner, MapSupasimError, SupaSimResult,
     buffer::{
-        BufferAccessRange,
+        BufferRange,
         ood::{OutOfDateTracker, OutOfDateWait},
     },
     sync::Semaphore,
@@ -127,7 +127,7 @@ pub struct BufferAccessFinish<B: hal::Backend> {
     /// it when finished.
     pub device_semaphore: Mutex<Option<Arc<Semaphore<B>>>>,
     /// The range that is being accessed
-    pub range: BufferAccessRange,
+    pub range: BufferRange,
     /// The ID used to look this up in a more efficient hashmap
     pub id: u64,
 }
@@ -297,7 +297,7 @@ impl<B: hal::Backend> BufferResidency<B> {
 impl<B: hal::Backend> BufferResidency<B> {
     pub fn add_gpu_use(
         &mut self,
-        range: BufferAccessRange,
+        range: BufferRange,
         is_mut: bool,
         semaphore: Arc<Semaphore<B>>,
         device_index: u32,
@@ -381,7 +381,7 @@ impl<B: hal::Backend> BufferResidency<B> {
     /// This doesn't actually wait for anything
     pub fn get_cpu_access(
         &mut self,
-        range: BufferAccessRange,
+        range: BufferRange,
         is_mut: bool,
         instance: &InstanceInner<B>,
     ) -> Arc<BufferAccessFinish<B>> {
@@ -465,7 +465,7 @@ pub struct BufferResidencyRef<B: hal::Backend>(pub RwLock<BufferResidency<B>>);
 impl<B: hal::Backend> BufferResidencyRef<B> {
     pub fn wait_for_cpu_access(
         &self,
-        range: BufferAccessRange,
+        range: BufferRange,
         is_mut: bool,
         my_id: u64,
         instance: &InstanceInner<B>,
@@ -518,13 +518,8 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
         let usage =
             self.0
                 .write()
-                .get_cpu_access(BufferAccessRange { start: 0, length }, false, instance);
-        self.wait_for_cpu_access(
-            BufferAccessRange { start: 0, length },
-            false,
-            usage.id,
-            instance,
-        );
+                .get_cpu_access(BufferRange { start: 0, length }, false, instance);
+        self.wait_for_cpu_access(BufferRange { start: 0, length }, false, usage.id, instance);
         let mut _s = self.0.write();
         let s = &mut *_s;
         s.storage = Some(StorageResidencyState::_new(s.size));

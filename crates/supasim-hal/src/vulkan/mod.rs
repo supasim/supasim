@@ -792,7 +792,7 @@ impl BindGroup<Vulkan> for VulkanBindGroup {
                 vk::DescriptorBufferInfo::default()
                     .buffer(resource.buffer.buffer)
                     .offset(resource.offset)
-                    .range(resource.len),
+                    .range(resource.length),
             );
         }
         for (i, info) in buffer_infos.iter().enumerate() {

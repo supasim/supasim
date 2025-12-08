@@ -17,16 +17,22 @@ use thunderdome::Index;
 #[derive(Clone, Debug)]
 pub struct BufferSlice<B: hal::Backend> {
     pub buffer: Buffer<B>,
-    pub start: u64,
-    pub len: u64,
-    pub needs_mut: bool,
+    pub access: BufferAccess,
 }
 
 impl<B: hal::Backend> BufferSlice<B> {
     pub fn validate(&self) -> SupaSimResult<B, ()> {
         let b = self.buffer.inner()?;
-        if self.start.is_multiple_of(b.create_info.contents_align)
-            && self.len.is_multiple_of(b.create_info.contents_align)
+        if self
+            .access
+            .range
+            .start
+            .is_multiple_of(b.create_info.contents_align)
+            && self
+                .access
+                .range
+                .length
+                .is_multiple_of(b.create_info.contents_align)
         {
             Ok(())
         } else {
@@ -38,8 +44,8 @@ impl<B: hal::Backend> BufferSlice<B> {
         let b = self.buffer.inner()?;
         // This is explained in MappedBuffer associated methods
         if align.is_multiple_of(b.create_info.contents_align)
-            && self.start.is_multiple_of(align)
-            && self.len.is_multiple_of(align)
+            && self.access.range.start.is_multiple_of(align)
+            && self.access.range.length.is_multiple_of(align)
         {
             Ok(())
         } else {
@@ -50,46 +56,32 @@ impl<B: hal::Backend> BufferSlice<B> {
     pub fn entire_buffer(buffer: &Buffer<B>, needs_mut: bool) -> SupaSimResult<B, Self> {
         Ok(Self {
             buffer: buffer.clone(),
-            start: 0,
-            len: buffer.inner()?.create_info.size,
-            needs_mut,
+            access: BufferAccess {
+                range: BufferRange {
+                    start: 0,
+                    length: buffer.inner()?.create_info.size,
+                },
+                needs_mut,
+            },
         })
-    }
-
-    pub(crate) fn range(&self) -> BufferRange {
-        BufferRange {
-            start: self.start,
-            len: self.len,
-            needs_mut: self.needs_mut,
-        }
     }
 }
 
 /// A range and mutability without reference to a specific buffer
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct BufferRange {
-    pub(crate) start: u64,
-    pub(crate) len: u64,
-    pub(crate) needs_mut: bool,
+pub struct BufferAccess {
+    pub range: BufferRange,
+    pub needs_mut: bool,
 }
 
 /// Just an interval
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct BufferAccessRange {
+pub struct BufferRange {
     pub start: u64,
     pub length: u64,
 }
 
-impl From<BufferRange> for BufferAccessRange {
-    fn from(value: BufferRange) -> Self {
-        Self {
-            start: value.start,
-            length: value.len,
-        }
-    }
-}
-
-impl BufferAccessRange {
+impl BufferRange {
     pub fn join(&self, other: &Self) -> Option<Self> {
         if self.start < (other.start + other.length) && other.start < (self.start + self.length) {
             let start = self.start.min(other.start);
@@ -117,14 +109,14 @@ impl BufferAccessRange {
         let mut r2 = None;
 
         if self.start < other.start {
-            r1 = Some(BufferAccessRange {
+            r1 = Some(BufferRange {
                 start: self.start,
                 length: other.start - self.start,
             });
         }
 
         if self_end > other_end {
-            let r = BufferAccessRange {
+            let r = BufferRange {
                 start: other_end,
                 length: self_end - other_end,
             };
@@ -136,7 +128,7 @@ impl BufferAccessRange {
         }
 
         (
-            r1.unwrap_or(BufferAccessRange {
+            r1.unwrap_or(BufferRange {
                 start: 0,
                 length: 0,
             }),
@@ -168,46 +160,37 @@ impl Default for BufferDescriptor {
     }
 }
 
-impl<B: hal::Backend> From<&BufferSlice<B>> for BufferRange {
-    fn from(s: &BufferSlice<B>) -> Self {
-        Self {
-            start: s.start,
-            len: s.len,
-            needs_mut: s.needs_mut,
-        }
-    }
-}
-
-impl BufferRange {
+impl BufferAccess {
     pub fn overlaps(&self, other: &Self) -> bool {
         // Starts before the end of the other
         // and the other starts before the end of this
         // and at least one of them is mutable
-        self.start < other.start + other.len
-            && other.start < self.start + self.len
+        self.range.start < other.range.start + other.range.length
+            && other.range.start < self.range.start + self.range.length
             && (self.needs_mut || other.needs_mut)
     }
 
     pub fn overlaps_ignore_mut(&self, other: &Self) -> bool {
-        self.start < other.start + other.len && other.start < self.start + self.len
+        self.range.start < other.range.start + other.range.length
+            && other.range.start < self.range.start + self.range.length
     }
 
     pub fn contains(&self, other: &Self) -> bool {
-        self.start <= other.start
-            && self.start + self.len >= other.start + other.len
+        self.range.start <= other.range.start
+            && self.range.start + self.range.length >= other.range.start + other.range.length
             && (!other.needs_mut || self.needs_mut)
     }
 
     pub fn try_join(&self, other: &Self) -> Option<Self> {
         if self.overlaps_ignore_mut(other) {
             if self.needs_mut == other.needs_mut {
-                let start = self.start.min(other.start);
-                let end = (self.start + self.len).max(other.start + other.len);
-                let len = end - start;
+                let start = self.range.start.min(other.range.start);
+                let end = (self.range.start + self.range.length)
+                    .max(other.range.start + other.range.length);
+                let length = end - start;
                 Some(Self {
                     needs_mut: self.needs_mut,
-                    start,
-                    len,
+                    range: BufferRange { start, length },
                 })
             } else if self.contains(other) {
                 Some(*self)
@@ -223,11 +206,14 @@ impl BufferRange {
 
     pub fn intersection(&self, other: &Self) -> Option<Self> {
         if self.overlaps(other) {
-            let start = self.start.min(other.start);
-            let end = (self.start + self.len).max(other.start + other.len);
+            let start = self.range.start.min(other.range.start);
+            let end =
+                (self.range.start + self.range.length).max(other.range.start + other.range.length);
             Some(Self {
-                start,
-                len: end - start,
+                range: BufferRange {
+                    start,
+                    length: end - start,
+                },
                 needs_mut: true,
             })
         } else {
@@ -258,9 +244,13 @@ impl<B: hal::Backend> Buffer<B> {
         };
         BufferSlice {
             buffer: self.clone(),
-            start,
-            len: end - start,
-            needs_mut,
+            access: BufferAccess {
+                range: BufferRange {
+                    start,
+                    length: end - start,
+                },
+                needs_mut,
+            },
         }
     }
 }

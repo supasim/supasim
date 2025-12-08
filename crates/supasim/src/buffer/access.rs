@@ -9,7 +9,7 @@ use hal::Buffer as _;
 use crate::{
     Buffer, BufferSlice, Instance, MapSupasimError, SupaSimError, SupaSimResult,
     buffer::{
-        BufferAccessRange,
+        BufferRange,
         residency::{BufferAccessFinish, BufferResidency},
     },
 };
@@ -53,9 +53,9 @@ impl<B: hal::Backend> Instance<B> {
             let id = b.buffer.inner()?.id;
 
             let residency = residency_locks.get_mut(&id).unwrap();
-            let access = residency.get_cpu_access(b.range().into(), b.needs_mut, &instance);
+            let access = residency.get_cpu_access(b.access.range, b.access.needs_mut, &instance);
             first_id.entry(id).or_insert(access.id);
-            accesses.push((access, id, b.needs_mut, b.buffer.clone()));
+            accesses.push((access, id, b.access.needs_mut, b.buffer.clone()));
         }
         drop(residency_locks);
         let mut mapped_buffers = Vec::with_capacity(buffers.len());
@@ -83,7 +83,7 @@ impl<B: hal::Backend> Buffer<B> {
         let s = self.inner()?;
         let data = bytemuck::cast_slice::<T, u8>(data);
         let access = s.residency.0.write().get_cpu_access(
-            BufferAccessRange {
+            BufferRange {
                 start,
                 length: data.len() as u64,
             },
@@ -91,7 +91,7 @@ impl<B: hal::Backend> Buffer<B> {
             &*s.instance.inner()?,
         );
         s.residency.wait_for_cpu_access(
-            BufferAccessRange {
+            BufferRange {
                 start,
                 length: data.len() as u64,
             },
@@ -123,7 +123,7 @@ impl<B: hal::Backend> Buffer<B> {
         let s = self.inner()?;
         let data = bytemuck::cast_slice_mut::<T, u8>(out);
         let access = s.residency.0.write().get_cpu_access(
-            BufferAccessRange {
+            BufferRange {
                 start,
                 length: data.len() as u64,
             },
@@ -131,7 +131,7 @@ impl<B: hal::Backend> Buffer<B> {
             &*s.instance.inner()?,
         );
         s.residency.wait_for_cpu_access(
-            BufferAccessRange {
+            BufferRange {
                 start,
                 length: data.len() as u64,
             },
@@ -168,12 +168,12 @@ impl<B: hal::Backend> Buffer<B> {
         let s = self.inner()?;
 
         let access = s.residency.0.write().get_cpu_access(
-            BufferAccessRange { start, length },
+            BufferRange { start, length },
             needs_mut,
             &*s.instance.inner()?,
         );
         s.residency.wait_for_cpu_access(
-            BufferAccessRange { start, length },
+            BufferRange { start, length },
             needs_mut,
             access.id,
             &*s.instance.inner()?,

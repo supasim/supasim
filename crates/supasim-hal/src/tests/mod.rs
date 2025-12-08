@@ -127,17 +127,17 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
                 HalBufferSlice {
                     buffer: &sb1,
                     offset: 0,
-                    len: 16,
+                    length: 16,
                 },
                 HalBufferSlice {
                     buffer: &sb2,
                     offset: 0,
-                    len: 16,
+                    length: 16,
                 },
                 HalBufferSlice {
                     buffer: &sbout,
                     offset: 0,
-                    len: 16,
+                    length: 16,
                 },
             ],
         )?;
@@ -147,7 +147,7 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
             &[HalBufferSlice {
                 buffer: &sbout,
                 offset: 0,
-                len: 16,
+                length: 16,
             }],
         )?;
 
@@ -183,21 +183,21 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
                     buffer: HalBufferSlice {
                         buffer: &sb1,
                         offset: 0,
-                        len: 16,
+                        length: 16,
                     },
                 },
                 BufferCommand::MemoryBarrier {
                     buffer: HalBufferSlice {
                         buffer: &sb2,
                         offset: 0,
-                        len: 16,
+                        length: 16,
                     },
                 },
                 BufferCommand::MemoryBarrier {
                     buffer: HalBufferSlice {
                         buffer: &sbout,
                         offset: 0,
-                        len: 16,
+                        length: 16,
                     },
                 },
                 BufferCommand::PipelineBarrier {
@@ -218,7 +218,7 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
                     buffer: HalBufferSlice {
                         buffer: &sbout,
                         offset: 0,
-                        len: 16,
+                        length: 16,
                     },
                 },
                 BufferCommand::DispatchKernel {
@@ -231,7 +231,7 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
                     buffer: HalBufferSlice {
                         buffer: &sbout,
                         offset: 0,
-                        len: 16,
+                        length: 16,
                     },
                 },
                 BufferCommand::PipelineBarrier {

@@ -148,7 +148,7 @@ impl VulkanCommandRecorder {
                         HalBufferSlice {
                             buffer,
                             offset,
-                            len,
+                            length: len,
                         },
                 } => barriers.push(
                     vk::BufferMemoryBarrier2KHR::default()
@@ -171,7 +171,7 @@ impl VulkanCommandRecorder {
                         HalBufferSlice {
                             buffer,
                             offset,
-                            len,
+                            length: len,
                         },
                     import,
                 } => barriers.push(
@@ -245,7 +245,7 @@ impl VulkanCommandRecorder {
                 cb,
             )?,
             BufferCommand::ZeroMemory { buffer } => {
-                self.zero_memory(stream, buffer.buffer, buffer.offset, buffer.len, cb)?;
+                self.zero_memory(stream, buffer.buffer, buffer.offset, buffer.length, cb)?;
             }
             BufferCommand::DispatchKernel {
                 kernel,

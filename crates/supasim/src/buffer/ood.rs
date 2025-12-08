@@ -6,7 +6,7 @@ END LICENSE */
 
 use crate::{
     InstanceInner,
-    buffer::{BufferAccessRange, residency::BufferAccessFinish},
+    buffer::{BufferRange, residency::BufferAccessFinish},
     sync::Semaphore,
 };
 use parking_lot::{Mutex, RwLock};
@@ -24,22 +24,22 @@ pub struct OutOfDateTracker<B: hal::Backend> {
     /// Sorted by range start. Ranges that will be out of date until their copy completes or is started.
     ///
     /// This represents ranges that are out of date after copies and operations finish.
-    pub out_of_date_ranges: Vec<BufferAccessRange>,
+    pub out_of_date_ranges: Vec<BufferRange>,
     /// Copies that will make ranges valid when complete. Second element is the actual range that will be updated.
     /// This may be shortened as immediate updates occur.
-    pub current_copies: Vec<(Arc<BufferAccessFinish<B>>, BufferAccessRange)>,
+    pub current_copies: Vec<(Arc<BufferAccessFinish<B>>, BufferRange)>,
 }
 
 impl<B: hal::Backend> OutOfDateTracker<B> {
     pub fn uninit(length: u64) -> Self {
         Self {
-            out_of_date_ranges: vec![BufferAccessRange { start: 0, length }],
+            out_of_date_ranges: vec![BufferRange { start: 0, length }],
             current_copies: Vec::new(),
         }
     }
 
     /// Mark range as up to date
-    pub fn update_range_immediate(&mut self, range: BufferAccessRange) {
+    pub fn update_range_immediate(&mut self, range: BufferRange) {
         let mut i = 0;
         while i < self.out_of_date_ranges.len() {
             let other = self.out_of_date_ranges[i];
@@ -58,7 +58,7 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
     }
 
     /// Mark range as not up to date
-    pub fn invalidate_range(&mut self, range: BufferAccessRange) {
+    pub fn invalidate_range(&mut self, range: BufferRange) {
         if range.length == 0 {
             return;
         }
@@ -112,7 +112,7 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
     /// id and such.
     pub fn get_needed_waits(
         &mut self,
-        range: BufferAccessRange,
+        range: BufferRange,
         instance: &InstanceInner<B>,
     ) -> OutOfDateWait<B> {
         if range.length == 0 {
@@ -163,7 +163,7 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
                 .max_by_key(|a| a.start + a.length)
                 .unwrap();
             let end = end.start + end.length;
-            let range = BufferAccessRange {
+            let range = BufferRange {
                 start,
                 length: end - start,
             };

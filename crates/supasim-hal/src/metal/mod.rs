@@ -181,7 +181,7 @@ impl Stream<Metal> for MetalStream {
             buffers.push((
                 unsafe { slice.buffer.buffer.unsafe_clone() },
                 slice.offset,
-                slice.len,
+                slice.length,
             ));
         }
         Ok(MetalBindGroup {
@@ -481,7 +481,7 @@ impl BindGroup<Metal> for MetalBindGroup {
             buffers_lock[i] = (
                 unsafe { slice.buffer.buffer.unsafe_clone() },
                 slice.offset,
-                slice.len,
+                slice.length,
             );
         }
         Ok(())
@@ -716,7 +716,7 @@ impl CommandRecorder<Metal> for MetalCommandRecorder {
                         buffers_lock.push((
                             unsafe { b.buffer.buffer.unsafe_clone() },
                             b.offset,
-                            b.len,
+                            b.length,
                         ));
                     }
                 }
@@ -726,7 +726,7 @@ impl CommandRecorder<Metal> for MetalCommandRecorder {
                         &buffer.buffer.buffer,
                         NSRange {
                             location: buffer.offset as usize,
-                            length: buffer.len as usize,
+                            length: buffer.length as usize,
                         },
                         0,
                     );

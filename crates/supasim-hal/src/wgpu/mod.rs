@@ -289,7 +289,7 @@ impl Stream<Wgpu> for WgpuStream {
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &slice.buffer.inner,
                     offset: slice.offset,
-                    size: NonZero::<u64>::new(slice.len),
+                    size: NonZero::<u64>::new(slice.length),
                 }),
             })
             .collect();
@@ -568,7 +568,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                     );
                 }
                 BufferCommand::ZeroMemory { buffer } => {
-                    r.clear_buffer(&buffer.buffer.inner, buffer.offset, Some(buffer.len));
+                    r.clear_buffer(&buffer.buffer.inner, buffer.offset, Some(buffer.length));
                 }
                 BufferCommand::DispatchKernel {
                     kernel,

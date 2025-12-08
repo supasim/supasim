@@ -166,7 +166,7 @@ pub fn submit_command_recorders<B: hal::Backend>(
             let b_mut = _b.inner()?;
             for &range in ranges {
                 let ood_wait = b_mut.residency.0.write().add_gpu_use(
-                    range.into(),
+                    range.range,
                     range.needs_mut,
                     semaphore.clone(),
                     0,

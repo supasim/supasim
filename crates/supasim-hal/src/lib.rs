@@ -73,7 +73,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send {
 pub struct HalBufferSlice<'a, B: Backend> {
     pub buffer: &'a B::Buffer,
     pub offset: u64,
-    pub len: u64,
+    pub length: u64,
 }
 
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send {

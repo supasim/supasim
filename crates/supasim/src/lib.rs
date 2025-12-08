@@ -25,7 +25,7 @@ mod sync;
 mod sync_thread;
 
 use crate::buffer::residency::{BufferResidency, BufferResidencyRef};
-use crate::buffer::{BufferInner, BufferWeak};
+use crate::buffer::{BufferAccess, BufferInner, BufferRange, BufferWeak};
 use crate::sync::Semaphore;
 use crate::sync_thread::{StreamThreadHandle, StreamThreadMessage, create_sync_thread};
 use anyhow::anyhow;
@@ -580,20 +580,28 @@ impl<B: hal::Backend> CommandRecorder<B> {
         dst_buffer: &Buffer<B>,
         src_offset: u64,
         dst_offset: u64,
-        len: u64,
+        length: u64,
     ) -> SupaSimResult<B, ()> {
         self.check_destroyed()?;
         let src_slice = BufferSlice {
             buffer: src_buffer.clone(),
-            start: src_offset,
-            len,
-            needs_mut: false,
+            access: BufferAccess {
+                needs_mut: false,
+                range: BufferRange {
+                    start: src_offset,
+                    length,
+                },
+            },
         };
         let dst_slice = BufferSlice {
             buffer: dst_buffer.clone(),
-            start: dst_offset,
-            len,
-            needs_mut: true,
+            access: BufferAccess {
+                needs_mut: true,
+                range: BufferRange {
+                    start: dst_offset,
+                    length,
+                },
+            },
         };
         src_slice.validate()?;
         dst_slice.validate()?;
@@ -615,9 +623,13 @@ impl<B: hal::Backend> CommandRecorder<B> {
         }
         let slice = BufferSlice {
             buffer: buffer.clone(),
-            start: offset,
-            len: size,
-            needs_mut: true,
+            access: BufferAccess {
+                range: BufferRange {
+                    start: offset,
+                    length: size,
+                },
+                needs_mut: true,
+            },
         };
         slice.validate()?;
         {
@@ -638,12 +650,16 @@ impl<B: hal::Backend> CommandRecorder<B> {
     ) -> SupaSimResult<B, ()> {
         self.check_destroyed()?;
         let data = bytemuck::cast_slice(data);
-        let len = data.len() as u64;
+        let length = data.len() as u64;
         let dst_slice = BufferSlice {
             buffer: buffer.clone(),
-            start: offset,
-            len,
-            needs_mut: true,
+            access: BufferAccess {
+                range: BufferRange {
+                    start: offset,
+                    length,
+                },
+                needs_mut: true,
+            },
         };
         dst_slice.validate()?;
         let mut s = self.inner_mut()?;
@@ -670,7 +686,7 @@ impl<B: hal::Backend> CommandRecorder<B> {
             )));
         }
         for (i, &b) in reflection_info.buffers.iter().enumerate() {
-            if buffers[i].needs_mut != b {
+            if buffers[i].access.needs_mut != b {
                 return Err(SupaSimError::Other(anyhow!(
                     "Buffer at index {i} in dispatch_kernel does not have the correct mutability"
                 )));
