@@ -4,26 +4,29 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
+mod command_recorder;
+mod init;
+
+pub use command_recorder::VulkanCommandRecorder;
+
 use crate::{
-    Backend, BackendInstance, BindGroup, Buffer, BufferCommand, CommandRecorder, Device,
-    DeviceDescriptor, HalBufferSlice, InstanceDescriptor, Kernel, KernelDescriptor,
-    RecorderSubmitInfo, Semaphore, Stream, StreamDescriptor,
+    Backend, BackendInstance, BindGroup, Buffer, Device, HalBufferSlice, Kernel, KernelDescriptor,
+    RecorderSubmitInfo, Semaphore, Stream,
 };
 use ash::{
-    Entry, khr,
+    khr,
     prelude::VkResult,
     vk::{self, Handle},
 };
-use core::ffi;
-use log::{Level, warn};
-use std::{borrow::Cow, cell::Cell, ffi::CStr, ops::Deref, sync::Mutex};
+use log::warn;
+use std::{cell::Cell, ffi::CStr, ops::Deref, sync::Mutex};
 use std::{
     fmt::{Debug, Display},
     sync::Arc,
 };
 use thiserror::Error;
-use types::{HalBufferType, HalInstanceProperties, SyncOperations};
-use vk_mem::{Alloc, AllocationCreateFlags, Allocator, AllocatorCreateInfo};
+use types::{HalBufferType, HalInstanceProperties};
+use vk_mem::{Alloc, AllocationCreateFlags, Allocator};
 
 use scopeguard::defer;
 
@@ -66,424 +69,7 @@ impl Backend for Vulkan {
         Self::create_instance(true)
     }
 }
-impl Vulkan {
-    unsafe extern "system" fn vulkan_debug_callback(
-        message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
-        message_type: vk::DebugUtilsMessageTypeFlagsEXT,
-        p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT<'_>,
-        _user_data: *mut std::os::raw::c_void,
-    ) -> vk::Bool32 {
-        let callback_data = unsafe { *p_callback_data };
-        let message_id_number = callback_data.message_id_number;
 
-        let message_id_name = if callback_data.p_message_id_name.is_null() {
-            Cow::from("")
-        } else {
-            unsafe { ffi::CStr::from_ptr(callback_data.p_message_id_name).to_string_lossy() }
-        };
-
-        let message = if callback_data.p_message.is_null() {
-            Cow::from("")
-        } else {
-            unsafe { ffi::CStr::from_ptr(callback_data.p_message).to_string_lossy() }
-        };
-        let level = match message_severity {
-            vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => Level::Error,
-            vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => Level::Warn,
-            vk::DebugUtilsMessageSeverityFlagsEXT::INFO => Level::Info,
-            vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => Level::Trace,
-            _ => Level::Error,
-        };
-
-        log::log!(
-            level,
-            "{message_severity:?}: {message_type:?} [{message_id_name} ({message_id_number})] : {message}\n",
-        );
-        #[cfg(test)]
-        if message_severity == vk::DebugUtilsMessageSeverityFlagsEXT::ERROR {
-            panic!(
-                "Vulkan validation error in test. Users of SupaSim should report this as a bug. Error message:\n\t{message_type:?} [{message_id_name} ({message_id_number})] : {message}",
-            )
-        }
-
-        vk::FALSE
-    }
-    pub fn create_instance(debug: bool) -> Result<InstanceDescriptor<Vulkan>, VulkanError> {
-        unsafe {
-            let err = Cell::new(true);
-            let entry = Entry::load()?;
-            let debug = if debug
-                && entry
-                    .enumerate_instance_extension_properties(None)
-                    .unwrap()
-                    .iter()
-                    .any(|e| e.extension_name_as_c_str().unwrap() == c"VK_EXT_debug_utils")
-                && entry
-                    .enumerate_instance_layer_properties()
-                    .unwrap()
-                    .iter()
-                    .any(|l| l.layer_name_as_c_str().unwrap() == c"VK_LAYER_KHRONOS_validation")
-            {
-                true
-            } else if debug {
-                warn!("Debug support was requested but is not available on the current system!");
-                false
-            } else {
-                false
-            };
-            let validation_layers = if debug {
-                vec![c"VK_LAYER_KHRONOS_validation".as_ptr()]
-            } else {
-                Vec::new()
-            };
-            let extension_names = if debug {
-                vec![ash::ext::debug_utils::NAME.as_ptr()]
-            } else {
-                Vec::new()
-            };
-            // Check instance extensions
-            {
-                for &ext in &extension_names {
-                    let ext_name = CStr::from_ptr(ext);
-                    if !entry
-                        .enumerate_instance_extension_properties(None)
-                        .unwrap()
-                        .iter()
-                        .map(|a| a.extension_name_as_c_str().unwrap())
-                        .any(|a| a == ext_name)
-                    {
-                        return Err(VulkanError::VulkanInstanceExtensionNotSupported(ext_name));
-                    }
-                }
-            }
-            // Check for validation layers
-            {
-                for &layer in &validation_layers {
-                    let layer_name = CStr::from_ptr(layer);
-                    if !entry
-                        .enumerate_instance_layer_properties()
-                        .unwrap()
-                        .iter()
-                        .map(|a| a.layer_name_as_c_str().unwrap())
-                        .any(|a| a == layer_name)
-                    {
-                        return Err(VulkanError::VulkanLayerNotSupported(layer_name));
-                    }
-                }
-            }
-            // Check vulkan version
-            let instance_api_version = match entry.try_enumerate_instance_version().unwrap() {
-                Some(v) => v,
-                None => vk::API_VERSION_1_0,
-            };
-            let app_info = vk::ApplicationInfo::default().api_version(instance_api_version);
-
-            let instance = entry.create_instance(
-                &vk::InstanceCreateInfo::default()
-                    .application_info(&app_info)
-                    .enabled_layer_names(&validation_layers)
-                    .enabled_extension_names(&extension_names),
-                None,
-            )?;
-            defer! {
-                if err.get() {
-                    instance.destroy_instance(None);
-                }
-            }
-            let debug_callback = if debug {
-                let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
-                    .message_severity(
-                        vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
-                            | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-                            | vk::DebugUtilsMessageSeverityFlagsEXT::INFO,
-                    )
-                    .message_type(
-                        vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
-                            | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-                            | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-                    )
-                    .pfn_user_callback(Some(Self::vulkan_debug_callback));
-                let debug_utils_loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
-                let debug_callback =
-                    debug_utils_loader.create_debug_utils_messenger(&debug_info, None)?;
-                Some(debug_callback)
-            } else {
-                None
-            };
-            defer! {
-                if err.get()
-                    && let Some(debug_callback) = debug_callback {
-                        let debug_utils_loader = ash::ext::debug_utils::Instance::new(&entry, &instance);
-                        debug_utils_loader.destroy_debug_utils_messenger(debug_callback, None);
-                    }
-            }
-            let ext = [
-                (khr::synchronization2::NAME, vk::API_VERSION_1_3),
-                (khr::timeline_semaphore::NAME, vk::API_VERSION_1_2),
-                (
-                    khr::get_physical_device_properties2::NAME,
-                    vk::API_VERSION_1_1,
-                ),
-                (khr::shader_atomic_int64::NAME, vk::API_VERSION_1_2),
-            ];
-            let (phyd, queue_family_idx, api_version, extension_spirv_version) = {
-                let mut best_score = 0;
-                let mut pair = (vk::PhysicalDevice::null(), 0, 0, types::SpirvVersion::V1_0);
-                'outer: for phyd in instance.enumerate_physical_devices()? {
-                    let properties = instance.get_physical_device_properties(phyd);
-                    let api_version = properties.api_version.min(instance_api_version);
-                    let extensions = instance.enumerate_device_extension_properties(phyd)?;
-                    let extensions: Vec<&CStr> = extensions
-                        .iter()
-                        .map(|a| a.extension_name_as_c_str().unwrap())
-                        .collect();
-                    let mut extension_spirv_version = types::SpirvVersion::V1_0;
-                    let caps = instance.get_physical_device_features(phyd);
-                    if caps.shader_int64 == 0 {
-                        continue;
-                    }
-                    for extension in ext {
-                        if extension.1 > api_version && !extensions.contains(&extension.0) {
-                            continue 'outer;
-                        }
-                        if extension.0 == khr::spirv_1_4::NAME && api_version >= vk::API_VERSION_1_1
-                        {
-                            extension_spirv_version = types::SpirvVersion::V1_4;
-                        }
-                    }
-                    let queue_families = instance.get_physical_device_queue_family_properties(phyd);
-                    let mut best_queue = (0, 0);
-                    for (i, queue) in queue_families.into_iter().enumerate() {
-                        let flags = if queue.queue_flags.contains(vk::QueueFlags::TRANSFER) {
-                            queue.queue_flags ^ vk::QueueFlags::TRANSFER
-                        } else {
-                            queue.queue_flags
-                        };
-                        if !queue.queue_flags.contains(vk::QueueFlags::COMPUTE) {
-                            continue;
-                        }
-                        let score;
-                        if flags == vk::QueueFlags::COMPUTE {
-                            score = 3;
-                        } else if !flags.contains(vk::QueueFlags::GRAPHICS) {
-                            score = 2;
-                        } else {
-                            score = 1;
-                        }
-                        if score > best_queue.0 {
-                            best_queue = (score, i);
-                        }
-                    }
-                    if best_queue.0 == 0 {
-                        continue;
-                    }
-                    // In order of priority:
-                    // * Prefer discrete gpus
-                    // * Then prefer one with a more specific compute queue
-                    // * Then prefer the higher API version
-                    let score = match properties.device_type {
-                        vk::PhysicalDeviceType::DISCRETE_GPU => 3,
-                        vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
-                        vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
-                        vk::PhysicalDeviceType::CPU => 0,
-                        _ => continue,
-                    } * 16
-                        + best_queue.0 * 4
-                        + vk::api_version_minor(api_version).min(3);
-                    if score > best_score {
-                        best_score = score;
-                        pair = (
-                            phyd,
-                            best_queue.1 as u32,
-                            api_version,
-                            extension_spirv_version,
-                        );
-                    }
-                }
-                if best_score > 0 {
-                    pair
-                } else {
-                    return Err(VulkanError::NoSupportedDevice);
-                }
-            };
-            let api_supported_spirv_version = match api_version {
-                vk::API_VERSION_1_0 => types::SpirvVersion::V1_0,
-                vk::API_VERSION_1_1 => types::SpirvVersion::V1_3,
-                vk::API_VERSION_1_2 => types::SpirvVersion::V1_5,
-                vk::API_VERSION_1_3 => types::SpirvVersion::V1_6,
-                v => {
-                    if v > vk::API_VERSION_1_3 {
-                        types::SpirvVersion::V1_6
-                    } else {
-                        panic!("Unrecognized phyd api version!");
-                    }
-                }
-            };
-            let mut ext: Vec<_> = ext
-                .iter()
-                .filter_map(|(ext, api)| {
-                    if *api > api_version {
-                        Some(ext.as_ptr())
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            let spirv_version = if api_supported_spirv_version >= extension_spirv_version {
-                api_supported_spirv_version
-            } else {
-                match extension_spirv_version {
-                    types::SpirvVersion::V1_4 => {
-                        ext.push(khr::shader_float_controls::NAME.as_ptr());
-                        ext.push(khr::spirv_1_4::NAME.as_ptr());
-                    }
-                    _ => unreachable!(),
-                };
-                extension_spirv_version
-            };
-            let mut timeline_semaphore =
-                vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
-            let mut sync2 =
-                vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
-            let mut atomic_int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default()
-                .shader_shared_int64_atomics(true)
-                .shader_buffer_int64_atomics(true);
-            let phyd_features = vk::PhysicalDeviceFeatures::default().shader_int64(true);
-            // TODO: investigate multiple queues. currently we only use a general queue, but this could potentially be optimized by using special compute queues and special transfer queues
-            let queue_priority = 1.0;
-            let queue_create_info = vk::DeviceQueueCreateInfo::default()
-                .queue_priorities(std::slice::from_ref(&queue_priority))
-                .queue_family_index(queue_family_idx);
-            let dev_create_info = vk::DeviceCreateInfo::default()
-                .queue_create_infos(std::slice::from_ref(&queue_create_info))
-                .enabled_extension_names(&ext)
-                .enabled_features(&phyd_features)
-                .push_next(&mut timeline_semaphore)
-                .push_next(&mut sync2)
-                .push_next(&mut atomic_int64);
-            let device = instance.create_device(phyd, &dev_create_info, None)?;
-            defer! {
-                if err.get() {
-                    device.destroy_device(None);
-                }
-            }
-            let queue = device.get_device_queue(queue_family_idx, 0);
-            let s = Self::from_existing(
-                entry.clone(),
-                instance.clone(),
-                device.clone(),
-                phyd,
-                queue,
-                queue_family_idx,
-                debug_callback,
-                spirv_version,
-                api_version,
-                None,
-            )?;
-            err.set(false);
-            Ok(s)
-        }
-    }
-    /// # Safety
-    /// * Queue family must support `COMPUTE`
-    /// * Queue must be of the given queue family, and belong to the given device
-    /// * Phyd must be from the given vulkan instance
-    /// * Device must be from the given physical device, and must support timeline semaphores and synchronization 2
-    /// * The queue must not be used outside of this hal instance
-    /// * All resources belonging to the vulkan instance must be destroyed before the hal instance
-    /// * The instance and all resources will be destroyed when the hal instance is destroyed
-    /// * Instance must be created with API version at least 1.1
-    /// * The device must have a high enough API version or support these features:
-    ///   * Timeline semaphores
-    ///   * Synchronization2
-    #[allow(clippy::too_many_arguments)]
-    pub unsafe fn from_existing(
-        entry: ash::Entry,
-        instance: ash::Instance,
-        device: ash::Device,
-        phyd: vk::PhysicalDevice,
-        queue: vk::Queue,
-        queue_family_idx: u32,
-        debug_callback: Option<vk::DebugUtilsMessengerEXT>,
-        spirv_version: types::SpirvVersion,
-        api_version: u32,
-        force_is_unified_memory: Option<bool>,
-    ) -> Result<InstanceDescriptor<Vulkan>, VulkanError> {
-        unsafe {
-            let create_info = AllocatorCreateInfo::new(&instance, &device, phyd);
-            let alloc = Allocator::new(create_info).unwrap();
-            let command_pool = device.create_command_pool(
-                &vk::CommandPoolCreateInfo::default()
-                    .queue_family_index(queue_family_idx)
-                    .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
-                None,
-            )?;
-            let sync2_device = if api_version < vk::API_VERSION_1_3 {
-                Some(khr::synchronization2::Device::new(&instance, &device))
-            } else {
-                None
-            };
-            let timeline_device = if api_version < vk::API_VERSION_1_2 {
-                Some(khr::timeline_semaphore::Device::new(&instance, &device))
-            } else {
-                None
-            };
-            let is_unified_memory = if let Some(u) = force_is_unified_memory {
-                u
-            } else {
-                let memory_props = instance.get_physical_device_memory_properties(phyd);
-                // The idea here is that implementations are required to provide a host visible and coherent memory type.
-                // Heaps and types are different, but implementations generally provide (pinned) system memory as a heap.
-                // If this heap isn't separate from the device heap, we know any system memory type is also device local.
-                // The spec recommends this for UMA systems: https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#memory-device
-                memory_props.memory_heaps.len() == 1
-                    && memory_props.memory_heaps_as_slice()[0]
-                        .flags
-                        .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
-            };
-            let instance = VulkanInstance {
-                entry,
-                instance,
-                _phyd: phyd,
-                debug: debug_callback,
-                shared: Arc::new(SharedDeviceInfo {
-                    functions: DeviceFunctions {
-                        device,
-                        sync2_device,
-                        timeline_device,
-                    },
-                    queue_family_indices: vec![queue_family_idx, vk::QUEUE_FAMILY_EXTERNAL],
-                }),
-                spirv_version,
-                _api_version: api_version,
-                atomic_int64: true,
-            };
-            let device = VulkanDevice {
-                shared: instance.shared.clone(),
-                alloc,
-                is_unified_memory,
-            };
-            let stream = VulkanStream {
-                shared: instance.shared.clone(),
-                queue,
-                queue_family_idx,
-                command_pool,
-                unused_command_buffers: Mutex::new(Vec::new()),
-            };
-            Ok(InstanceDescriptor {
-                instance,
-                devices: vec![DeviceDescriptor {
-                    device,
-                    streams: vec![StreamDescriptor {
-                        stream,
-                        stream_type: crate::StreamType::ComputeAndTransfer,
-                    }],
-                    group_idx: None,
-                }],
-            })
-        }
-    }
-}
 #[must_use]
 #[derive(Error, Debug)]
 pub enum VulkanError {
@@ -517,6 +103,7 @@ pub enum VulkanError {
     #[error("A buffer export was attempted under invalid conditions")]
     ExternalMemoryExport,
 }
+
 impl crate::Error<Vulkan> for VulkanError {
     fn is_out_of_device_memory(&self) -> bool {
         match self {
@@ -525,12 +112,14 @@ impl crate::Error<Vulkan> for VulkanError {
             _ => false,
         }
     }
+
     fn is_out_of_host_memory(&self) -> bool {
         match self {
             Self::VulkanRaw(e) => *e == vk::Result::ERROR_OUT_OF_HOST_MEMORY,
             _ => false,
         }
     }
+
     fn is_timeout(&self) -> bool {
         match self {
             Self::VulkanRaw(e) => *e == vk::Result::TIMEOUT,
@@ -544,6 +133,7 @@ pub struct VulkanDevice {
     alloc: Allocator,
     is_unified_memory: bool,
 }
+
 impl std::fmt::Debug for VulkanDevice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(&self.shared, f)?;
@@ -572,6 +162,7 @@ impl Device<Vulkan> for VulkanDevice {
             supports_semaphore_import: false,
         }
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(
         &self,
@@ -579,6 +170,7 @@ impl Device<Vulkan> for VulkanDevice {
     ) -> Result<(), <Vulkan as Backend>::Error> {
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_buffer(
         &self,
@@ -628,6 +220,7 @@ impl Device<Vulkan> for VulkanDevice {
             })
         }
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn import_buffer(
         &self,
@@ -635,6 +228,7 @@ impl Device<Vulkan> for VulkanDevice {
     ) -> Result<<Vulkan as Backend>::Buffer, <Vulkan as Backend>::Error> {
         unreachable!()
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_semaphore(&self) -> std::result::Result<VulkanSemaphore, VulkanError> {
         unsafe {
@@ -650,6 +244,7 @@ impl Device<Vulkan> for VulkanDevice {
             })
         }
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn import_semaphore(
         &self,
@@ -657,6 +252,7 @@ impl Device<Vulkan> for VulkanDevice {
     ) -> Result<<Vulkan as Backend>::Semaphore, <Vulkan as Backend>::Error> {
         unreachable!()
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
@@ -695,6 +291,7 @@ impl Stream<Vulkan> for VulkanStream {
             inner: self.get_command_buffer()?,
         })
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn submit_recorders(
         &mut self,
@@ -753,6 +350,7 @@ impl Stream<Vulkan> for VulkanStream {
         }
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_bind_group(
         &self,
@@ -837,6 +435,7 @@ impl Stream<Vulkan> for VulkanStream {
             }
         }
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(
         &self,
@@ -852,6 +451,7 @@ impl Stream<Vulkan> for VulkanStream {
         vk_cbs.clear();
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
@@ -876,11 +476,13 @@ pub struct VulkanInstance {
     _api_version: u32,
     atomic_int64: bool,
 }
+
 impl Debug for VulkanInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("VulkanInstance")
     }
 }
+
 impl Display for VulkanInstance {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -890,6 +492,7 @@ impl Display for VulkanInstance {
         )
     }
 }
+
 impl VulkanStream {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     pub fn get_command_buffer(&self) -> Result<vk::CommandBuffer, VulkanError> {
@@ -912,6 +515,7 @@ impl VulkanStream {
         }
     }
 }
+
 impl BackendInstance<Vulkan> for VulkanInstance {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(self) -> Result<(), VulkanError> {
@@ -925,6 +529,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         }
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     fn get_properties(&self) -> HalInstanceProperties {
         HalInstanceProperties {
@@ -940,6 +545,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             atomic_int64: self.atomic_int64,
         }
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn compile_kernel(
         &self,
@@ -1021,6 +627,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             })
         }
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_semaphore(&self) -> std::result::Result<VulkanSemaphore, VulkanError> {
         unsafe {
@@ -1041,6 +648,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
         Ok(())
     }
 }
+
 #[derive(Debug)]
 pub struct VulkanKernel {
     pub kernel: vk::ShaderModule,
@@ -1049,6 +657,7 @@ pub struct VulkanKernel {
     pub pipeline_layout: vk::PipelineLayout,
     pub descriptor_pools: Mutex<Vec<DescriptorPoolData>>,
 }
+
 impl Kernel<Vulkan> for VulkanKernel {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
@@ -1082,6 +691,7 @@ impl Kernel<Vulkan> for VulkanKernel {
         }
     }
 }
+
 #[derive(Debug)]
 pub struct VulkanBuffer {
     pub buffer: vk::Buffer,
@@ -1089,9 +699,11 @@ pub struct VulkanBuffer {
     pub create_info: types::HalBufferDescriptor,
     pub mapped_ptr: Option<*mut u8>,
 }
+
 // Mapped ptr is not safely sendable. However, it is just a ptr to some memory,
 // only referred to by this buffer, so this is safe.
 unsafe impl Send for VulkanBuffer {}
+
 impl Buffer<Vulkan> for VulkanBuffer {
     #[cfg_attr(feature = "trace", tracing::instrument(skip(data), fields(len=data.len())))]
     unsafe fn write(
@@ -1107,6 +719,7 @@ impl Buffer<Vulkan> for VulkanBuffer {
             Ok(())
         }
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument(skip(data), fields(len=data.len())))]
     unsafe fn read(
         &mut self,
@@ -1121,6 +734,7 @@ impl Buffer<Vulkan> for VulkanBuffer {
         }
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn map(
         &mut self,
@@ -1128,12 +742,14 @@ impl Buffer<Vulkan> for VulkanBuffer {
     ) -> Result<*mut u8, <Vulkan as Backend>::Error> {
         Ok(self.mapped_ptr.unwrap())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn unmap(&mut self, _device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
         // Unmapping isn't necessary on vulkan as long as the mapped pointer isn't used
         // while it could be modified elsewhere
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(mut self, device: &VulkanDevice) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
@@ -1147,319 +763,7 @@ impl Buffer<Vulkan> for VulkanBuffer {
         }
     }
 }
-#[derive(Debug)]
-pub struct VulkanCommandRecorder {
-    inner: vk::CommandBuffer,
-}
-impl VulkanCommandRecorder {
-    fn begin(
-        &mut self,
-        stream: &<Vulkan as Backend>::Stream,
-        cb: vk::CommandBuffer,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            stream.shared.functions.begin_command_buffer(
-                cb,
-                &vk::CommandBufferBeginInfo::default()
-                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-            )?;
-            Ok(())
-        }
-    }
-    fn end(
-        &mut self,
-        stream: &<Vulkan as Backend>::Stream,
-        cb: vk::CommandBuffer,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            stream.shared.functions.end_command_buffer(cb)?;
-            Ok(())
-        }
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn copy_buffer(
-        &mut self,
-        stream: &<Vulkan as Backend>::Stream,
-        src_buffer: &<Vulkan as Backend>::Buffer,
-        dst_buffer: &<Vulkan as Backend>::Buffer,
-        src_offset: u64,
-        dst_offset: u64,
-        size: u64,
-        cb: vk::CommandBuffer,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            stream.shared.functions.cmd_copy_buffer(
-                cb,
-                src_buffer.buffer,
-                dst_buffer.buffer,
-                &[vk::BufferCopy::default()
-                    .src_offset(src_offset)
-                    .dst_offset(dst_offset)
-                    .size(size)],
-            );
-        }
-        Ok(())
-    }
-    fn dispatch_kernel(
-        &mut self,
-        stream: &<Vulkan as Backend>::Stream,
-        kernel: &<Vulkan as Backend>::Kernel,
-        descriptor_set: &<Vulkan as Backend>::BindGroup,
-        push_constants: &[u8],
-        workgroup_dims: [u32; 3],
-        cb: vk::CommandBuffer,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            stream.shared.functions.cmd_bind_pipeline(
-                cb,
-                vk::PipelineBindPoint::COMPUTE,
-                kernel.pipeline,
-            );
-            stream.shared.functions.cmd_bind_descriptor_sets(
-                cb,
-                vk::PipelineBindPoint::COMPUTE,
-                kernel.pipeline_layout,
-                0,
-                &[descriptor_set.inner],
-                &[],
-            );
-            if !push_constants.is_empty() {
-                stream.shared.functions.cmd_push_constants(
-                    cb,
-                    kernel.pipeline_layout,
-                    vk::ShaderStageFlags::COMPUTE,
-                    0,
-                    push_constants,
-                );
-            }
-            stream.shared.functions.cmd_dispatch(
-                cb,
-                workgroup_dims[0],
-                workgroup_dims[1],
-                workgroup_dims[2],
-            );
-        }
-        Ok(())
-    }
-    fn zero_memory(
-        &mut self,
-        stream: &<Vulkan as Backend>::Stream,
-        buffer: &VulkanBuffer,
-        offset: u64,
-        size: u64,
-        cb: vk::CommandBuffer,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            stream
-                .shared
-                .functions
-                .cmd_fill_buffer(cb, buffer.buffer, offset, size, 0);
-        }
-        Ok(())
-    }
-    fn stage_mask_khr(sync_ops: SyncOperations) -> vk::PipelineStageFlags2KHR {
-        match sync_ops {
-            SyncOperations::None => vk::PipelineStageFlags2KHR::empty(),
-            SyncOperations::Transfer => vk::PipelineStageFlags2KHR::TRANSFER,
-            SyncOperations::ComputeDispatch => vk::PipelineStageFlags2KHR::COMPUTE_SHADER,
-            SyncOperations::Both => vk::PipelineStageFlags2KHR::ALL_COMMANDS,
-        }
-    }
-    /// First command must be a pipeline barrier. Following commands must be memory barriers
-    fn sync_command<'a>(
-        &mut self,
-        stream: &<Vulkan as Backend>::Stream,
-        cb: vk::CommandBuffer,
-        commands: impl IntoIterator<Item = &'a BufferCommand<'a, Vulkan>>,
-    ) -> Result<(), VulkanError> {
-        let mut barriers = Vec::new();
-        let mut pre_flags = vk::PipelineStageFlags2KHR::empty();
-        let mut post_flags = vk::PipelineStageFlags2KHR::empty();
-        for command in commands {
-            match command {
-                BufferCommand::MemoryBarrier {
-                    buffer:
-                        HalBufferSlice {
-                            buffer,
-                            offset,
-                            len,
-                        },
-                } => barriers.push(
-                    vk::BufferMemoryBarrier2KHR::default()
-                        .buffer(buffer.buffer)
-                        .offset(*offset)
-                        .size(*len)
-                        .src_queue_family_index(stream.queue_family_idx)
-                        .dst_queue_family_index(stream.queue_family_idx)
-                        .src_access_mask(
-                            vk::AccessFlags2KHR::MEMORY_READ_KHR
-                                | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
-                        )
-                        .dst_access_mask(
-                            vk::AccessFlags2KHR::MEMORY_READ_KHR
-                                | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
-                        ),
-                ),
-                BufferCommand::MemoryTransfer {
-                    buffer:
-                        HalBufferSlice {
-                            buffer,
-                            offset,
-                            len,
-                        },
-                    import,
-                } => barriers.push(
-                    vk::BufferMemoryBarrier2KHR::default()
-                        .buffer(buffer.buffer)
-                        .offset(*offset)
-                        .size(*len)
-                        .src_queue_family_index(if *import {
-                            vk::QUEUE_FAMILY_EXTERNAL
-                        } else {
-                            stream.queue_family_idx
-                        })
-                        .dst_queue_family_index(if *import {
-                            stream.queue_family_idx
-                        } else {
-                            vk::QUEUE_FAMILY_EXTERNAL
-                        })
-                        .src_access_mask(
-                            vk::AccessFlags2KHR::MEMORY_READ_KHR
-                                | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
-                        )
-                        .dst_access_mask(
-                            vk::AccessFlags2KHR::MEMORY_READ_KHR
-                                | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
-                        ),
-                ),
-                BufferCommand::PipelineBarrier { before, after } => {
-                    pre_flags |= Self::stage_mask_khr(*before);
-                    post_flags |= Self::stage_mask_khr(*after);
-                }
-                _ => unreachable!(),
-            }
-        }
 
-        if pre_flags.is_empty() || post_flags.is_empty() {
-            return Ok(());
-        }
-        for barrier in &mut barriers {
-            *barrier = barrier.src_stage_mask(pre_flags).dst_stage_mask(post_flags);
-        }
-        let dependency_info = vk::DependencyInfoKHR::default().buffer_memory_barriers(&barriers);
-        unsafe {
-            stream
-                .shared
-                .functions
-                .supa_cmd_pipeline_barrier2(cb, &dependency_info)
-        };
-        Ok(())
-    }
-    fn record_command(
-        &mut self,
-        stream: &VulkanStream,
-        cb: vk::CommandBuffer,
-        command: &BufferCommand<Vulkan>,
-    ) -> Result<(), VulkanError> {
-        match command {
-            BufferCommand::CopyBuffer {
-                src_buffer,
-                dst_buffer,
-                src_offset,
-                dst_offset,
-                len,
-            } => self.copy_buffer(
-                stream,
-                src_buffer,
-                dst_buffer,
-                *src_offset,
-                *dst_offset,
-                *len,
-                cb,
-            )?,
-            BufferCommand::ZeroMemory { buffer } => {
-                self.zero_memory(stream, buffer.buffer, buffer.offset, buffer.len, cb)?;
-            }
-            BufferCommand::DispatchKernel {
-                kernel,
-                bind_group,
-                push_constants,
-                workgroup_dims,
-            } => self.dispatch_kernel(
-                stream,
-                kernel,
-                bind_group,
-                push_constants,
-                *workgroup_dims,
-                cb,
-            )?,
-
-            BufferCommand::PipelineBarrier { .. }
-            | BufferCommand::MemoryBarrier { .. }
-            | BufferCommand::MemoryTransfer { .. } => {
-                unreachable!()
-            }
-            BufferCommand::UpdateBindGroup { .. } => unreachable!(),
-            BufferCommand::Dummy => (),
-        }
-        Ok(())
-    }
-}
-impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
-    #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn record_commands(
-        &mut self,
-        stream: &VulkanStream,
-        commands: &[crate::BufferCommand<Vulkan>],
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        let cb = self.inner;
-        self.begin(stream, cb)?;
-        let mut pipeline_chain_start = None;
-        for i in 0..commands.len() {
-            match &commands[i] {
-                BufferCommand::MemoryBarrier { .. }
-                | BufferCommand::PipelineBarrier { .. }
-                | BufferCommand::MemoryTransfer { .. } => {
-                    if pipeline_chain_start.is_none() {
-                        pipeline_chain_start = Some(i);
-                    }
-                }
-                _ => {
-                    if let Some(start) = pipeline_chain_start {
-                        self.sync_command(stream, cb, &commands[start..i])?;
-                        pipeline_chain_start = None;
-                    }
-                    self.record_command(stream, cb, &commands[i])?;
-                }
-            }
-        }
-        self.end(stream, cb)?;
-        Ok(())
-    }
-    #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn clear(
-        &mut self,
-        stream: &<Vulkan as Backend>::Stream,
-    ) -> Result<(), <Vulkan as Backend>::Error> {
-        unsafe {
-            stream
-                .shared
-                .functions
-                .reset_command_buffer(self.inner, vk::CommandBufferResetFlags::RELEASE_RESOURCES)?;
-        }
-        Ok(())
-    }
-
-    #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn destroy(self, stream: &VulkanStream) -> Result<(), <Vulkan as Backend>::Error> {
-        stream
-            .unused_command_buffers
-            .lock()
-            .unwrap()
-            .push(self.inner);
-        Ok(())
-    }
-}
 #[derive(Debug)]
 pub struct DescriptorPoolData {
     pub pool: vk::DescriptorPool,
@@ -1472,6 +776,7 @@ pub struct VulkanBindGroup {
     inner: vk::DescriptorSet,
     pool_idx: u32,
 }
+
 impl BindGroup<Vulkan> for VulkanBindGroup {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn update(
@@ -1506,6 +811,7 @@ impl BindGroup<Vulkan> for VulkanBindGroup {
         }
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
@@ -1521,11 +827,13 @@ impl BindGroup<Vulkan> for VulkanBindGroup {
         Ok(())
     }
 }
+
 #[derive(Debug)]
 pub struct VulkanSemaphore {
     inner: vk::Semaphore,
     current_value: Mutex<u64>,
 }
+
 impl Semaphore<Vulkan> for VulkanSemaphore {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn wait(&self, device: &VulkanInstance) -> Result<(), <Vulkan as Backend>::Error> {
@@ -1539,6 +847,7 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         }
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn is_signalled(
         &self,
@@ -1551,6 +860,7 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
                 .supa_get_semaphore_counter_value(self.inner)?
         } == *self.current_value.lock().unwrap() + 1)
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn signal(&mut self, device: &VulkanInstance) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
@@ -1562,11 +872,13 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
         }
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn reset(&mut self, _device: &VulkanInstance) -> Result<(), <Vulkan as Backend>::Error> {
         *self.current_value.lock().unwrap() += 1;
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(self, device: &VulkanInstance) -> Result<(), <Vulkan as Backend>::Error> {
         unsafe {
@@ -1581,22 +893,26 @@ pub struct SharedDeviceInfo {
     functions: DeviceFunctions,
     queue_family_indices: Vec<u32>,
 }
+
 pub struct DeviceFunctions {
     device: ash::Device,
     sync2_device: Option<khr::synchronization2::Device>,
     timeline_device: Option<khr::timeline_semaphore::Device>,
 }
+
 impl Debug for DeviceFunctions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.device.handle())
     }
 }
+
 impl Deref for DeviceFunctions {
     type Target = ash::Device;
     fn deref(&self) -> &Self::Target {
         &self.device
     }
 }
+
 impl DeviceFunctions {
     unsafe fn supa_signal_semaphore(
         &self,
@@ -1608,6 +924,7 @@ impl DeviceFunctions {
             unsafe { self.device.signal_semaphore(signal_info) }
         }
     }
+
     unsafe fn supa_get_semaphore_counter_value(&self, semaphore: vk::Semaphore) -> VkResult<u64> {
         if let Some(dev) = &self.timeline_device {
             unsafe { dev.get_semaphore_counter_value(semaphore) }
@@ -1615,6 +932,7 @@ impl DeviceFunctions {
             unsafe { self.device.get_semaphore_counter_value(semaphore) }
         }
     }
+
     unsafe fn supa_wait_semaphores(
         &self,
         wait_info: &vk::SemaphoreWaitInfo<'_>,
@@ -1626,6 +944,7 @@ impl DeviceFunctions {
             unsafe { self.device.wait_semaphores(wait_info, timeout) }
         }
     }
+
     unsafe fn supa_queue_submit2(
         &self,
         queue: vk::Queue,
@@ -1638,6 +957,7 @@ impl DeviceFunctions {
             unsafe { self.queue_submit2(queue, submits, fence) }
         }
     }
+
     unsafe fn supa_cmd_pipeline_barrier2(
         &self,
         command_buffer: vk::CommandBuffer,

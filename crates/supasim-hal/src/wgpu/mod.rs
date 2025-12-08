@@ -25,6 +25,7 @@ pub use ::wgpu;
 /// * Expanding on the previous point, OOM issues are at best an immediate crash
 #[derive(Clone, Copy, Debug)]
 pub struct Wgpu;
+
 impl Backend for Wgpu {
     type Instance = WgpuInstance;
     type Device = WgpuDevice;
@@ -42,6 +43,7 @@ impl Backend for Wgpu {
         Self::create_instance(true, wgpu::Backends::PRIMARY, None)
     }
 }
+
 impl Wgpu {
     pub fn from_existing(
         device: wgpu::Device,
@@ -65,6 +67,7 @@ impl Wgpu {
             }],
         })
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     pub fn create_instance(
         advanced_dbg: bool,
@@ -138,6 +141,7 @@ pub struct WgpuDevice {
     device: wgpu::Device,
     unified_memory: bool,
 }
+
 impl Device<Wgpu> for WgpuDevice {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_buffer(
@@ -173,12 +177,14 @@ impl Device<Wgpu> for WgpuDevice {
             },
         })
     }
+
     unsafe fn import_buffer(
         &self,
         _info: &ExternalBufferDescriptor,
     ) -> Result<<Wgpu as Backend>::Buffer, <Wgpu as Backend>::Error> {
         unreachable!()
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(
         &self,
@@ -186,6 +192,7 @@ impl Device<Wgpu> for WgpuDevice {
     ) -> Result<(), <Wgpu as Backend>::Error> {
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     fn get_properties(&self, _instance: &<Wgpu as Backend>::Instance) -> HalDeviceProperties {
         HalDeviceProperties {
@@ -197,6 +204,7 @@ impl Device<Wgpu> for WgpuDevice {
             supports_semaphore_import: false,
         }
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_semaphore(
         &self,
@@ -205,6 +213,7 @@ impl Device<Wgpu> for WgpuDevice {
             inner: Mutex::new(None),
         })
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn import_semaphore(
         &self,
@@ -212,6 +221,7 @@ impl Device<Wgpu> for WgpuDevice {
     ) -> Result<<Wgpu as Backend>::Semaphore, <Wgpu as Backend>::Error> {
         unreachable!()
     }
+
     unsafe fn destroy(
         self,
         _instance: &mut <Wgpu as Backend>::Instance,
@@ -225,6 +235,7 @@ pub struct WgpuStream {
     queue: wgpu::Queue,
     device: wgpu::Device,
 }
+
 impl Stream<Wgpu> for WgpuStream {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_recorder(
@@ -254,6 +265,7 @@ impl Stream<Wgpu> for WgpuStream {
         }
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn wait_for_idle(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
         self.device
@@ -288,6 +300,7 @@ impl Stream<Wgpu> for WgpuStream {
         });
         Ok(WgpuBindGroup { inner: bg })
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(
         &self,
@@ -295,6 +308,7 @@ impl Stream<Wgpu> for WgpuStream {
     ) -> Result<(), <Wgpu as Backend>::Error> {
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
@@ -308,6 +322,7 @@ impl Stream<Wgpu> for WgpuStream {
 pub struct WgpuInstance {
     device: wgpu::Device,
 }
+
 impl BackendInstance<Wgpu> for WgpuInstance {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     fn get_properties(&self) -> HalInstanceProperties {
@@ -417,12 +432,14 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 }
+
 #[derive(Debug)]
 pub struct WgpuKernel {
     _kernel: wgpu::ShaderModule,
     pipeline: wgpu::ComputePipeline,
     bgl: wgpu::BindGroupLayout,
 }
+
 impl Kernel<Wgpu> for WgpuKernel {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
@@ -432,6 +449,7 @@ impl Kernel<Wgpu> for WgpuKernel {
         Ok(())
     }
 }
+
 #[derive(Debug)]
 pub struct WgpuBuffer {
     /// This can't be moved for fear of UB lol. This is because buffer
@@ -440,8 +458,11 @@ pub struct WgpuBuffer {
     view: Option<wgpu::BufferViewMut>,
     map_mut: Option<bool>,
 }
+
 unsafe impl Send for WgpuBuffer {}
+
 unsafe impl Sync for WgpuBuffer {}
+
 impl Buffer<Wgpu> for WgpuBuffer {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(mut self, _device: &WgpuDevice) -> Result<(), <Wgpu as Backend>::Error> {
@@ -515,10 +536,12 @@ impl Buffer<Wgpu> for WgpuBuffer {
         Ok(())
     }
 }
+
 #[derive(Debug)]
 pub struct WgpuCommandRecorder {
     inner: Option<wgpu::CommandEncoder>,
 }
+
 impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn record_commands(
@@ -577,6 +600,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
 
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn clear(
         &mut self,
@@ -585,6 +609,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
         *self = unsafe { stream.create_recorder()? };
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
@@ -593,10 +618,12 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
         Ok(())
     }
 }
+
 #[derive(Debug)]
 pub struct WgpuBindGroup {
     inner: wgpu::BindGroup,
 }
+
 impl BindGroup<Wgpu> for WgpuBindGroup {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn update(
@@ -613,6 +640,7 @@ impl BindGroup<Wgpu> for WgpuBindGroup {
         // TODO: work on bindless
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
@@ -622,16 +650,21 @@ impl BindGroup<Wgpu> for WgpuBindGroup {
         Ok(())
     }
 }
+
 pub struct WgpuSemaphore {
     inner: Mutex<Option<wgpu::SubmissionIndex>>,
 }
+
 unsafe impl Send for WgpuSemaphore {}
+
 unsafe impl Sync for WgpuSemaphore {}
+
 impl Debug for WgpuSemaphore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("WgpuSemaphore")
     }
 }
+
 impl Semaphore<Wgpu> for WgpuSemaphore {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn wait(&self, device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
@@ -646,6 +679,7 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
         }
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn is_signalled(&self, device: &WgpuInstance) -> Result<bool, <Wgpu as Backend>::Error> {
         if self.inner.lock().unwrap().is_some() {
@@ -657,15 +691,18 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
             Ok(true)
         }
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn signal(&mut self, _device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
         unreachable!()
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn reset(&mut self, _device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
         *self.inner.lock().unwrap() = None;
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
@@ -674,6 +711,7 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
         Ok(())
     }
 }
+
 #[derive(thiserror::Error, Debug)]
 pub enum WgpuError {
     #[error("Wgpu internal error: {0}")]
@@ -687,6 +725,7 @@ pub enum WgpuError {
     #[error("A buffer export was attempted under invalid conditions")]
     ExternalMemoryExport,
 }
+
 impl Error<Wgpu> for WgpuError {
     fn is_out_of_device_memory(&self) -> bool {
         matches!(self, Self::WgpuError(wgpu::Error::OutOfMemory { .. }))
