@@ -15,12 +15,6 @@ use crate::{
 };
 use std::{collections::HashMap, sync::Arc};
 
-pub type UserBufferAccessClosure<'a, B> =
-    Box<dyn FnOnce(&mut [MappedBuffer<B>]) -> anyhow::Result<()>>;
-
-pub type SendableUserBufferAccessClosure<B> =
-    Box<dyn Send + FnOnce(&mut [MappedBuffer<B>]) -> anyhow::Result<()>>;
-
 /// If the entire buffer isn't the same type you are trying to read, read as bytes first then cast yourself.
 /// SupaSim does checks for alignments and validates offsets with the size of types
 pub struct MappedBuffer<B: hal::Backend> {
@@ -38,18 +32,12 @@ pub struct MappedBuffer<B: hal::Backend> {
 }
 
 impl<B: hal::Backend> Instance<B> {
-    /// If the closure panics, memory issues may occur.
-    /// Also, calling any supasim related functions in
-    /// the closure may cause deadlocks.
-    ///
-    /// This should only used to do quick operations on memory.
     #[allow(clippy::type_complexity)]
     pub fn access_buffers(
         &'_ self,
         buffers: &[&BufferSlice<B>],
     ) -> SupaSimResult<B, Vec<MappedBuffer<B>>> {
         let instance = self.inner()?;
-        // This function will be absolutely gross
         let mut buffer_locks = HashMap::new();
         let mut residency_locks = HashMap::new();
         let mut first_id = HashMap::new();

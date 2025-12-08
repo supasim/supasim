@@ -43,10 +43,7 @@ use thiserror::Error;
 use thunderdome::{Arena, Index};
 use types::HalDeviceProperties;
 
-pub use crate::buffer::{
-    Buffer, BufferDescriptor, BufferSlice,
-    access::{MappedBuffer, SendableUserBufferAccessClosure, UserBufferAccessClosure},
-};
+pub use crate::buffer::{Buffer, BufferDescriptor, BufferSlice, access::MappedBuffer};
 pub use hal;
 pub use hal::{DeviceDescriptor, InstanceDescriptor};
 pub use types::{
