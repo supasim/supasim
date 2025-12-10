@@ -20,3 +20,6 @@
 
 ### Kernels
 * Kernels will be written in slang, then transpiled at runtime
+
+### Video encoding/recording
+* This is one of the hardest tasks on the list
