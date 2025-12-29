@@ -228,7 +228,7 @@ impl<B: hal::Backend> AppState<B> {
                         &max_uniform_bind_group_layout,
                         &buffer_bind_group_layout,
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 }),
             ),
             module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -279,7 +279,7 @@ impl<B: hal::Backend> AppState<B> {
                         &render_uniform_bind_group_layout,
                         &buffer_bind_group_layout,
                     ],
-                    push_constant_ranges: &[],
+                    immediate_size: 0,
                 }),
             ),
             vertex: wgpu::VertexState {
@@ -302,7 +302,7 @@ impl<B: hal::Backend> AppState<B> {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let max_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -594,6 +594,7 @@ impl<B: hal::Backend> AppState<B> {
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,
                 timestamp_writes: None,
+                multiview_mask: None,
             });
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, Some(&self.render_uniform_bind_group), &[]);
