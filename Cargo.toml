@@ -58,7 +58,7 @@ paste = "1.0"
 
 pollster = { version = "0.4" }
 
-wgpu = { version = "27.0", default-features = false, features = [
+wgpu = { version = "28.0", default-features = false, features = [
   "spirv",
   "dx12",
   "metal",
