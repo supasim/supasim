@@ -7,6 +7,12 @@ END LICENSE */
 //! # Warning
 //! This code is awful. The usual advice of "the code is the documentation" might not be as useful here.
 
+// Hassle-rs depends on the `com` crate which references symbols in but doesn't link to advapi32.lib.
+// TODO: figure out better fix
+#[cfg(all(target_os = "windows", feature = "dxil-out"))]
+#[link(name = "advapi32")]
+extern "system" {}
+
 #[cfg(test)]
 mod tests;
 
