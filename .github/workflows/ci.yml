@@ -26,7 +26,7 @@ jobs:
   Format:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Run typos
         uses: crate-ci/typos@v1.38.0
 
@@ -69,7 +69,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     name: Check & Test (${{ matrix.name }})
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
     - name: Install rust toolchain
       shell: bash
       run: |
