@@ -11,7 +11,7 @@ END LICENSE */
 // TODO: figure out better fix
 #[cfg(all(target_os = "windows", feature = "dxil-out"))]
 #[link(name = "advapi32")]
-extern "system" {}
+unsafe extern "system" {}
 
 #[cfg(test)]
 mod tests;
