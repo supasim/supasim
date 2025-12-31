@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Run typos
-        uses: crate-ci/typos@v1.40.1
+        uses: crate-ci/typos@v1.41.0
 
       - name: Run update-license-header
         shell: bash
