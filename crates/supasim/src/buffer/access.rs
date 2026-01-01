@@ -193,6 +193,7 @@ impl<B: hal::Backend> Buffer<B> {
 
 impl<B: hal::Backend> MappedBuffer<B> {
     pub fn readable<T: bytemuck::Pod>(&self) -> SupaSimResult<B, &[T]> {
+        // Length is guaranteed for this ptr
         let s = unsafe { std::slice::from_raw_parts(self.inner, self.len as usize) };
         // Length of the slice is a multiple of the length of the type
         if self.len.is_multiple_of(size_of::<T>() as u64)
@@ -212,6 +213,7 @@ impl<B: hal::Backend> MappedBuffer<B> {
             return Err(SupaSimError::BufferRegionNotValid);
         }
         self.was_used_mut = true;
+        // Length is guaranteed for this ptr
         let s = unsafe { std::slice::from_raw_parts_mut(self.inner, self.len as usize) };
         // Length of the slice is a multiple of the length of the type
         if self.len.is_multiple_of(size_of::<T>() as u64)
@@ -286,6 +288,8 @@ impl<B: hal::Backend> Drop for MappedBuffer<B> {
         let s = self.buffer.inner().unwrap();
         let mut residency = s.residency.0.write();
         if let Some(cap) = self.vec_capacity {
+            // If the vec_capacity is Some() then this ptr was obtained from a vector,
+            // which we must copy back into the buffer and then destroy
             unsafe {
                 let vec = Vec::from_raw_parts(self.inner, self.len as usize, cap);
                 residency.devices[0]
