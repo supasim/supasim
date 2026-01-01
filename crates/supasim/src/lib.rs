@@ -22,12 +22,11 @@ mod api_type;
 mod buffer;
 mod record;
 mod sync;
-mod sync_thread;
 
 use crate::buffer::residency::{BufferResidency, BufferResidencyRef};
 use crate::buffer::{BufferAccess, BufferInner, BufferRange, BufferWeak};
 use crate::sync::Semaphore;
-use crate::sync_thread::{StreamThreadHandle, StreamThreadMessage, create_sync_thread};
+use crate::sync::stream_thread::{StreamThreadHandle, StreamThreadMessage, create_sync_thread};
 use anyhow::anyhow;
 use hal::{
     BackendInstance as _, CommandRecorder as _, Device as _, Kernel as _, Semaphore as _,

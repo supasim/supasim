@@ -4,9 +4,11 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
+pub mod stream_thread;
+
 use crate::{
     Instance, MapSupasimError, SupaSimError, SupaSimResult, WaitHandle, WaitHandleInner, record,
-    sync_thread::GpuSubmissionInfo,
+    sync::stream_thread::GpuSubmissionInfo,
 };
 use hal::{CommandRecorder as _, Semaphore as _, Stream};
 use parking_lot::RwLock;
