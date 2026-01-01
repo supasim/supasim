@@ -1,7 +1,6 @@
 # SupaSim
 
 [![CI](https://github.com/supasim/supasim/actions/workflows/ci.yml/badge.svg)](https://github.com/supasim/supasim/actions/workflows/ci.yml)
-[![Lines of code](https://tokei.rs/b1/github/supasim/supasim)](https://github.com/supasim/supasim)
 
 SupaSim is a general purpose GPU and simulation toolkit, made in Rust, with kernels written in [Slang](https://shader-slang.org/).
 
