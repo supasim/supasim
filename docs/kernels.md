@@ -1,4 +1,5 @@
 # Kernels
+Note that kernels refer to compute shaders in graphics APIs.
 
 ## Known issues with slang
 **SLANG IS WEIRD.** Lots of thing won't behave as expected. It is highly recommended that you use assertions to verify the correctness of generated reflection information, which reflects what slang outputs.
@@ -7,7 +8,7 @@
 
 Anyway, on with the list:
 
-* Non-static const's are reflected in the shader's interface, which is *never* intentional. In fact, most ways to write global variables will result in them somehow being in the shader's interface
+* Non-static const's are reflected in the kernel's interface, which is *never* intentional. In fact, most ways to write global variables will result in them somehow being in the kernel's interface
 * Slang tries to determine which global variables are used, but this can sometimes have surprising results.
   * Multiple bindings in the same struct/block get optimized away together or not at all. If you group all of the bindings for a function together in a struct, you can guarantee they will all be reflected in the interface.
 * SupaSim only uses a single descriptor set/binding space/whatever. Sometimes, if you have some inputs declared globally and some declared as function parameters, or multiple global variable blocks, or any of a number of other setups, slang will automatically set some of them to have different binding spaces. `supasim-kernels` automatically panics if it detects a nonzero binding space.

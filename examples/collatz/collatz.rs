@@ -39,13 +39,13 @@ impl<B: hal::Backend> AppState<B> {
         Self { instance }
     }
     pub fn run(&mut self) {
-        const WORKGROUP_DIM: u32 = 16;
-        const SHADER_WORKGROUP_DIM: u32 = 16;
-        const UNSOLVED_BUFFER_SIZE: u32 = WORKGROUP_DIM
-            * WORKGROUP_DIM
-            * WORKGROUP_DIM
-            * SHADER_WORKGROUP_DIM
-            * SHADER_WORKGROUP_DIM
+        const KERNEL_WORKGROUPS_PER_DIM: u32 = 16;
+        const KERNEL_WORKGROUP_SIZE_PER_DIM: u32 = 16;
+        const UNSOLVED_BUFFER_SIZE: u32 = KERNEL_WORKGROUPS_PER_DIM
+            * KERNEL_WORKGROUPS_PER_DIM
+            * KERNEL_WORKGROUPS_PER_DIM
+            * KERNEL_WORKGROUP_SIZE_PER_DIM
+            * KERNEL_WORKGROUP_SIZE_PER_DIM
             * 4;
         let kernel1 = self
             .instance
@@ -98,7 +98,11 @@ impl<B: hal::Backend> AppState<B> {
             num_unsolved: 0,
             new_num_unsolved: 0,
             smallest_unsolved: u64::MAX,
-            dispatch_size: [WORKGROUP_DIM, WORKGROUP_DIM, WORKGROUP_DIM],
+            dispatch_size: [
+                KERNEL_WORKGROUPS_PER_DIM,
+                KERNEL_WORKGROUPS_PER_DIM,
+                KERNEL_WORKGROUPS_PER_DIM,
+            ],
             unsolved_buffer_size: UNSOLVED_BUFFER_SIZE,
         };
         setup_recorder
@@ -132,21 +136,33 @@ impl<B: hal::Backend> AppState<B> {
                 .dispatch_kernel(
                     &kernel1,
                     &buffers_to_use,
-                    [WORKGROUP_DIM, WORKGROUP_DIM, WORKGROUP_DIM],
+                    [
+                        KERNEL_WORKGROUPS_PER_DIM,
+                        KERNEL_WORKGROUPS_PER_DIM,
+                        KERNEL_WORKGROUPS_PER_DIM,
+                    ],
                 )
                 .unwrap();
             recorder
                 .dispatch_kernel(
                     &kernel2,
                     &buffers_to_use,
-                    [WORKGROUP_DIM, WORKGROUP_DIM, WORKGROUP_DIM],
+                    [
+                        KERNEL_WORKGROUPS_PER_DIM,
+                        KERNEL_WORKGROUPS_PER_DIM,
+                        KERNEL_WORKGROUPS_PER_DIM,
+                    ],
                 )
                 .unwrap();
             recorder
                 .dispatch_kernel(
                     &kernel3,
                     &buffers_to_use,
-                    [WORKGROUP_DIM, WORKGROUP_DIM, WORKGROUP_DIM],
+                    [
+                        KERNEL_WORKGROUPS_PER_DIM,
+                        KERNEL_WORKGROUPS_PER_DIM,
+                        KERNEL_WORKGROUPS_PER_DIM,
+                    ],
                 )
                 .unwrap();
             recorder

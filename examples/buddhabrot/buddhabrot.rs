@@ -140,16 +140,16 @@ impl<B: hal::Backend> AppState<B> {
         };
 
         let global_state = kernels::GlobalState::new_from_env().unwrap();
-        let mut shader_binary = Vec::new();
+        let mut kernel_binary = Vec::new();
         let instance = Instance::from_hal(hal_desc);
         let workgroup_size = [16, 16, 1];
         let mut compile_kernel = |entry: &str| {
-            shader_binary.clear();
+            kernel_binary.clear();
             let reflection_info = global_state
                 .compile_kernel(supasim::kernels::KernelCompileOptions {
                     target: instance.properties().unwrap().kernel_lang,
                     source: kernels::KernelSource::Memory(include_bytes!("buddhabrot.slang")),
-                    dest: kernels::KernelDest::Memory(&mut shader_binary),
+                    dest: kernels::KernelDest::Memory(&mut kernel_binary),
                     entry,
                     include: None,
                     fp_mode: kernels::KernelFpMode::Precise,
@@ -160,7 +160,7 @@ impl<B: hal::Backend> AppState<B> {
                 .unwrap();
             assert_eq!(reflection_info.buffers, vec![false, true, true]);
             instance
-                .compile_raw_kernel(&shader_binary, reflection_info)
+                .compile_raw_kernel(&kernel_binary, reflection_info)
                 .unwrap()
         };
         let run_kernel = compile_kernel("Run");

@@ -47,7 +47,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send {
 
     /// # Safety
     /// * The kernel code must be valid
-    /// * The reflection info must match exactly with the shader
+    /// * The reflection info must match exactly with the kernel
     /// * The cache must be valid
     unsafe fn compile_kernel(&self, descriptor: KernelDescriptor) -> Result<B::Kernel, B::Error>;
 
