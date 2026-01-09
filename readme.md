@@ -16,9 +16,9 @@ The following additional libraries providing bindings to C++ libraries live on t
 * [![Crates.io](https://img.shields.io/crates/v/supasim-spirv-cross-sys.svg?label=supasim-spirv-cross-sys)](https://crates.io/crates/supasim-spirv-cross-sys)
 * [![Crates.io](https://img.shields.io/crates/v/supasim-spirv-tools-sys.svg?label=supasim-spirv-tools-sys)](https://crates.io/crates/supasim-spirv-tools-sys)
 
-## Shaders
+## Kernels
 
-Shaders are written in [Slang](https://shader-slang.org/). SupaSim provides some advice on how to avoid unintended behavior (aka bugs) in Slang code, which can be seen [here](./kernels/readme.md). When compiling kernels, they may not be directly transpiled to the target language. For example, many languages first go through SPIR-V, enabling SPIRV-Opt to optimize code, as well as allowing use of SPIRV-Cross, which may be more mature and stable than Slang's direct output into the target language.
+Kernels are written in [Slang](https://shader-slang.org/). SupaSim provides some advice on how to avoid unintended behavior (aka bugs) in Slang code, which can be seen [here](./kernels/readme.md). When compiling kernels, they may not be directly transpiled to the target language. For example, many languages first go through SPIR-V, enabling SPIRV-Opt to optimize code, as well as allowing use of SPIRV-Cross, which may be more mature and stable than Slang's direct output into the target language.
 
 ## Compiling
 
