@@ -6,7 +6,7 @@ END LICENSE */
 
 use crate::*;
 use std::fmt::Debug;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::{borrow::Cow, num::NonZero};
 pub use wgpu::Backends;
 use wgpu::RequestAdapterError;
@@ -25,6 +25,7 @@ pub use ::wgpu;
 /// * Expanding on the previous point, OOM issues are at best an immediate crash
 #[derive(Clone, Copy, Debug)]
 pub struct Wgpu;
+
 impl Backend for Wgpu {
     type Instance = WgpuInstance;
     type Device = WgpuDevice;
@@ -42,6 +43,7 @@ impl Backend for Wgpu {
         Self::create_instance(true, wgpu::Backends::PRIMARY, None)
     }
 }
+
 impl Wgpu {
     pub fn from_existing(
         device: wgpu::Device,
@@ -65,6 +67,7 @@ impl Wgpu {
             }],
         })
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     pub fn create_instance(
         advanced_dbg: bool,
@@ -102,7 +105,10 @@ impl Wgpu {
             features |= wgpu::Features::SHADER_INT64_ATOMIC_ALL_OPS;
         }
         let unified_memory = preset_unified_memory.unwrap_or(false);
-        if unified_memory {
+        if adapter
+            .features()
+            .contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS)
+        {
             features |= wgpu::Features::MAPPABLE_PRIMARY_BUFFERS;
         }
         let (device, queue) =
@@ -138,6 +144,7 @@ pub struct WgpuDevice {
     device: wgpu::Device,
     unified_memory: bool,
 }
+
 impl Device<Wgpu> for WgpuDevice {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_buffer(
@@ -159,26 +166,37 @@ impl Device<Wgpu> for WgpuDevice {
                 HalBufferType::Upload => {
                     wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::MAP_WRITE
                 }
-                HalBufferType::UploadDownload => unreachable!(),
+                HalBufferType::UploadDownload => {
+                    wgpu::BufferUsages::MAP_READ
+                        | wgpu::BufferUsages::MAP_WRITE
+                        | wgpu::BufferUsages::COPY_SRC
+                        | wgpu::BufferUsages::COPY_DST
+                }
             },
             mapped_at_creation: false,
         });
         Ok(WgpuBuffer {
             inner: Box::new(buffer.clone()),
             view: None,
-            map_mut: match alloc_info.memory_type {
-                HalBufferType::Download => Some(false),
-                HalBufferType::Upload => Some(true),
-                _ => None,
-            },
+            // Whether this buffer is host-mappable at all. `Storage` buffers are not
+            // mappable; `map` must not be called on them, so a stray call fails loudly.
+            // The *direction* of a mapping (read vs write) is chosen per `map` call via
+            // its `mutable` argument, NOT fixed at creation: mapping an `UploadDownload`
+            // buffer as `Write` and reading through the pointer only returns GPU-written
+            // data on unified memory. On non-unified memory (e.g. llvmpipe/lavapipe in
+            // CI, which reports `MAPPABLE_PRIMARY_BUFFERS` but is NOT unified) a
+            // write-mapping read returns stale data, so reads must map `MapMode::Read`.
+            mappable: !matches!(alloc_info.memory_type, HalBufferType::Storage),
         })
     }
+
     unsafe fn import_buffer(
         &self,
         _info: &ExternalBufferDescriptor,
     ) -> Result<<Wgpu as Backend>::Buffer, <Wgpu as Backend>::Error> {
         unreachable!()
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(
         &self,
@@ -186,6 +204,8 @@ impl Device<Wgpu> for WgpuDevice {
     ) -> Result<(), <Wgpu as Backend>::Error> {
         Ok(())
     }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn get_properties(&self, _instance: &<Wgpu as Backend>::Instance) -> HalDeviceProperties {
         HalDeviceProperties {
             is_unified_memory: self.unified_memory,
@@ -196,21 +216,25 @@ impl Device<Wgpu> for WgpuDevice {
             supports_semaphore_import: false,
         }
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_semaphore(
         &self,
     ) -> Result<<Wgpu as Backend>::Semaphore, <Wgpu as Backend>::Error> {
         Ok(WgpuSemaphore {
             inner: Mutex::new(None),
-            device: self.device.clone(),
+            submitted: Condvar::new(),
         })
     }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn import_semaphore(
         &self,
         _info: &ExternalSemaphoreDescriptor,
     ) -> Result<<Wgpu as Backend>::Semaphore, <Wgpu as Backend>::Error> {
         unreachable!()
     }
+
     unsafe fn destroy(
         self,
         _instance: &mut <Wgpu as Backend>::Instance,
@@ -224,6 +248,7 @@ pub struct WgpuStream {
     queue: wgpu::Queue,
     device: wgpu::Device,
 }
+
 impl Stream<Wgpu> for WgpuStream {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_recorder(
@@ -249,10 +274,14 @@ impl Stream<Wgpu> for WgpuStream {
         for info in infos {
             if let Some(signal) = info.signal_semaphore {
                 *signal.inner.lock().unwrap() = Some(idx.clone());
+                // Wake any CPU waiter that blocked because the index wasn't known yet.
+                signal.submitted.notify_all();
             }
         }
         Ok(())
     }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn wait_for_idle(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
         self.device
             .poll(wgpu::PollType::wait_indefinitely())
@@ -275,7 +304,7 @@ impl Stream<Wgpu> for WgpuStream {
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &slice.buffer.inner,
                     offset: slice.offset,
-                    size: NonZero::<u64>::new(slice.len),
+                    size: NonZero::<u64>::new(slice.length),
                 }),
             })
             .collect();
@@ -286,12 +315,16 @@ impl Stream<Wgpu> for WgpuStream {
         });
         Ok(WgpuBindGroup { inner: bg })
     }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(
         &self,
         _instance: &<Wgpu as Backend>::Instance,
     ) -> Result<(), <Wgpu as Backend>::Error> {
         Ok(())
     }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
         _device: &mut <Wgpu as Backend>::Device,
@@ -304,7 +337,9 @@ impl Stream<Wgpu> for WgpuStream {
 pub struct WgpuInstance {
     device: wgpu::Device,
 }
+
 impl BackendInstance<Wgpu> for WgpuInstance {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     fn get_properties(&self) -> HalInstanceProperties {
         HalInstanceProperties {
             sync_mode: SyncMode::Automatic,
@@ -315,7 +350,10 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             semaphore_signal: false,
             map_buffers: true,
             map_buffer_while_gpu_use: false,
-            upload_download_buffers: false,
+            upload_download_buffers: self
+                .device
+                .features()
+                .contains(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS),
             atomic_int64: self
                 .device
                 .features()
@@ -394,6 +432,16 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     }
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
+    unsafe fn create_semaphore(
+        &self,
+    ) -> Result<<Wgpu as Backend>::Semaphore, <Wgpu as Backend>::Error> {
+        Ok(WgpuSemaphore {
+            inner: Mutex::new(None),
+            submitted: Condvar::new(),
+        })
+    }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Wgpu as Backend>::Error> {
         Ok(())
     }
@@ -403,13 +451,16 @@ impl BackendInstance<Wgpu> for WgpuInstance {
         Ok(())
     }
 }
+
 #[derive(Debug)]
 pub struct WgpuKernel {
     _kernel: wgpu::ShaderModule,
     pipeline: wgpu::ComputePipeline,
     bgl: wgpu::BindGroupLayout,
 }
+
 impl Kernel<Wgpu> for WgpuKernel {
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
         _instance: &<Wgpu as Backend>::Instance,
@@ -417,16 +468,48 @@ impl Kernel<Wgpu> for WgpuKernel {
         Ok(())
     }
 }
+
+/// A live host mapping of a [`WgpuBuffer`]. The direction is chosen per map call:
+/// reads use `MapMode::Read` (an immutable `BufferView`), writes use `MapMode::Write`
+/// (a mutable `BufferViewMut`). This matters on non-unified memory, where a
+/// write-mapping does not reflect GPU-written data.
+#[derive(Debug)]
+enum MappedView {
+    Read(wgpu::BufferView),
+    Write(wgpu::BufferViewMut),
+}
+
+impl MappedView {
+    /// Returns a raw pointer to the mapped bytes. For a `Read` mapping the returned
+    /// pointer is derived from a read-only view and must only be read through.
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        match self {
+            // `BufferView::as_ptr` yields a `*const u8`; the caller of a read mapping only
+            // reads through the pointer, so casting away const is sound here.
+            MappedView::Read(view) => view.as_ptr() as *mut u8,
+            MappedView::Write(view) => view.as_mut_ptr(),
+        }
+    }
+
+    fn is_mut(&self) -> bool {
+        matches!(self, MappedView::Write(_))
+    }
+}
+
 #[derive(Debug)]
 pub struct WgpuBuffer {
     /// This can't be moved for fear of UB lol. This is because buffer
     /// mapping expands the lifetime of a reference to it to 'static.
     inner: Box<wgpu::Buffer>,
-    view: Option<wgpu::BufferViewMut>,
-    map_mut: Option<bool>,
+    view: Option<MappedView>,
+    /// Whether this buffer is host-mappable at all (false for `Storage`).
+    mappable: bool,
 }
+
 unsafe impl Send for WgpuBuffer {}
+
 unsafe impl Sync for WgpuBuffer {}
+
 impl Buffer<Wgpu> for WgpuBuffer {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(mut self, _device: &WgpuDevice) -> Result<(), <Wgpu as Backend>::Error> {
@@ -445,7 +528,8 @@ impl Buffer<Wgpu> for WgpuBuffer {
         data: &[u8],
     ) -> Result<(), <Wgpu as Backend>::Error> {
         let was_mapped = self.view.is_some();
-        let ptr = unsafe { self.map(device)?.add(offset as usize) };
+        // Writes must map `MapMode::Write` so the mapped range is uploaded to the GPU.
+        let ptr = unsafe { self.map(device, true)?.add(offset as usize) };
         unsafe { std::slice::from_raw_parts_mut(ptr, data.len()) }.clone_from_slice(data);
         if !was_mapped {
             unsafe { self.unmap(device)? };
@@ -461,7 +545,10 @@ impl Buffer<Wgpu> for WgpuBuffer {
         data: &mut [u8],
     ) -> Result<(), <Wgpu as Backend>::Error> {
         let was_mapped = self.view.is_some();
-        let ptr = unsafe { self.map(device)?.add(offset as usize) };
+        // Reads must map `MapMode::Read` (immutable view): on non-unified memory a
+        // write-mapping does not reflect GPU-written data, so reading through it returns
+        // stale bytes. See the note in `create_buffer`.
+        let ptr = unsafe { self.map(device, false)?.add(offset as usize) };
         unsafe { data.clone_from_slice(std::slice::from_raw_parts(ptr, data.len())) };
         if !was_mapped {
             unsafe { self.unmap(device)? };
@@ -470,22 +557,54 @@ impl Buffer<Wgpu> for WgpuBuffer {
     }
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn map(&mut self, device: &WgpuDevice) -> Result<*mut u8, <Wgpu as Backend>::Error> {
+    unsafe fn map(
+        &mut self,
+        device: &WgpuDevice,
+        mutable: bool,
+    ) -> Result<*mut u8, <Wgpu as Backend>::Error> {
+        assert!(
+            self.mappable,
+            "map() called on a non-host-mappable (Storage) wgpu buffer"
+        );
         let ptr = match &mut self.view {
-            Some(slice) => slice.as_mut_ptr(),
+            // Reuse an existing mapping if it can serve the request. A live `Write`
+            // mapping can serve a read (correct on unified memory; a concurrent
+            // read+write alias of the same buffer on non-unified memory is an unsound
+            // caller pattern, not something the common paths do). A live `Read` mapping
+            // cannot serve a write, so that combination fails loudly instead of silently
+            // dropping the write.
+            Some(view) => {
+                assert!(
+                    view.is_mut() || !mutable,
+                    "wgpu buffer already mapped read-only; unmap before writing"
+                );
+                view.as_mut_ptr()
+            }
             None => {
                 let slice = self.inner.slice(..);
-
                 slice.map_async(
-                    if self.map_mut.unwrap() {
+                    if mutable {
                         wgpu::MapMode::Write
                     } else {
                         wgpu::MapMode::Read
                     },
                     |_| (),
                 );
-                device.device.poll(wgpu::PollType::Poll).unwrap();
-                self.view = Some(slice.get_mapped_range_mut());
+                // `map_async` is asynchronous: the mapping (and, for `MapMode::Read`,
+                // the device->host copy that populates it) only completes once the
+                // device is polled to completion. A non-blocking `Poll` can return
+                // before the map is ready, so `get_mapped_range` would observe stale
+                // bytes (intermittent wrong readbacks). Block until it's done.
+                device
+                    .device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .unwrap();
+                let view = if mutable {
+                    MappedView::Write(slice.get_mapped_range_mut())
+                } else {
+                    MappedView::Read(slice.get_mapped_range())
+                };
+                self.view = Some(view);
                 self.view.as_mut().unwrap().as_mut_ptr()
             }
         };
@@ -500,10 +619,12 @@ impl Buffer<Wgpu> for WgpuBuffer {
         Ok(())
     }
 }
+
 #[derive(Debug)]
 pub struct WgpuCommandRecorder {
     inner: Option<wgpu::CommandEncoder>,
 }
+
 impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn record_commands(
@@ -530,7 +651,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                     );
                 }
                 BufferCommand::ZeroMemory { buffer } => {
-                    r.clear_buffer(&buffer.buffer.inner, buffer.offset, Some(buffer.len));
+                    r.clear_buffer(&buffer.buffer.inner, buffer.offset, Some(buffer.length));
                 }
                 BufferCommand::DispatchKernel {
                     kernel,
@@ -551,7 +672,11 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                     );
                     drop(pass);
                 }
-                BufferCommand::MemoryTransfer { .. } => todo!(),
+                BufferCommand::MemoryTransfer { .. } => {
+                    // External memory import/export is unimplemented on wgpu (issue #57).
+                    // Return a clean backend error rather than panicking via `todo!()`.
+                    return Err(WgpuError::ExternalMemoryUnsupported);
+                }
                 BufferCommand::UpdateBindGroup { .. } => {
                     unreachable!()
                 }
@@ -562,6 +687,7 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
 
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn clear(
         &mut self,
@@ -570,6 +696,8 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
         *self = unsafe { stream.create_recorder()? };
         Ok(())
     }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
         _stream: &<Wgpu as Backend>::Stream,
@@ -577,10 +705,12 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
         Ok(())
     }
 }
+
 #[derive(Debug)]
 pub struct WgpuBindGroup {
     inner: wgpu::BindGroup,
 }
+
 impl BindGroup<Wgpu> for WgpuBindGroup {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn update(
@@ -597,6 +727,8 @@ impl BindGroup<Wgpu> for WgpuBindGroup {
         // TODO: work on bindless
         Ok(())
     }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
         _stream: &<Wgpu as Backend>::Stream,
@@ -605,57 +737,89 @@ impl BindGroup<Wgpu> for WgpuBindGroup {
         Ok(())
     }
 }
+
 pub struct WgpuSemaphore {
+    /// `None` means the work backing this semaphore has not been submitted to
+    /// the queue yet (its `SubmissionIndex` is only known after `queue.submit`).
+    /// It does NOT mean "already complete".
     inner: Mutex<Option<wgpu::SubmissionIndex>>,
-    device: wgpu::Device,
+    /// Notified when a `SubmissionIndex` is assigned (i.e. the work is submitted),
+    /// so a CPU waiter created before submission can block instead of racing ahead.
+    submitted: Condvar,
 }
+
 unsafe impl Send for WgpuSemaphore {}
+
 unsafe impl Sync for WgpuSemaphore {}
+
 impl Debug for WgpuSemaphore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("WgpuSemaphore")
     }
 }
+
 impl Semaphore<Wgpu> for WgpuSemaphore {
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn wait(&self, _device: &WgpuDevice) -> Result<(), <Wgpu as Backend>::Error> {
-        if let Some(a) = self.inner.lock().unwrap().clone() {
-            self.device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: Some(a.clone()),
-                    timeout: None,
-                })
-                .map_err(|_| WgpuError::PollTimeout)?;
-        }
+    unsafe fn wait(&self, device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
+        // Block until the work has actually been submitted (the sync thread may
+        // not have reached `submit_recorders` yet). A `None` index means "pending
+        // submission", not "complete" — proceeding on it would let this reader
+        // race ahead of the GPU and observe stale data.
+        let idx = {
+            let mut guard = self.inner.lock().unwrap();
+            while guard.is_none() {
+                guard = self.submitted.wait(guard).unwrap();
+            }
+            guard.clone().unwrap()
+        };
+        device
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(idx),
+                timeout: None,
+            })
+            .map_err(|_| WgpuError::PollTimeout)?;
         Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn is_signalled(&self, _device: &WgpuDevice) -> Result<bool, <Wgpu as Backend>::Error> {
+    unsafe fn is_signalled(&self, device: &WgpuInstance) -> Result<bool, <Wgpu as Backend>::Error> {
         if self.inner.lock().unwrap().is_some() {
-            Ok(self
+            Ok(device
                 .device
                 .poll(wgpu::PollType::Poll)
                 .is_ok_and(|a| a.wait_finished()))
         } else {
-            Ok(true)
+            // Not submitted yet => not complete (see `wait`).
+            Ok(false)
         }
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn signal(&mut self, _device: &WgpuDevice) -> Result<(), <Wgpu as Backend>::Error> {
-        unreachable!()
+    unsafe fn signal(&mut self, _device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
+        // wgpu exposes no host-side fence signal (`semaphore_signal == false`). The
+        // frontend only ever host-signals the placeholder semaphores it attaches to
+        // in-flight CPU accesses; on wgpu those are never GPU-waited (execution is
+        // in-order and `submit_recorders` takes no wait semaphores), so completing the
+        // access is a no-op here rather than an `unreachable!()` panic.
+        Ok(())
     }
+
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn reset(&mut self, _device: &WgpuDevice) -> Result<(), <Wgpu as Backend>::Error> {
+    unsafe fn reset(&mut self, _device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
         *self.inner.lock().unwrap() = None;
         Ok(())
     }
+
+    #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn destroy(
         self,
-        _device: &<Wgpu as Backend>::Device,
+        _device: &<Wgpu as Backend>::Instance,
     ) -> Result<(), <Wgpu as Backend>::Error> {
         Ok(())
     }
 }
+
 #[derive(thiserror::Error, Debug)]
 pub enum WgpuError {
     #[error("Wgpu internal error: {0}")]
@@ -668,7 +832,10 @@ pub enum WgpuError {
     PollTimeout,
     #[error("A buffer export was attempted under invalid conditions")]
     ExternalMemoryExport,
+    #[error("External memory transfer is unsupported on the wgpu backend (issue #57)")]
+    ExternalMemoryUnsupported,
 }
+
 impl Error<Wgpu> for WgpuError {
     fn is_out_of_device_memory(&self) -> bool {
         matches!(self, Self::WgpuError(wgpu::Error::OutOfMemory { .. }))

@@ -67,7 +67,7 @@ pub fn example<B: Backend>(desc: InstanceDescriptor<B>) {
                         buffer: supasim_hal::HalBufferSlice {
                             buffer: &buffer2,
                             offset: 0,
-                            len: 16,
+                            length: 16,
                         },
                     },
                     BufferCommand::CopyBuffer {

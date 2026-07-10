@@ -1,19 +1,8 @@
-## Dependencies template(copy from source)
-anyhow.workspace = true
-bitflags.workspace = true
-bytemuck.workspace = true
-getrandom.workspace = true
-libloading.workspace = true
-log.workspace = true
-nalgebra.workspace = true
-rand.workspace = true
-rayon.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
+# For devs
+This is an assortment of possibly useful information and commands.
 
 ## Testing info
-Run the command `cargo test --all-feataures -- --nocapture`. The `--nocapture` allows certain logs to be sent(though this is quite verbose, particularly for wgpu).
+Run the command `cargo nextest run --all-features --all-targets --no-fail-fast`. Supasim doesn't have doctests at the time of writing but they would be run with the command `cargo test --doc --all-features`
 
 ## Synchronization things
 ### Metal
@@ -72,3 +61,24 @@ Note that CPU support is desired due to relieving gpu/not using its memory, even
 
 ## Updating the license header
 Run `./scripts/update-license-header.py -h LICENSE_HEADER ./**/*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml ./**/*.slang ./**/*.wgsl` after `shopt -s globstar`
+
+## Sync & resource tracking overview
+
+For the authoritative, up-to-date description of the object model, residency / out-of-date (OOD)
+tracking, command recording, and the sync thread, see the root `CLAUDE.md`. In brief:
+
+* Frontend handles are `Arc<RwLock<Inner>>` newtypes; the instance owns weak-ref arenas of every
+  object so it can enumerate and destroy them without reference cycles.
+* Each buffer tracks its data across multiple locations (per-device GPU, host, disk) via a
+  residency + OOD system, which schedules copies and semaphore waits to make a location current
+  before an access.
+* Submitting command recorders assembles the commands into parallel streams, records them into a
+  HAL command buffer, and hands them to a per-(device, stream) background thread; a `WaitHandle`
+  wrapping a pooled semaphore is returned. (That background thread is not yet implemented on the
+  `residency-overhaul` branch.)
+
+## Avoiding deadlocks
+* Locks are acquired in a specified order across all functions
+  * First, the instance is locked
+  * Then any other resources, in alphabetical order of their type names
+* This isn't currently followed unfortunately

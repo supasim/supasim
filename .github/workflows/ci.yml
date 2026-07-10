@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Run typos
-        uses: crate-ci/typos@v1.41.0
+        uses: crate-ci/typos@v1.42.0
 
       - name: Run update-license-header
         shell: bash
@@ -58,14 +58,23 @@ jobs:
             os: ubuntu-latest
             run-tests: true
             check-deps: true
+            skip-vulkan: false
+            skip-dxil: false
+            skip-ptx: true
           - name: Windows
             os: windows-latest
             run-tests: true
             check-deps: false
+            skip-vulkan: true
+            skip-dxil: false
+            skip-ptx: true
           - name: MacOS
             os: macos-latest
             run-tests: true
             check-deps: false
+            skip-vulkan: true
+            skip-dxil: true
+            skip-ptx: true
     runs-on: ${{ matrix.os }}
     name: Check & Test (${{ matrix.name }})
     steps:
@@ -152,6 +161,14 @@ jobs:
         echo "VK_LAYER_PATH=$HOME/VulkanSdk/macOS/share/vulkan/explicit_layer.d" >> "$GITHUB_ENV"
         echo "DYLD_FALLBACK_LIBRARY_PATH=$HOME/VulkanSdk/macOS/lib" >>"$GITHUB_ENV"
     
+    - name: Install Cargo Nextest
+      shell: bash
+      run: |
+        set -e
+        curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+        cargo binstall cargo-nextest --secure --locked
+
+    
     - name: Build
       shell: bash
       run: set -e && cargo build --verbose --all-targets --all-features
@@ -168,37 +185,50 @@ jobs:
       if: ${{ matrix.check-deps }}
       run: |
         rustup install nightly --profile minimal
-        curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
         cargo binstall cargo-udeps --locked
         cargo +nightly udeps --all-targets --workspace
-      
-    - name: Run tests
+
+    - name: Set testing env variables
       shell: bash
       if: ${{ matrix.run-tests }}
       run: |
         set -e
+
         # Skip backends
-        if [ "${{ matrix.os }}" != "ubuntu-latest" ]; then
-          export SUPASIM_SKIP_BACKEND_VULKAN=1
-          export SUPASIM_SKIP_BACKEND_WGPU_VULKAN=1
+        if [ "${{ matrix.skip-vulkan }}" = "true" ]; then
+          echo "SUPASIM_SKIP_BACKEND_VULKAN=1" >> $GITHUB_ENV
+          echo "SUPASIM_SKIP_BACKEND_WGPU_VULKAN=1" >> $GITHUB_ENV
         fi
-        #if [ "${{ matrix.os }}" != "windows-latest" ]; then
-          #export SUPASIM_SKIP_BACKEND_WGPU_DX12=1
-        #fi
 
         # Skip kernel targets
-        export SUPASIM_SKIP_KERNELS_PTX=1
-        if [ "${{ matrix.os }}" = "macos-latest" ]; then
-          export SUPASIM_SKIP_KERNELS_DXIL=1
+        if [ "${{ matrix.skip-ptx }}" = "true" ]; then
+          echo "SUPASIM_SKIP_KERNELS_PTX=1" >> $GITHUB_ENV
+        fi
+        if [ "${{ matrix.skip-dxil }}" = "true" ]; then
+          echo "SUPASIM_SKIP_KERNELS_DXIL=1" >> $GITHUB_ENV
         fi
 
+        echo "SUPASIM_LOG_FULL_TRACE=1" >> $GITHUB_ENV
+      
+    - name: Run tests (all features)
+      shell: bash
+      if: ${{ matrix.run-tests }}
+      run: |
+        set -e
+
         echo -e "Running all tests\n"
-        SUPASIM_LOG_FULL_TRACE=1 cargo test --verbose --all-targets --all-features -- --nocapture
+        cargo nextest run --verbose --workspace --all-features --all-targets
+    - name: Run tests (no features)
+      shell: bash
+      if: ${{ matrix.run-tests }}
+      run: |
+        set -e
+
         echo -e "\nRunning tests with no features\n"
-        SUPASIM_LOG_FULL_TRACE=1 cargo test --verbose --all-targets --no-default-features -- --nocapture
+        cargo nextest run --verbose --workspace --no-default-features --all-targets
 
     - name: Run examples
       shell: bash
       if: ${{ matrix.run-tests }}
       run: |
-        SUPASIM_LOG_FULL_TRACE=1 cargo run --example hal_buffer_copy --verbose --all-features
+        cargo run --example hal_buffer_copy --verbose --all-features

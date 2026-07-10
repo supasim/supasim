@@ -41,10 +41,5 @@ hassle-rs = { version = "0.12", optional = true }
 
 types.workspace = true
 
-[[example]]
-name = "simple-kernels"
-path = "examples/simple-kernels.rs"
-required-features = ["msl-out", "wgsl-out", "dxil-out", "opt-valid"]
-
 [dev-dependencies]
 serde_json.workspace = true

@@ -140,16 +140,16 @@ impl<B: hal::Backend> AppState<B> {
         };
 
         let global_state = kernels::GlobalState::new_from_env().unwrap();
-        let mut shader_binary = Vec::new();
+        let mut kernel_binary = Vec::new();
         let instance = Instance::from_hal(hal_desc);
         let workgroup_size = [16, 16, 1];
         let mut compile_kernel = |entry: &str| {
-            shader_binary.clear();
+            kernel_binary.clear();
             let reflection_info = global_state
                 .compile_kernel(supasim::kernels::KernelCompileOptions {
                     target: instance.properties().unwrap().kernel_lang,
                     source: kernels::KernelSource::Memory(include_bytes!("buddhabrot.slang")),
-                    dest: kernels::KernelDest::Memory(&mut shader_binary),
+                    dest: kernels::KernelDest::Memory(&mut kernel_binary),
                     entry,
                     include: None,
                     fp_mode: kernels::KernelFpMode::Precise,
@@ -160,7 +160,7 @@ impl<B: hal::Backend> AppState<B> {
                 .unwrap();
             assert_eq!(reflection_info.buffers, vec![false, true, true]);
             instance
-                .compile_raw_kernel(&shader_binary, reflection_info)
+                .compile_raw_kernel(&kernel_binary, reflection_info)
                 .unwrap()
         };
         let run_kernel = compile_kernel("Run");
@@ -359,10 +359,9 @@ impl<B: hal::Backend> AppState<B> {
                     * workgroup_dim as u64
                     * workgroup_dim as u64
                     * workgroup_dim as u64,
-                buffer_type: supasim::BufferType::Gpu,
                 contents_align: 8,
                 priority: 1.0,
-                can_export: false,
+                preferred_device_index: None,
             })
             .unwrap();
 
@@ -372,10 +371,9 @@ impl<B: hal::Backend> AppState<B> {
         let supasim_width_height_buffer = instance
             .create_buffer(&supasim::BufferDescriptor {
                 size: size_of::<BuddhabrotInputOptions>() as u64,
-                buffer_type: supasim::BufferType::Gpu,
                 contents_align: 4,
                 priority: 1.0,
-                can_export: false,
+                preferred_device_index: None,
             })
             .unwrap();
 
@@ -423,10 +421,9 @@ impl<B: hal::Backend> AppState<B> {
         let supasim_buffer = instance
             .create_buffer(&supasim::BufferDescriptor {
                 size,
-                buffer_type: supasim::BufferType::Gpu,
                 contents_align: 4,
                 priority: 1.0,
-                can_export: true,
+                preferred_device_index: None,
             })
             .unwrap();
         let device_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -517,28 +514,10 @@ impl<B: hal::Backend> AppState<B> {
                 .dispatch_kernel(&self.finalize_kernel, &buffers, workgroup_dims)
                 .unwrap();
         }
-        let download_buffer = self
-            .instance
-            .create_buffer(&supasim::BufferDescriptor {
-                size: self.config.width as u64 * self.config.height as u64 * 4,
-                buffer_type: supasim::BufferType::Download,
-                contents_align: 4,
-                priority: 1.0,
-                can_export: false,
-            })
-            .unwrap();
-        recorder
-            .copy_buffer(
-                &self.supasim_buffer,
-                &download_buffer,
-                0,
-                0,
-                self.config.width as u64 * self.config.height as u64 * 4,
-            )
-            .unwrap();
-        self.instance.submit_commands(&mut [recorder]).unwrap();
+        self.instance.submit_commands(&[recorder]).unwrap();
         {
-            let access = download_buffer
+            let access = self
+                .supasim_buffer
                 .access(
                     0,
                     self.config.width as u64 * self.config.height as u64 * 4,
@@ -660,11 +639,9 @@ impl<B: hal::Backend> ApplicationHandler<AppState<B>> for App<B> {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
-            WindowEvent::RedrawRequested => {
-                if !state.render() {
-                    let size = state.window.inner_size();
-                    state.resize(size.width, size.height);
-                }
+            WindowEvent::RedrawRequested if !state.render() => {
+                let size = state.window.inner_size();
+                state.resize(size.width, size.height);
             }
             _ => (),
         }

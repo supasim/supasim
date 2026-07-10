@@ -77,15 +77,20 @@ macro_rules! all_backend_tests_inner {
 macro_rules! all_backend_tests {
     ($test_name:ident) => {
         $crate::paste::paste! {
-
             #[cfg(feature = "vulkan")]
             $crate::all_backend_tests_inner!([<$test_name _vulkan>], "VULKAN", {
                 hal::Vulkan::create_instance(true)
             }, $test_name, Vulkan);
 
+            // Native Metal is intentionally NOT run yet: it currently hangs on the
+            // submit/sync path (the residency + sync-thread flow is unexercised on the
+            // native Metal HAL; tracked in issue #19). The invocation below is correct and
+            // uncomment-ready — enable it once native Metal completes submissions. Until
+            // then only `wgpu_metal` (below) covers Apple GPUs, so native Metal has no
+            // automated coverage; do not assume the native Metal path works.
             /*#[cfg(all(feature = "metal", target_vendor = "apple"))]
             $crate::all_backend_tests_inner!([<$test_name _metal>], "METAL", {
-                hal::Backend::setup_default_descriptor()
+                <hal::Metal as hal::Backend>::setup_default_descriptor()
             }, $test_name, Metal);*/
 
             #[cfg(feature = "wgpu")]

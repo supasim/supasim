@@ -339,7 +339,7 @@ impl GlobalState {
                 Self::recurse_params_reflection(vec, field);
             }
         } else if ty.kind() == slang::TypeKind::ParameterBlock {
-            //panic!("ParameterBlock's are a bad idea, see kernels/readme.md");
+            //panic!("ParameterBlock's are a bad idea, see docs/kernels.md");
             let a: &slang::reflection::TypeLayout = var.type_layout().element_type_layout();
             for field in a.fields() {
                 Self::recurse_params_reflection(vec, field);
@@ -518,8 +518,6 @@ impl GlobalState {
         let program = session
             .create_composite_component_type(&[module.downcast().clone(), ep.downcast().clone()])?;
 
-        // TODO: get reflection info about params
-
         let mut reflection_params = Vec::new();
         let mut workgroup_size = [0; 3];
         let subgroup_size;
@@ -650,7 +648,11 @@ impl GlobalState {
                 &[],
                 &[],
             )?;
-            let dxil = hassle_rs::validate_dxil(&dxil)?;
+            // Modern DXC validates and signs DXIL internally during compilation, so
+            // the standalone `dxil.dll` validator (`hassle_rs::validate_dxil`) is no
+            // longer needed. Running it additionally fails when the bundled dxcompiler
+            // is newer than the validator ("Validator version in metadata (x) is not
+            // supported; maximum (y)"), so we no longer call it.
             _other_blob = dxil;
             data = &_other_blob;
         }

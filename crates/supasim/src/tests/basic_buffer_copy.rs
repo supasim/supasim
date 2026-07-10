@@ -6,6 +6,7 @@ END LICENSE */
 
 use crate::*;
 
+#[allow(unused)]
 pub fn basic_buffer_copy<Backend: hal::Backend>(
     hal: hal::InstanceDescriptor<Backend>,
 ) -> Result<(), ()> {
@@ -18,28 +19,25 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(
         let upload_buffer = instance
             .create_buffer(&BufferDescriptor {
                 size: 16,
-                buffer_type: BufferType::Upload,
                 contents_align: 4,
                 priority: 0.0,
-                can_export: false,
+                preferred_device_index: None,
             })
             .unwrap();
         let gpu_buffer = instance
             .create_buffer(&BufferDescriptor {
                 size: 16,
-                buffer_type: BufferType::Gpu,
                 contents_align: 4,
                 priority: 0.0,
-                can_export: false,
+                preferred_device_index: None,
             })
             .unwrap();
         let download_buffer = instance
             .create_buffer(&BufferDescriptor {
                 size: 16,
-                buffer_type: BufferType::Download,
                 contents_align: 4,
                 priority: 0.0,
-                can_export: false,
+                preferred_device_index: None,
             })
             .unwrap();
         upload_buffer.write::<u32>(0, &[1, 2, 3, 4]).unwrap();
@@ -50,7 +48,7 @@ pub fn basic_buffer_copy<Backend: hal::Backend>(
         recorder
             .copy_buffer(&gpu_buffer, &download_buffer, 0, 0, 16)
             .unwrap();
-        instance.submit_commands(&mut [recorder]).unwrap();
+        instance.submit_commands(&[recorder]).unwrap();
         instance.wait_for_idle(1.0).unwrap();
         assert_eq!(
             download_buffer

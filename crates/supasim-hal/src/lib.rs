@@ -47,9 +47,13 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send {
 
     /// # Safety
     /// * The kernel code must be valid
-    /// * The reflection info must match exactly with the shader
+    /// * The reflection info must match exactly with the kernel
     /// * The cache must be valid
     unsafe fn compile_kernel(&self, descriptor: KernelDescriptor) -> Result<B::Kernel, B::Error>;
+
+    /// # Safety
+    /// Currently no safety requirements. This is subject to change
+    unsafe fn create_semaphore(&self) -> Result<B::Semaphore, B::Error>;
 
     /// # Safety
     /// Currently no safety requirements. This is subject to change
@@ -69,7 +73,7 @@ pub trait BackendInstance<B: Backend<Instance = Self>>: Send {
 pub struct HalBufferSlice<'a, B: Backend> {
     pub buffer: &'a B::Buffer,
     pub offset: u64,
-    pub len: u64,
+    pub length: u64,
 }
 
 pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send {
@@ -82,9 +86,11 @@ pub trait CommandRecorder<B: Backend<CommandRecorder = Self>>: Send {
         stream: &B::Stream,
         commands: &[BufferCommand<B>],
     ) -> Result<(), B::Error>;
+
     /// # Safety
     /// * The recorder must not be queued and incomplete on the GPU
     unsafe fn clear(&mut self, stream: &B::Stream) -> Result<(), B::Error>;
+
     /// # Safety
     /// * All submissions using this recorder must have completed
     unsafe fn destroy(self, stream: &B::Stream) -> Result<(), B::Error>;
@@ -110,6 +116,7 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send {
         offset: u64,
         data: &[u8],
     ) -> Result<(), B::Error>;
+
     /// # Safety
     /// * All submitted command recorders using this buffer mutably must have completed
     /// * The buffer must be of type `Download`
@@ -121,6 +128,7 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send {
         offset: u64,
         data: &mut [u8],
     ) -> Result<(), B::Error>;
+
     /// # Safety
     /// * The device must support `map_buffers`
     /// * Map buffer may be called multiple times to obtain multiple pointers
@@ -128,10 +136,18 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send {
     /// * Writing to a mapped upload buffer is illegal(except on unified memory systems)
     /// * If the device doesn't support `map_buffer_while_gpu_use`, the buffer must be unmapped before
     ///   any GPU work using the buffer is submitted
-    unsafe fn map(&mut self, device: &B::Device) -> Result<*mut u8, B::Error>;
+    /// * `mutable` selects the mapping direction: `false` maps the buffer for reading
+    ///   (the returned pointer must only be read from), `true` maps it for writing (the
+    ///   returned pointer may be written to). On backends with real host-coherent memory
+    ///   (vulkan, metal) both directions map the same underlying memory and the flag is a
+    ///   no-op; on wgpu it selects `MapMode::Read` vs `MapMode::Write`, which matters on
+    ///   non-unified memory where a write-mapping does not reflect GPU-written data.
+    unsafe fn map(&mut self, device: &B::Device, mutable: bool) -> Result<*mut u8, B::Error>;
+
     /// # Safety
     /// * All mapped pointers are invalidated
     unsafe fn unmap(&mut self, device: &B::Device) -> Result<(), B::Error>;
+
     /// # Safety
     /// * All bind groups using this buffer must have been updated or destroyed
     /// * The buffer must not be mapped
@@ -148,6 +164,7 @@ pub trait BindGroup<B: Backend<BindGroup = Self>>: Send {
         kernel: &B::Kernel,
         buffers: &[HalBufferSlice<B>],
     ) -> Result<(), B::Error>;
+
     /// # Safety
     /// * All command recorders using this bind group must've been cleared
     unsafe fn destroy(self, stream: &B::Stream, kernel: &B::Kernel) -> Result<(), B::Error>;
@@ -156,33 +173,40 @@ pub trait BindGroup<B: Backend<BindGroup = Self>>: Send {
 pub trait Semaphore<B: Backend<Semaphore = Self>>: Send {
     /// # Safety
     /// * The semaphore must be signalled by some already submitted command recorder
-    unsafe fn wait(&self, device: &B::Device) -> Result<(), B::Error>;
+    unsafe fn wait(&self, instance: &B::Instance) -> Result<(), B::Error>;
+
     /// # Safety
     /// Currently no safety requirements. This is subject to change
-    unsafe fn is_signalled(&self, device: &B::Device) -> Result<bool, B::Error>;
+    unsafe fn is_signalled(&self, instance: &B::Instance) -> Result<bool, B::Error>;
+
     /// # Safety
     /// * The semaphore must not be waited on by any CPU side wait command
     /// * The device must support semaphore signalling
-    unsafe fn signal(&mut self, device: &B::Device) -> Result<(), B::Error>;
+    unsafe fn signal(&mut self, instance: &B::Instance) -> Result<(), B::Error>;
+
     /// Note that in most implementations this won't actually result in any underlying API changes.
     /// # Safety
     /// * The semaphore must not be waited on by any CPU or GPU side wait command
     /// * The semaphore must not be signalled by any CPU or GPU side signal command
-    unsafe fn reset(&mut self, device: &B::Device) -> Result<(), B::Error>;
+    unsafe fn reset(&mut self, instance: &B::Instance) -> Result<(), B::Error>;
+
     /// # Safety
     /// * All command recorders using this semaphore must've been cleared
-    unsafe fn destroy(self, device: &B::Device) -> Result<(), B::Error>;
+    unsafe fn destroy(self, instance: &B::Instance) -> Result<(), B::Error>;
 }
 
 pub trait Device<B: Backend<Device = Self>> {
     fn get_properties(&self, instance: &B::Instance) -> HalDeviceProperties;
+
     /// # Safety
     /// Currently no safety requirements. This is subject to change
     unsafe fn cleanup_cached_resources(&self, instance: &B::Instance) -> Result<(), B::Error>;
+
     /// # Safety
     /// * If the device doesn't support `upload_download_buffers`, `memory_type` cannot be `UploadDownload`
     unsafe fn create_buffer(&self, alloc_info: &HalBufferDescriptor)
     -> Result<B::Buffer, B::Error>;
+
     /// # Safety
     /// * Importing buffers is inherently unsafe
     /// * The driver ID must match
@@ -190,9 +214,11 @@ pub trait Device<B: Backend<Device = Self>> {
     /// * The offset, size must be valid within the allocation backed by the handle
     ///  * The memory must be allocated in a reasonable device-side memory location
     unsafe fn import_buffer(&self, info: &ExternalBufferDescriptor) -> Result<B::Buffer, B::Error>;
+
     /// # Safety
     /// Currently no safety requirements. This is subject to change
     unsafe fn create_semaphore(&self) -> Result<B::Semaphore, B::Error>;
+
     /// # Safety
     /// * Importing semaphores is inherently unsafe
     /// * The driver ID must match (even if semaphores may be shared among devices)
@@ -201,6 +227,7 @@ pub trait Device<B: Backend<Device = Self>> {
         &self,
         info: &ExternalSemaphoreDescriptor,
     ) -> Result<B::Semaphore, B::Error>;
+
     /// # Safety
     /// * Must be called after all of the device's queues have been destroyed
     /// * All objects created from this must have been destroyed
@@ -210,9 +237,11 @@ pub trait Stream<B: Backend<Stream = Self>> {
     /// # Safety
     /// Currently no safety requirements. This is subject to change
     unsafe fn wait_for_idle(&mut self) -> Result<(), B::Error>;
+
     /// # Safety
     /// Currently no safety requirements. This is subject to change
     unsafe fn create_recorder(&self) -> Result<B::CommandRecorder, B::Error>;
+
     /// # Safety
     /// * For each recorder submitted, it must have had __exactly__ one record command called on it since being cleared or created
     /// * For each wait semaphore, the semaphore must be signalled at some point on the CPU side only
@@ -221,6 +250,7 @@ pub trait Stream<B: Backend<Stream = Self>> {
         &mut self,
         infos: &mut [RecorderSubmitInfo<B>],
     ) -> Result<(), B::Error>;
+
     /// # Safety
     /// * The resources must correspond with the kernel and its layout
     unsafe fn create_bind_group(
@@ -229,9 +259,11 @@ pub trait Stream<B: Backend<Stream = Self>> {
         kernel: &B::Kernel,
         buffers: &[HalBufferSlice<B>],
     ) -> Result<B::BindGroup, B::Error>;
+
     /// # Safety
     /// Currently no safety requirements. This is subject to change
     unsafe fn cleanup_cached_resources(&self, instance: &B::Instance) -> Result<(), B::Error>;
+
     /// # Safety
     /// * The queue must be empty
     unsafe fn destroy(self, device: &mut B::Device) -> Result<(), B::Error>;
@@ -247,7 +279,9 @@ pub struct RecorderSubmitInfo<'a, B: Backend> {
 #[must_use]
 pub trait Error<B: Backend<Error = Self>>: std::error::Error + Send {
     fn is_out_of_device_memory(&self) -> bool;
+
     fn is_out_of_host_memory(&self) -> bool;
+
     fn is_timeout(&self) -> bool;
 }
 

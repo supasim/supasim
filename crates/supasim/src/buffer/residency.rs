@@ -1,0 +1,863 @@
+/* BEGIN LICENSE
+  SupaSim, a GPGPU and simulation toolkit.
+  Copyright (C) 2025 Magnus Larsson
+  SPDX-License-Identifier: MIT OR Apache-2.0
+END LICENSE */
+
+// TODO: handle backends where combined upload & download buffers are unsupported
+// (`upload_download_buffers == false`). The host location currently uses a single
+// `UploadDownload` HAL buffer. On such backends the host would need separate `Upload`
+// and `Download` HAL buffers (CPU writes -> upload, CPU reads <- download) with a GPU
+// copy syncing between them. All wgpu adapters tested so far expose
+// `MAPPABLE_PRIMARY_BUFFERS` (so `upload_download_buffers == true`) and the split path
+// is untestable here; it is deferred to a separate follow-up (not related to issue #57
+// external-memory import; this is purely about the host-buffer split-type capability).
+
+// TODO: switch to binary tree search for all kinds of stuff
+
+use crate::{
+    DEVICE_SMALLVEC_SIZE, InstanceInner, MapSupasimError, SupaSimResult,
+    buffer::{
+        BufferRange,
+        ood::{OutOfDateTracker, OutOfDateWait},
+    },
+    sync::Semaphore,
+};
+use hal::{Buffer, CommandRecorder as _, Device as _, Semaphore as _, Stream as _};
+use memmap2::{MmapMut, MmapOptions};
+use parking_lot::{Condvar, Mutex, RwLock};
+use smallvec::SmallVec;
+use std::{
+    collections::{HashMap, VecDeque},
+    fs::File,
+    sync::Arc,
+};
+use types::{HalBufferDescriptor, HalBufferType};
+
+/// Handles all residency and synchronizatino for a buffer
+pub struct DeviceResidencyState<B: hal::Backend> {
+    /// The backing memory
+    pub buffer: Option<B::Buffer>,
+    ood_tracker: OutOfDateTracker<B>,
+}
+
+impl<B: hal::Backend> DeviceResidencyState<B> {
+    fn new(size: u64) -> Self {
+        Self {
+            buffer: None,
+            ood_tracker: OutOfDateTracker::uninit(size),
+        }
+    }
+
+    fn empty() -> Self {
+        Self {
+            buffer: None,
+            ood_tracker: OutOfDateTracker {
+                out_of_date_ranges: vec![],
+                current_copies: vec![],
+            },
+        }
+    }
+
+    fn _remove_buffer(&mut self, instance: &InstanceInner<B>, device_idx: Option<u32>) {
+        unsafe {
+            let buffer = self.buffer.take().unwrap();
+            buffer
+                .destroy(
+                    instance.hal_devices[device_idx.unwrap_or(0) as usize]
+                        .inner
+                        .lock()
+                        .as_ref()
+                        .unwrap(),
+                )
+                .unwrap();
+        }
+    }
+
+    fn destroy(self, instance: &InstanceInner<B>, device_idx: u32) -> SupaSimResult<B, ()> {
+        unsafe {
+            if let Some(b) = self.buffer {
+                b.destroy(
+                    instance.hal_devices[device_idx as usize]
+                        .inner
+                        .lock()
+                        .as_ref()
+                        .unwrap(),
+                )
+                .map_supasim()
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Stored in the file system
+pub struct StorageResidencyState<B: hal::Backend> {
+    /// The temporary file, it should be dropped last
+    file: File,
+    /// The file used to store the buffer's contents
+    mapped_file: MmapMut,
+    /// The tracker for out of date ranges for this copy of the data
+    ood_tracker: OutOfDateTracker<B>,
+}
+impl<B: hal::Backend> StorageResidencyState<B> {
+    // Dead code is expected: disk-swapping scaffolding for the long-term hot-memory-swap
+    // goal (issues #8/#122). Do not remove; the eviction policy comes in a later milestone.
+    #[allow(dead_code)]
+    pub fn _new(len: u64) -> Self {
+        let file = tempfile::tempfile().unwrap();
+        file.set_len(len).unwrap();
+
+        let mapped_file = unsafe { MmapOptions::new().map_mut(&file).unwrap() };
+        Self {
+            file,
+            mapped_file,
+            ood_tracker: OutOfDateTracker::uninit(len),
+        }
+    }
+
+    /// Technically unnecessary and redundant
+    pub fn destroy(self) {
+        drop(self.mapped_file);
+        drop(self.file);
+    }
+}
+
+/// Contains data for waiting on a buffer access
+pub struct BufferAccessFinish<B: hal::Backend> {
+    /// The conditional variable, only used in CPU->CPU synchronization
+    pub condvar: Option<Condvar>,
+    /// This is set by the CPU before ringing the condvar. This is set when
+    /// the work is first observed to be done, including for GPU work, to
+    /// avoid unnecessary underlying semaphore operations.
+    pub is_complete: Mutex<bool>,
+    /// Always some for GPU work. CPU work will not set this itself, but
+    /// GPU work may come later and set this such that the CPU will signal
+    /// it when finished.
+    pub device_semaphore: Mutex<Option<Arc<Semaphore<B>>>>,
+    /// The range that is being accessed
+    pub range: BufferRange,
+    /// The ID used to look this up in a more efficient hashmap
+    pub id: u64,
+}
+
+impl<B: hal::Backend> BufferAccessFinish<B> {
+    pub fn is_complete_host(&self) -> bool {
+        if self.condvar.is_some() {
+            let lock = self.is_complete.lock();
+            *lock
+        } else if let Some(s) = self.device_semaphore.lock().as_ref() {
+            // Hold the `is_complete` guard for the whole check and reuse it to write
+            // the memoized result. Re-locking `is_complete` (as an earlier version did
+            // via `*self.is_complete.lock() = true`) self-deadlocks: parking_lot's
+            // `Mutex` is not reentrant, so acquiring it again while `lock` is still in
+            // scope hangs.
+            let mut lock = self.is_complete.lock();
+            if *lock {
+                return true;
+            }
+            assert!(s.device_stream_submission.is_some());
+            let res = s.is_signalled().unwrap();
+            if res {
+                *lock = true;
+            }
+            res
+        } else {
+            unreachable!()
+        }
+    }
+    pub fn wait_host(&self) {
+        if let Some(cv) = self.condvar.as_ref() {
+            let mut lock = self.is_complete.lock();
+            loop {
+                if *lock {
+                    return;
+                }
+                cv.wait(&mut lock);
+            }
+        } else if let Some(s) = self.device_semaphore.lock().as_ref() {
+            {
+                // Drop this guard before the blocking wait below; re-locking
+                // `is_complete` while still holding it would self-deadlock
+                // (parking_lot Mutex is not reentrant).
+                let lock = self.is_complete.lock();
+                if *lock {
+                    return;
+                }
+            }
+            assert!(s.device_stream_submission.is_some());
+            s.wait().unwrap();
+            *self.is_complete.lock() = true;
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+pub struct BufferResidency<B: hal::Backend> {
+    pub size: u64,
+    pub min_alignment: u32,
+    /// Residency state for each device
+    pub devices: SmallVec<[DeviceResidencyState<B>; DEVICE_SMALLVEC_SIZE]>,
+    /// Residency state for the host.
+    pub host: DeviceResidencyState<B>,
+    /// Alternative to residencystate buffer for host memory
+    pub storage: Option<StorageResidencyState<B>>,
+    /// Used to create indices for buffer access finishes
+    pub current_index: u64,
+    /// Sorted by range start
+    pub read_accesses: HashMap<u64, Arc<BufferAccessFinish<B>>>,
+    /// Sorted by order of submission. New accesses should start from the back to find the last
+    /// conflicting accesses and wait for those.
+    pub write_accesses: VecDeque<Arc<BufferAccessFinish<B>>>,
+    /// Used to determine when to unmap
+    pub num_mappings: u64,
+}
+
+impl<B: hal::Backend> BufferResidency<B> {
+    pub fn new(num_devices: u32, size: u64, min_alignment: u32) -> Self {
+        let mut devices = SmallVec::with_capacity(num_devices as usize);
+        for _ in 0..num_devices {
+            devices.push(DeviceResidencyState::new(size));
+        }
+        Self {
+            size,
+            min_alignment,
+            devices,
+            host: DeviceResidencyState::new(size),
+            storage: None,
+            current_index: 0,
+            read_accesses: HashMap::new(),
+            write_accesses: VecDeque::new(),
+            num_mappings: 0,
+        }
+    }
+
+    pub fn setup_buffer(&mut self, device_idx: Option<u32>, instance: &InstanceInner<B>) {
+        let thing = if let Some(d) = device_idx {
+            &mut self.devices[d as usize]
+        } else {
+            &mut self.host
+        };
+        if thing.buffer.is_none() {
+            thing.buffer = unsafe {
+                Some(
+                    instance.hal_devices[0]
+                        .inner
+                        .lock()
+                        .as_mut()
+                        .unwrap()
+                        .create_buffer(&HalBufferDescriptor {
+                            size: self.size,
+                            min_alignment: self.min_alignment as usize,
+                            memory_type: if device_idx.is_none() {
+                                HalBufferType::UploadDownload
+                            } else {
+                                HalBufferType::Storage
+                            },
+                        })
+                        .unwrap(),
+                )
+            };
+            thing.ood_tracker = OutOfDateTracker::uninit(self.size);
+        }
+    }
+
+    pub fn update_all_accesses(&mut self) -> SupaSimResult<B, ()> {
+        let mut ids = Vec::with_capacity(64);
+        for (id, access) in &self.read_accesses {
+            if access.is_complete_host() {
+                ids.push(*id);
+            }
+        }
+        for id in ids {
+            self.read_accesses.remove(&id);
+        }
+
+        let mut i = 0;
+        while i < self.write_accesses.len() {
+            if self.write_accesses[i].is_complete_host() {
+                self.write_accesses.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        for dev in &mut self.devices {
+            if dev.buffer.is_some() {
+                dev.ood_tracker.check_all_current_copies();
+            }
+        }
+        Ok(())
+    }
+
+    pub unsafe fn destroy(&mut self, instance: &InstanceInner<B>) -> SupaSimResult<B, ()> {
+        for (dev_id, dev) in std::mem::take(&mut self.devices)
+            .into_iter()
+            .chain([std::mem::replace(
+                &mut self.host,
+                DeviceResidencyState::empty(),
+            )])
+            .enumerate()
+        {
+            let dev_id = if dev_id < instance.hal_devices.len() {
+                dev_id
+            } else {
+                0
+            };
+            dev.destroy(instance, dev_id as u32)?;
+        }
+        if let Some(storage) = self.storage.take() {
+            storage.destroy();
+        }
+        Ok(())
+    }
+}
+impl<B: hal::Backend> BufferResidency<B> {
+    /// Create a host-signalled placeholder `Semaphore` for a CPU access finish.
+    ///
+    /// Pooled HAL semaphores are timeline semaphores whose GPU-side counter may have
+    /// already advanced (e.g. an `ensure_device_current` copy that returned its
+    /// semaphore to the pool). Calling `reset()` after popping from the pool advances
+    /// the Rust-tracked `current_value` to match, so the subsequent `signal()` call in
+    /// `release_cpu_access` targets the correct next-value and does not hit Vulkan's
+    /// "value must be strictly greater than current" validation error.
+    fn make_host_semaphore_raw(instance: &InstanceInner<B>) -> Semaphore<B> {
+        let mut raw = instance.get_semaphore().unwrap();
+        unsafe {
+            raw.reset(instance.hal_instance.read().as_ref().unwrap())
+                .unwrap();
+        }
+        Semaphore {
+            inner: Some(RwLock::new(raw)),
+            device_stream_submission: None,
+            instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
+        }
+    }
+}
+
+// Module-level helper so both the read- and write-access arms can call it without
+// going through `self`.
+fn make_host_semaphore<B: hal::Backend>(instance: &InstanceInner<B>) -> Semaphore<B> {
+    BufferResidency::<B>::make_host_semaphore_raw(instance)
+}
+
+impl<B: hal::Backend> BufferResidency<B> {
+    pub fn add_gpu_use(
+        &mut self,
+        range: BufferRange,
+        is_mut: bool,
+        semaphore: Arc<Semaphore<B>>,
+        device_index: u32,
+        instance: &InstanceInner<B>,
+    ) -> OutOfDateWait<B> {
+        self.setup_buffer(Some(device_index), instance);
+        // Push buffer access
+        // Make each dependency signal a semaphore and hook into those
+        // Update out of date ranges
+        let finish = Arc::new(BufferAccessFinish::<B> {
+            condvar: None,
+            is_complete: Mutex::new(false),
+            device_semaphore: Mutex::new(Some(semaphore)),
+            range,
+            id: self.current_index,
+        });
+        let my_id = finish.id;
+        self.current_index += 1;
+        if is_mut {
+            self.write_accesses.push_back(finish.clone());
+            for (i, d) in self
+                .devices
+                .iter_mut()
+                .chain(std::iter::once(&mut self.host))
+                .enumerate()
+            {
+                if (i as u32) != device_index && d.buffer.is_some() {
+                    d.ood_tracker.invalidate_range(range);
+                }
+            }
+            if let Some(d) = &mut self.storage {
+                d.ood_tracker.invalidate_range(range);
+            }
+        } else {
+            self.read_accesses.insert(finish.id, finish.clone());
+        }
+
+        self.update_all_accesses().unwrap();
+
+        let mut wait = self.devices[device_index as usize]
+            .ood_tracker
+            .get_needed_waits(range, instance);
+        // After this GPU use, device[device_index] holds the authoritative data for
+        // `range`, so mark ITS tracker current — do NOT invalidate it. A write makes
+        // this device the fresh copy (the loop above already invalidated the host and
+        // every other device); a read leaves it current (it was made current by
+        // `ensure_device_current` before this call, so this is a no-op for reads).
+        //
+        // The previous code called `invalidate_range` here, marking the just-written
+        // device copy stale on the very device that wrote it. That was only masked by
+        // the now-removed `get_needed_waits` placeholder, whose `update_range_delayed`
+        // re-marked the range current. With the placeholder gone (B2 fix), invalidating
+        // here left device[device_index] permanently out of date after a write, so the
+        // next device->host readback saw `device_current == false`, skipped the copy,
+        // and returned stale/zeroed host data.
+        self.devices[device_index as usize]
+            .ood_tracker
+            .update_range_immediate(range);
+        // These placeholders are attached to *existing* accesses that don't yet have a
+        // semaphore — always CPU accesses (a GPU access always carries the submission
+        // semaphore). The CPU signals them from `release_cpu_access` when the access
+        // finishes, so they are HOST-signalled: `device_stream_submission` must be
+        // `None` (that is the discriminant `Semaphore::{wait,signal}` assert on). A
+        // non-`None` sentinel here made `release_cpu_access`'s `sem.signal()` trip
+        // `assert!(device_stream_submission.is_none())`.
+        if is_mut {
+            for f in self.read_accesses.values() {
+                if f.id != my_id && f.range.intersects(&range) {
+                    let mut lock = f.device_semaphore.lock();
+                    if lock.is_none() {
+                        *lock = Some(Arc::new(make_host_semaphore(instance)));
+                    }
+                    wait.semaphores.push(f.clone());
+                }
+            }
+        }
+        for f in &self.write_accesses {
+            if f.id != my_id && f.range.intersects(&range) {
+                let mut lock = f.device_semaphore.lock();
+                if lock.is_none() {
+                    *lock = Some(Arc::new(make_host_semaphore(instance)));
+                }
+                wait.semaphores.push(f.clone());
+            }
+        }
+        if let Some(extra_copy) = &wait.other_copy_range {
+            self.devices[device_index as usize]
+                .ood_tracker
+                .update_range_delayed(extra_copy.clone());
+        }
+        wait
+    }
+
+    /// This doesn't actually wait for anything
+    pub fn get_cpu_access(
+        &mut self,
+        range: BufferRange,
+        is_mut: bool,
+        instance: &InstanceInner<B>,
+    ) -> Arc<BufferAccessFinish<B>> {
+        self.setup_buffer(None, instance);
+        self.num_mappings += 1;
+        // Backends that can't map a buffer while it's used by an in-flight GPU
+        // command (wgpu, `map_buffer_while_gpu_use == false`) require the whole
+        // buffer to be free of GPU use before we may map any part of it. In that
+        // case widen the range we *wait/sync* on to the entire buffer. The access
+        // record below still stores the caller's requested `range` so the exposed
+        // mapped slice remains the requested sub-range.
+        let wait_range = if instance.hal_instance_properties.map_buffer_while_gpu_use {
+            range
+        } else {
+            BufferRange {
+                start: 0,
+                length: self.size,
+            }
+        };
+        // Push this buffer access, update out of date ranges
+        // Wait for dependencies to finish
+        let finish = Arc::new(BufferAccessFinish::<B> {
+            condvar: Some(Condvar::new()),
+            is_complete: Mutex::new(false),
+            device_semaphore: Mutex::new(None),
+            range,
+            id: self.current_index,
+        });
+        self.current_index += 1;
+
+        // Only RECORD the access here; do NOT touch the OOD trackers yet. Marking the
+        // host current / invalidating the device copies is deferred to
+        // `release_cpu_access` (when the write actually lands). Doing it up front would
+        // make `ensure_host_current` skip the device->host fetch, so a mutable mapping
+        // used for read-modify-write (or a partial write) would observe stale/zeroed
+        // host bytes.
+        if is_mut {
+            self.write_accesses.push_back(finish.clone());
+        } else {
+            self.read_accesses.insert(finish.id, finish.clone());
+        }
+
+        // TODO: finalize copies for out of date stuff
+        let wait = self.host.ood_tracker.get_needed_waits(wait_range, instance);
+        for sem in wait.semaphores {
+            sem.wait_host();
+        }
+
+        finish
+    }
+
+    pub fn release_cpu_access(
+        &mut self,
+        finish: Arc<BufferAccessFinish<B>>,
+        is_mut: bool,
+        wrote: bool,
+    ) {
+        self.num_mappings -= 1;
+        // Update the finish, condvar, and possibly semaphore
+        // Remove from access list
+        {
+            let mut lock = finish.is_complete.lock();
+            *lock = true;
+            finish.condvar.as_ref().unwrap().notify_all();
+        }
+        if let Some(sem) = &*finish.device_semaphore.lock() {
+            sem.signal().unwrap();
+        }
+        // If the host copy of `range` was actually modified, it is now the authoritative
+        // copy: mark the host tracker current and invalidate every other location so the
+        // next GPU use / device readback re-fetches from the host. Deferred to here from
+        // `get_cpu_access` so the read half of a read-modify-write sees current data.
+        if wrote {
+            for d in &mut self.devices {
+                d.ood_tracker.invalidate_range(finish.range);
+            }
+            if let Some(storage) = &mut self.storage {
+                storage.ood_tracker.invalidate_range(finish.range);
+            }
+            self.host.ood_tracker.update_range_immediate(finish.range);
+        }
+        if is_mut {
+            let idx = self.write_accesses.iter().position(|a| {
+                let a: &BufferAccessFinish<B> = a.as_ref();
+                let b: &BufferAccessFinish<B> = finish.as_ref();
+                (a as *const BufferAccessFinish<B>).addr()
+                    == (b as *const BufferAccessFinish<B>).addr()
+            });
+            self.write_accesses.remove(idx.unwrap());
+        } else {
+            self.read_accesses.remove(&finish.id);
+        }
+    }
+
+    pub fn try_remove_gpu_access(&mut self, finish: Arc<BufferAccessFinish<B>>, is_mut: bool) {
+        if is_mut {
+            let idx = self.write_accesses.iter().position(|a| {
+                let a: &BufferAccessFinish<B> = a.as_ref();
+                let b: &BufferAccessFinish<B> = finish.as_ref();
+                (a as *const BufferAccessFinish<B>).addr()
+                    == (b as *const BufferAccessFinish<B>).addr()
+            });
+            if let Some(idx) = idx {
+                self.write_accesses.remove(idx);
+            }
+        } else {
+            self.read_accesses.remove(&finish.id);
+        }
+    }
+}
+
+/// Records and submits a single `src -> dst` copy on device/stream 0, returning the
+/// semaphore the GPU will signal on completion together with the command recorder used.
+///
+/// The caller must wait on the returned semaphore before relying on the copy's result,
+/// and only then return both the semaphore and the recorder to their pools (the
+/// recorder is still queued on the GPU until the wait completes). Doing the wait
+/// separately lets the caller drop every residency lock before blocking, per Task 3's
+/// rule that no lock the sync thread (or other accesses) needs may be held across a
+/// blocking semaphore wait. The stream mutex is only held for the submit here, never
+/// across a wait.
+///
+/// # Safety
+/// * `src` and `dst` must be valid buffers on device 0 with at least `range` bytes.
+unsafe fn submit_copy_between_hal_buffers<B: hal::Backend>(
+    instance: &InstanceInner<B>,
+    src: &B::Buffer,
+    dst: &B::Buffer,
+    range: BufferRange,
+) -> SupaSimResult<B, (B::Semaphore, B::CommandRecorder)> {
+    let stream_wrapper = &instance.hal_devices[0].streams[0];
+
+    // Grab (or reset+reuse) a semaphore the GPU will signal when the copy finishes.
+    let mut semaphore = instance.get_semaphore()?;
+
+    let mut stream_guard = stream_wrapper.inner.lock();
+    let stream = stream_guard.as_mut().unwrap();
+
+    let mut recorder = if let Some(mut r) = stream_wrapper.unused_hal_command_recorders.lock().pop()
+    {
+        unsafe {
+            r.clear(stream).map_supasim()?;
+        }
+        r
+    } else {
+        unsafe { stream.create_recorder().map_supasim()? }
+    };
+
+    unsafe {
+        recorder
+            .record_commands(
+                stream,
+                &[hal::BufferCommand::CopyBuffer {
+                    src_buffer: src,
+                    dst_buffer: dst,
+                    src_offset: range.start,
+                    dst_offset: range.start,
+                    len: range.length,
+                }],
+            )
+            .map_supasim()?;
+    }
+
+    // Bump the timeline target so a pooled/reused semaphore doesn't observe a stale
+    // prior signal as "already complete".
+    unsafe {
+        semaphore
+            .reset(instance.hal_instance.read().as_ref().unwrap())
+            .map_supasim()?;
+    }
+
+    unsafe {
+        stream
+            .submit_recorders(std::slice::from_mut(&mut hal::RecorderSubmitInfo {
+                command_recorder: &mut recorder,
+                wait_semaphores: &[],
+                signal_semaphore: Some(&semaphore),
+            }))
+            .map_supasim()?;
+    }
+
+    Ok((semaphore, recorder))
+}
+
+pub struct BufferResidencyRef<B: hal::Backend>(pub RwLock<BufferResidency<B>>);
+impl<B: hal::Backend> BufferResidencyRef<B> {
+    /// Ensures the host copy of `range` is current, copying device[0] -> host if the
+    /// host is stale and device[0] holds the up-to-date data for `range`.
+    ///
+    /// Locking: this method owns lock acquisition. It records+submits the copy under a
+    /// short residency read lock, drops **all** residency locks before the blocking
+    /// GPU wait (Task 3's rule), then re-acquires a brief write lock only to mark the
+    /// host tracker current. It must be called with no residency lock held.
+    pub fn ensure_host_current(&self, range: BufferRange, instance: &InstanceInner<B>) {
+        if range.length == 0 {
+            return;
+        }
+        // Make sure both host and device[0] HAL buffers exist.
+        {
+            let mut s = self.0.write();
+            s.setup_buffer(None, instance); // host
+            s.setup_buffer(Some(0), instance); // device[0]
+        }
+
+        // Decide whether a copy is needed and, if so, record+submit it, all under a
+        // read lock that is dropped before the blocking wait below.
+        let (semaphore, recorder) = {
+            let s = self.0.read();
+            let host_stale = s
+                .host
+                .ood_tracker
+                .out_of_date_ranges
+                .iter()
+                .any(|r| r.intersects(&range));
+            let device_current = !s.devices[0]
+                .ood_tracker
+                .out_of_date_ranges
+                .iter()
+                .any(|r| r.intersects(&range));
+            if !(host_stale && device_current) {
+                return;
+            }
+            let src = s.devices[0].buffer.as_ref().unwrap();
+            let dst = s.host.buffer.as_ref().unwrap();
+            unsafe { submit_copy_between_hal_buffers::<B>(instance, src, dst, range).unwrap() }
+            // `s` (residency read lock) drops here, before we block.
+        };
+
+        // Block on the GPU copy with NO residency lock held.
+        unsafe {
+            semaphore
+                .wait(instance.hal_instance.read().as_ref().unwrap())
+                .unwrap();
+        }
+        // The GPU is now done: it's safe to return both to their pools for reuse.
+        instance.unused_semaphores.lock().push(semaphore);
+        instance.hal_devices[0].streams[0]
+            .unused_hal_command_recorders
+            .lock()
+            .push(recorder);
+
+        // Mark the host copy current for `range`.
+        self.0
+            .write()
+            .host
+            .ood_tracker
+            .update_range_immediate(range);
+    }
+
+    /// Ensures the device[`device_idx`] copy of `range` is current, copying host ->
+    /// device[`device_idx`] if the device is stale and the host holds the up-to-date
+    /// data for `range`. This is the mirror image of [`Self::ensure_host_current`],
+    /// used before a GPU submission consumes a buffer whose current data was last
+    /// written on the host (e.g. via `Buffer::write`).
+    ///
+    /// Locking: this method owns lock acquisition. It records+submits the copy under a
+    /// short residency read lock, drops **all** residency locks before the blocking
+    /// GPU wait (Task 3's rule), then re-acquires a brief write lock only to mark the
+    /// device tracker current. It must be called with no residency lock held.
+    pub fn ensure_device_current(
+        &self,
+        device_idx: u32,
+        range: BufferRange,
+        instance: &InstanceInner<B>,
+    ) {
+        if range.length == 0 {
+            return;
+        }
+        // Make sure both host and device[device_idx] HAL buffers exist.
+        {
+            let mut s = self.0.write();
+            s.setup_buffer(None, instance); // host
+            s.setup_buffer(Some(device_idx), instance); // device[device_idx]
+        }
+
+        // Decide whether a copy is needed and, if so, record+submit it, all under a
+        // read lock that is dropped before the blocking wait below.
+        let (semaphore, recorder) = {
+            let s = self.0.read();
+            let device_stale = s.devices[device_idx as usize]
+                .ood_tracker
+                .out_of_date_ranges
+                .iter()
+                .any(|r| r.intersects(&range));
+            let host_current = !s
+                .host
+                .ood_tracker
+                .out_of_date_ranges
+                .iter()
+                .any(|r| r.intersects(&range));
+            if !(device_stale && host_current) {
+                return;
+            }
+            let src = s.host.buffer.as_ref().unwrap();
+            let dst = s.devices[device_idx as usize].buffer.as_ref().unwrap();
+            unsafe { submit_copy_between_hal_buffers::<B>(instance, src, dst, range).unwrap() }
+            // `s` (residency read lock) drops here, before we block.
+        };
+
+        // Block on the GPU copy with NO residency lock held.
+        unsafe {
+            semaphore
+                .wait(instance.hal_instance.read().as_ref().unwrap())
+                .unwrap();
+        }
+        // The GPU is now done: it's safe to return both to their pools for reuse.
+        instance.unused_semaphores.lock().push(semaphore);
+        instance.hal_devices[0].streams[0]
+            .unused_hal_command_recorders
+            .lock()
+            .push(recorder);
+
+        // Mark the device copy current for `range`. This is needed to keep the OOD
+        // tracker consistent after the blocking copy above. Note: the subsequent
+        // `add_gpu_use` call in `submit_command_recorders` does NOT double-copy even
+        // though `get_needed_waits` may still produce an `other_copy_range`; that
+        // placeholder is carried in `used_buffer_ranges` and dropped in
+        // `finish_submission` without ever emitting a GPU copy. The spurious
+        // `current_copies` entry is a known gap tracked under the OOD-validation TODO
+        // in `ood.rs`.
+        self.0.write().devices[device_idx as usize]
+            .ood_tracker
+            .update_range_immediate(range);
+    }
+
+    pub fn wait_for_cpu_access(
+        &self,
+        range: BufferRange,
+        is_mut: bool,
+        my_id: u64,
+        instance: &InstanceInner<B>,
+    ) {
+        // Mirror `get_cpu_access`: on backends that can't map while the buffer is in
+        // GPU use, widen the conflict scan to the whole buffer so we wait for any
+        // in-flight access touching any byte before mapping.
+        let scan_range = if instance.hal_instance_properties.map_buffer_while_gpu_use {
+            range
+        } else {
+            BufferRange {
+                start: 0,
+                length: self.0.read().size,
+            }
+        };
+        let mut s = Some(self.0.read());
+        let mut any_waits = false;
+        loop {
+            let mut wait_is_mut = false;
+            let mut wait = None;
+            if is_mut {
+                for read in s.as_ref().unwrap().read_accesses.values() {
+                    if read.range.intersects(&scan_range) && read.id < my_id {
+                        wait = Some(read.clone());
+                        break;
+                    }
+                }
+            }
+            if wait.is_none() {
+                for write in s.as_ref().unwrap().write_accesses.iter().rev() {
+                    if write.range.intersects(&scan_range) && write.id < my_id {
+                        wait_is_mut = true;
+                        wait = Some(write.clone());
+                        break;
+                    }
+                }
+            }
+            if let Some(f) = wait {
+                drop(s);
+                f.wait_host();
+                if f.condvar.is_none() {
+                    self.0.write().try_remove_gpu_access(f, wait_is_mut);
+                }
+                s = Some(self.0.read());
+                any_waits = true;
+            } else {
+                break;
+            }
+        }
+        drop(s);
+        if any_waits {
+            self.0.write().update_all_accesses().unwrap();
+        }
+        // Pull current data from device[0] into the host copy so the CPU read/write
+        // below sees up-to-date bytes. `ensure_host_current` owns its own locking and
+        // must be called with no residency lock held (it blocks on the GPU copy).
+        self.ensure_host_current(range, instance);
+    }
+
+    // Dead code is expected: disk-swapping scaffolding for the long-term hot-memory-swap
+    // goal (issues #8/#122). Do not remove; the eviction policy comes in a later milestone.
+    #[allow(dead_code)]
+    pub fn _switch_to_storage(&self, instance: &InstanceInner<B>) {
+        let length = self.0.read().size;
+
+        let usage =
+            self.0
+                .write()
+                .get_cpu_access(BufferRange { start: 0, length }, false, instance);
+        self.wait_for_cpu_access(BufferRange { start: 0, length }, false, usage.id, instance);
+        let mut _s = self.0.write();
+        let s = &mut *_s;
+        s.storage = Some(StorageResidencyState::_new(s.size));
+        unsafe {
+            s.host
+                .buffer
+                .as_mut()
+                .unwrap()
+                .read(
+                    instance.hal_devices[0].inner.lock().as_ref().unwrap(),
+                    0,
+                    &mut s.storage.as_mut().unwrap().mapped_file,
+                )
+                .unwrap();
+        }
+        s.host._remove_buffer(instance, None);
+        s.release_cpu_access(usage, false, false);
+    }
+}

@@ -5,6 +5,8 @@
 END LICENSE */
 
 use crate::*;
+
+#[allow(unused)]
 pub fn add_numbers<Backend: hal::Backend>(hal: hal::InstanceDescriptor<Backend>) -> Result<(), ()> {
     // Test specific stuff
     println!("Hello, world!");
@@ -17,7 +19,6 @@ pub fn add_numbers<Backend: hal::Backend>(hal: hal::InstanceDescriptor<Backend>)
     let download_buffer = instance
         .create_buffer(&crate::BufferDescriptor {
             size: 16,
-            buffer_type: BufferType::Download,
             contents_align: 4,
             ..Default::default()
         })
@@ -99,7 +100,7 @@ pub fn add_numbers<Backend: hal::Backend>(hal: hal::InstanceDescriptor<Backend>)
     recorder
         .copy_buffer(&buffer3, &download_buffer, 0, 0, 16)
         .unwrap();
-    instance.submit_commands(&mut [recorder]).unwrap();
+    instance.submit_commands(&[recorder]).unwrap();
 
     // Check the result from the download buffer
     assert_eq!(
