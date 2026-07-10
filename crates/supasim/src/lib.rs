@@ -254,7 +254,6 @@ impl<B: hal::Backend> Instance<B> {
             _phantom: Default::default(),
             instance: self.clone(),
             inner: Some(kernel),
-            // Yes its UB, but id doesn't have any destructor and just contains two numbers
             id: Index::DANGLING,
             reflection_info: reflection,
         });
