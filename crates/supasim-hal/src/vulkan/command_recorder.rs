@@ -307,6 +307,12 @@ impl CommandRecorder<Vulkan> for VulkanCommandRecorder {
                 }
             }
         }
+        // Flush a barrier chain that runs to the end of the command list. Without this,
+        // a command list ending in `MemoryBarrier` / `PipelineBarrier` / `MemoryTransfer`
+        // (e.g. a buffer export) never recorded its trailing barriers.
+        if let Some(start) = pipeline_chain_start {
+            self.sync_command(stream, cb, &commands[start..])?;
+        }
         self.end(stream, cb)?;
         Ok(())
     }
