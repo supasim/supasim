@@ -528,6 +528,9 @@ impl Buffer<Metal> for MetalBuffer {
     unsafe fn map(
         &mut self,
         _instance: &MetalDevice,
+        // Metal shared-storage buffers expose one host pointer; reads and writes both work
+        // through it, so the direction flag is a no-op here.
+        _mutable: bool,
     ) -> Result<*mut u8, <Metal as Backend>::Error> {
         assert!((self.buffer.storageMode().0 & MTLResourceOptions::StorageModePrivate.0) == 0);
         Ok(self.buffer.contents().as_ptr() as *mut u8)

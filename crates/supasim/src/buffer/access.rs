@@ -252,6 +252,10 @@ impl<B: hal::Backend> MappedBuffer<B> {
                             .lock()
                             .as_ref()
                             .unwrap(),
+                        // Map in the direction of the access: a read-only access must map
+                        // `MapMode::Read` so non-unified-memory backends (e.g. wgpu over
+                        // llvmpipe) return GPU-written data rather than stale bytes.
+                        needs_mut,
                     )
                     .unwrap()
                     .add(start as usize)

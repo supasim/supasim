@@ -734,6 +734,9 @@ impl Buffer<Vulkan> for VulkanBuffer {
     unsafe fn map(
         &mut self,
         _device: &VulkanDevice,
+        // Vulkan maps host-coherent memory; reads and writes both work through the same
+        // pointer, so the direction flag is a no-op here.
+        _mutable: bool,
     ) -> Result<*mut u8, <Vulkan as Backend>::Error> {
         Ok(self.mapped_ptr.unwrap())
     }

@@ -136,7 +136,13 @@ pub trait Buffer<B: Backend<Buffer = Self>>: Send {
     /// * Writing to a mapped upload buffer is illegal(except on unified memory systems)
     /// * If the device doesn't support `map_buffer_while_gpu_use`, the buffer must be unmapped before
     ///   any GPU work using the buffer is submitted
-    unsafe fn map(&mut self, device: &B::Device) -> Result<*mut u8, B::Error>;
+    /// * `mutable` selects the mapping direction: `false` maps the buffer for reading
+    ///   (the returned pointer must only be read from), `true` maps it for writing (the
+    ///   returned pointer may be written to). On backends with real host-coherent memory
+    ///   (vulkan, metal) both directions map the same underlying memory and the flag is a
+    ///   no-op; on wgpu it selects `MapMode::Read` vs `MapMode::Write`, which matters on
+    ///   non-unified memory where a write-mapping does not reflect GPU-written data.
+    unsafe fn map(&mut self, device: &B::Device, mutable: bool) -> Result<*mut u8, B::Error>;
 
     /// # Safety
     /// * All mapped pointers are invalidated

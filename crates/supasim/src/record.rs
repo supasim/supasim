@@ -244,7 +244,9 @@ pub fn assemble_streams<B: hal::Backend>(
             // Map it exactly once so we don't map/unmap for every CR
             let _instance = instance.inner()?;
             let device = _instance.hal_devices[device_idx].inner.lock();
-            buf.map(device.as_ref().unwrap()).map_supasim()?;
+            // The temp staging buffer is `Upload`; we only write into it, so map it for
+            // writing (`mutable = true`).
+            buf.map(device.as_ref().unwrap(), true).map_supasim()?;
             for cr in crs.iter_mut() {
                 buf.write(device.as_ref().unwrap(), current_offset, &cr.writes_slice)
                     .map_supasim()?;

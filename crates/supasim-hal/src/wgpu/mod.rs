@@ -178,18 +178,15 @@ impl Device<Wgpu> for WgpuDevice {
         Ok(WgpuBuffer {
             inner: Box::new(buffer.clone()),
             view: None,
-            map_mut: match alloc_info.memory_type {
-                HalBufferType::Download => Some(false),
-                HalBufferType::Upload => Some(true),
-                // `UploadDownload` is only created when `MAPPABLE_PRIMARY_BUFFERS`
-                // (unified memory) is available, so mapping it as `Write` is valid
-                // (it has `MAP_WRITE` usage) and the mapped range reflects real
-                // memory, so reads through the pointer work too.
-                HalBufferType::UploadDownload => Some(true),
-                // `Storage` buffers are not host-mappable; `map` must not be called
-                // on them. Keep `None` so a stray call fails loudly.
-                HalBufferType::Storage => None,
-            },
+            // Whether this buffer is host-mappable at all. `Storage` buffers are not
+            // mappable; `map` must not be called on them, so a stray call fails loudly.
+            // The *direction* of a mapping (read vs write) is chosen per `map` call via
+            // its `mutable` argument, NOT fixed at creation: mapping an `UploadDownload`
+            // buffer as `Write` and reading through the pointer only returns GPU-written
+            // data on unified memory. On non-unified memory (e.g. llvmpipe/lavapipe in
+            // CI, which reports `MAPPABLE_PRIMARY_BUFFERS` but is NOT unified) a
+            // write-mapping read returns stale data, so reads must map `MapMode::Read`.
+            mappable: !matches!(alloc_info.memory_type, HalBufferType::Storage),
         })
     }
 
@@ -468,13 +465,41 @@ impl Kernel<Wgpu> for WgpuKernel {
     }
 }
 
+/// A live host mapping of a [`WgpuBuffer`]. The direction is chosen per map call:
+/// reads use `MapMode::Read` (an immutable `BufferView`), writes use `MapMode::Write`
+/// (a mutable `BufferViewMut`). This matters on non-unified memory, where a
+/// write-mapping does not reflect GPU-written data.
+#[derive(Debug)]
+enum MappedView {
+    Read(wgpu::BufferView),
+    Write(wgpu::BufferViewMut),
+}
+
+impl MappedView {
+    /// Returns a raw pointer to the mapped bytes. For a `Read` mapping the returned
+    /// pointer is derived from a read-only view and must only be read through.
+    fn as_mut_ptr(&mut self) -> *mut u8 {
+        match self {
+            // `BufferView::as_ptr` yields a `*const u8`; the caller of a read mapping only
+            // reads through the pointer, so casting away const is sound here.
+            MappedView::Read(view) => view.as_ptr() as *mut u8,
+            MappedView::Write(view) => view.as_mut_ptr(),
+        }
+    }
+
+    fn is_mut(&self) -> bool {
+        matches!(self, MappedView::Write(_))
+    }
+}
+
 #[derive(Debug)]
 pub struct WgpuBuffer {
     /// This can't be moved for fear of UB lol. This is because buffer
     /// mapping expands the lifetime of a reference to it to 'static.
     inner: Box<wgpu::Buffer>,
-    view: Option<wgpu::BufferViewMut>,
-    map_mut: Option<bool>,
+    view: Option<MappedView>,
+    /// Whether this buffer is host-mappable at all (false for `Storage`).
+    mappable: bool,
 }
 
 unsafe impl Send for WgpuBuffer {}
@@ -499,7 +524,8 @@ impl Buffer<Wgpu> for WgpuBuffer {
         data: &[u8],
     ) -> Result<(), <Wgpu as Backend>::Error> {
         let was_mapped = self.view.is_some();
-        let ptr = unsafe { self.map(device)?.add(offset as usize) };
+        // Writes must map `MapMode::Write` so the mapped range is uploaded to the GPU.
+        let ptr = unsafe { self.map(device, true)?.add(offset as usize) };
         unsafe { std::slice::from_raw_parts_mut(ptr, data.len()) }.clone_from_slice(data);
         if !was_mapped {
             unsafe { self.unmap(device)? };
@@ -515,7 +541,10 @@ impl Buffer<Wgpu> for WgpuBuffer {
         data: &mut [u8],
     ) -> Result<(), <Wgpu as Backend>::Error> {
         let was_mapped = self.view.is_some();
-        let ptr = unsafe { self.map(device)?.add(offset as usize) };
+        // Reads must map `MapMode::Read` (immutable view): on non-unified memory a
+        // write-mapping does not reflect GPU-written data, so reading through it returns
+        // stale bytes. See the note in `create_buffer`.
+        let ptr = unsafe { self.map(device, false)?.add(offset as usize) };
         unsafe { data.clone_from_slice(std::slice::from_raw_parts(ptr, data.len())) };
         if !was_mapped {
             unsafe { self.unmap(device)? };
@@ -524,14 +553,33 @@ impl Buffer<Wgpu> for WgpuBuffer {
     }
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
-    unsafe fn map(&mut self, device: &WgpuDevice) -> Result<*mut u8, <Wgpu as Backend>::Error> {
+    unsafe fn map(
+        &mut self,
+        device: &WgpuDevice,
+        mutable: bool,
+    ) -> Result<*mut u8, <Wgpu as Backend>::Error> {
+        assert!(
+            self.mappable,
+            "map() called on a non-host-mappable (Storage) wgpu buffer"
+        );
         let ptr = match &mut self.view {
-            Some(slice) => slice.as_mut_ptr(),
+            // Reuse an existing mapping if it can serve the request. A live `Write`
+            // mapping can serve a read (correct on unified memory; a concurrent
+            // read+write alias of the same buffer on non-unified memory is an unsound
+            // caller pattern, not something the common paths do). A live `Read` mapping
+            // cannot serve a write, so that combination fails loudly instead of silently
+            // dropping the write.
+            Some(view) => {
+                assert!(
+                    view.is_mut() || !mutable,
+                    "wgpu buffer already mapped read-only; unmap before writing"
+                );
+                view.as_mut_ptr()
+            }
             None => {
                 let slice = self.inner.slice(..);
-
                 slice.map_async(
-                    if self.map_mut.unwrap() {
+                    if mutable {
                         wgpu::MapMode::Write
                     } else {
                         wgpu::MapMode::Read
@@ -539,7 +587,12 @@ impl Buffer<Wgpu> for WgpuBuffer {
                     |_| (),
                 );
                 device.device.poll(wgpu::PollType::Poll).unwrap();
-                self.view = Some(slice.get_mapped_range_mut());
+                let view = if mutable {
+                    MappedView::Write(slice.get_mapped_range_mut())
+                } else {
+                    MappedView::Read(slice.get_mapped_range())
+                };
+                self.view = Some(view);
                 self.view.as_mut().unwrap().as_mut_ptr()
             }
         };
