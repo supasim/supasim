@@ -63,6 +63,14 @@ impl<B: hal::Backend> Semaphore<B> {
     }
 }
 
+// Safety: mirrors the `api_type!` wrappers (`Instance`/`Buffer`/`Kernel`), which
+// blanket-impl Send + Sync. `B::Semaphore` is `Send` (see the `hal::Semaphore`
+// trait bound) and is only ever a plain GPU handle whose wait/signal is routed
+// through the instance under a lock; the sync thread deliberately moves and shares
+// `Arc<Semaphore<B>>` across threads.
+unsafe impl<B: hal::Backend> Send for Semaphore<B> {}
+unsafe impl<B: hal::Backend> Sync for Semaphore<B> {}
+
 impl<B: hal::Backend> Drop for Semaphore<B> {
     fn drop(&mut self) {
         if self.inner.is_some() {
@@ -188,11 +196,12 @@ pub fn submit_command_recorders<B: hal::Backend>(
         )?;
         let kernels = streams.resources.kernels.clone();
         lock.submit(GpuSubmissionInfo {
-            _index: submission_idx,
-            _command_recorder: recorder,
-            _bind_groups: bind_groups,
-            _used_buffer_ranges: used_buffer_ranges,
-            _used_resources: streams.resources,
+            index: submission_idx,
+            command_recorder: recorder,
+            signal_semaphore: semaphore.clone(),
+            bind_groups,
+            used_buffer_ranges,
+            used_resources: streams.resources,
         })?;
 
         for _kernel in &kernels {

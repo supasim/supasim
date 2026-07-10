@@ -359,13 +359,9 @@ impl Stream<Vulkan> for VulkanStream {
     ) -> Result<VulkanBindGroup, VulkanError> {
         let mut lock = kernel.descriptor_pools.lock().unwrap();
         let mut pool_idx = None;
-        for (i, pool) in kernel
-            .descriptor_pools
-            .lock()
-            .unwrap()
-            .iter_mut()
-            .enumerate()
-        {
+        // Iterate over the already-held guard; re-locking `descriptor_pools`
+        // here would self-deadlock (std::sync::Mutex is not reentrant).
+        for (i, pool) in lock.iter_mut().enumerate() {
             if pool.max_size > pool.current_size {
                 pool_idx = Some(i);
                 break;

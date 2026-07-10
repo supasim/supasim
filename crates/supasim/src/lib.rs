@@ -328,9 +328,13 @@ impl<B: hal::Backend> Instance<B> {
     }
 
     pub fn wait_for_idle(&self, _timeout: f32) -> SupaSimResult<B, ()> {
-        // This is about exclusive access not mutable access
-        let inner_mut = self.inner_mut()?;
-        for stream in inner_mut.hal_devices.iter().flat_map(|a| &a.streams) {
+        // Take a *read* lock, not `inner_mut()`. The per-stream sync thread also
+        // needs `instance.inner()` (a read lock) to make progress and to advance
+        // the completion counter; a write lock here would starve it and deadlock,
+        // while multiple concurrent readers are fine. The blocking wait itself
+        // only touches the handle's own condvar, not the instance lock.
+        let inner = self.inner()?;
+        for stream in inner.hal_devices.iter().flat_map(|a| &a.streams) {
             let handle = stream.stream_handle.as_ref().unwrap().read();
             handle.wait_for_submission(handle.current_submitted_count - 1);
         }

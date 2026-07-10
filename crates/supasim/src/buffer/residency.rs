@@ -162,9 +162,14 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
                 cv.wait(&mut lock);
             }
         } else if let Some(s) = self.device_semaphore.lock().as_ref() {
-            let lock = self.is_complete.lock();
-            if *lock {
-                return;
+            {
+                // Drop this guard before the blocking wait below; re-locking
+                // `is_complete` while still holding it would self-deadlock
+                // (parking_lot Mutex is not reentrant).
+                let lock = self.is_complete.lock();
+                if *lock {
+                    return;
+                }
             }
             assert!(s.device_stream_submission.is_some());
             s.wait().unwrap();

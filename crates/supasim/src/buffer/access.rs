@@ -116,7 +116,9 @@ impl<B: hal::Backend> Buffer<B> {
                 )
                 .map_supasim()?;
         }
-        s.residency.0.write().release_cpu_access(access, true);
+        // Reuse the already-held write guard: re-acquiring `residency.0.write()`
+        // here would self-deadlock (parking_lot RwLock is not reentrant).
+        lock.release_cpu_access(access, true);
         Ok(())
     }
     pub fn read<T: bytemuck::Pod>(&self, start: u64, out: &mut [T]) -> SupaSimResult<B, ()> {
@@ -156,7 +158,9 @@ impl<B: hal::Backend> Buffer<B> {
                 )
                 .map_supasim()?;
         }
-        s.residency.0.write().release_cpu_access(access, false);
+        // Reuse the already-held write guard: re-acquiring `residency.0.write()`
+        // here would self-deadlock (parking_lot RwLock is not reentrant).
+        lock.release_cpu_access(access, false);
         Ok(())
     }
     pub fn access(
