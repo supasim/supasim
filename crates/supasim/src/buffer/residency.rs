@@ -315,6 +315,35 @@ impl<B: hal::Backend> BufferResidency<B> {
     }
 }
 impl<B: hal::Backend> BufferResidency<B> {
+    /// Create a host-signalled placeholder `Semaphore` for a CPU access finish.
+    ///
+    /// Pooled HAL semaphores are timeline semaphores whose GPU-side counter may have
+    /// already advanced (e.g. an `ensure_device_current` copy that returned its
+    /// semaphore to the pool). Calling `reset()` after popping from the pool advances
+    /// the Rust-tracked `current_value` to match, so the subsequent `signal()` call in
+    /// `release_cpu_access` targets the correct next-value and does not hit Vulkan's
+    /// "value must be strictly greater than current" validation error.
+    fn make_host_semaphore_raw(instance: &InstanceInner<B>) -> Semaphore<B> {
+        let mut raw = instance.get_semaphore().unwrap();
+        unsafe {
+            raw.reset(instance.hal_instance.read().as_ref().unwrap())
+                .unwrap();
+        }
+        Semaphore {
+            inner: Some(RwLock::new(raw)),
+            device_stream_submission: None,
+            instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
+        }
+    }
+}
+
+// Module-level helper so both the read- and write-access arms can call it without
+// going through `self`.
+fn make_host_semaphore<B: hal::Backend>(instance: &InstanceInner<B>) -> Semaphore<B> {
+    BufferResidency::<B>::make_host_semaphore_raw(instance)
+}
+
+impl<B: hal::Backend> BufferResidency<B> {
     pub fn add_gpu_use(
         &mut self,
         range: BufferRange,
@@ -388,11 +417,7 @@ impl<B: hal::Backend> BufferResidency<B> {
                 if f.id != my_id && f.range.intersects(&range) {
                     let mut lock = f.device_semaphore.lock();
                     if lock.is_none() {
-                        *lock = Some(Arc::new(Semaphore {
-                            inner: Some(RwLock::new(instance.get_semaphore().unwrap())),
-                            device_stream_submission: None,
-                            instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
-                        }))
+                        *lock = Some(Arc::new(make_host_semaphore(instance)));
                     }
                     wait.semaphores.push(f.clone());
                 }
@@ -402,11 +427,7 @@ impl<B: hal::Backend> BufferResidency<B> {
             if f.id != my_id && f.range.intersects(&range) {
                 let mut lock = f.device_semaphore.lock();
                 if lock.is_none() {
-                    *lock = Some(Arc::new(Semaphore {
-                        inner: Some(RwLock::new(instance.get_semaphore().unwrap())),
-                        device_stream_submission: None,
-                        instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
-                    }))
+                    *lock = Some(Arc::new(make_host_semaphore(instance)));
                 }
                 wait.semaphores.push(f.clone());
             }
