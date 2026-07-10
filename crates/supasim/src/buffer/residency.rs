@@ -315,8 +315,8 @@ impl<B: hal::Backend> BufferResidency<B> {
             id: self.current_index,
         });
         self.current_index += 1;
-        if !is_mut {
-            self.read_accesses.insert(finish.id, finish.clone());
+        if is_mut {
+            self.write_accesses.push_back(finish.clone());
             for (i, d) in self
                 .devices
                 .iter_mut()
@@ -331,7 +331,7 @@ impl<B: hal::Backend> BufferResidency<B> {
                 d.ood_tracker.invalidate_range(range);
             }
         } else {
-            self.write_accesses.push_back(finish.clone());
+            self.read_accesses.insert(finish.id, finish.clone());
         }
 
         self.update_all_accesses().unwrap();
@@ -401,13 +401,13 @@ impl<B: hal::Backend> BufferResidency<B> {
         self.current_index += 1;
 
         if is_mut {
-            self.read_accesses.insert(finish.id, finish.clone());
+            self.write_accesses.push_back(finish.clone());
             for d in &mut self.devices {
                 d.ood_tracker.invalidate_range(range);
             }
             self.host.ood_tracker.update_range_immediate(range);
         } else {
-            self.write_accesses.push_back(finish.clone());
+            self.read_accesses.insert(finish.id, finish.clone());
         }
 
         // TODO: finalize copies for out of date stuff
