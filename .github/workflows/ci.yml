@@ -195,16 +195,16 @@ jobs:
         set -e
 
         # Skip backends
-        if [ ${{ matrix.skip-vulkan }} ]; then
+        if [ "${{ matrix.skip-vulkan }}" = "true" ]; then
           echo "SUPASIM_SKIP_BACKEND_VULKAN=1" >> $GITHUB_ENV
           echo "SUPASIM_SKIP_BACKEND_WGPU_VULKAN=1" >> $GITHUB_ENV
         fi
 
         # Skip kernel targets
-        if [ ${{ matrix.skip-ptx }} ]; then
+        if [ "${{ matrix.skip-ptx }}" = "true" ]; then
           echo "SUPASIM_SKIP_KERNELS_PTX=1" >> $GITHUB_ENV
         fi
-        if [ ${{ matrix.skip-dxil }} ]; then
+        if [ "${{ matrix.skip-dxil }}" = "true" ]; then
           echo "SUPASIM_SKIP_KERNELS_DXIL=1" >> $GITHUB_ENV
         fi
 
