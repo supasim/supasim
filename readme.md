@@ -18,15 +18,15 @@ The following additional libraries providing bindings to C++ libraries live on t
 
 ## Kernels
 
-Kernels are written in [Slang](https://shader-slang.org/). SupaSim provides some advice on how to avoid unintended behavior (aka bugs) in Slang code, which can be seen [here](./kernels/readme.md). When compiling kernels, they may not be directly transpiled to the target language. For example, many languages first go through SPIR-V, enabling SPIRV-Opt to optimize code, as well as allowing use of SPIRV-Cross, which may be more mature and stable than Slang's direct output into the target language.
+Kernels are written in [Slang](https://shader-slang.org/). SupaSim provides some advice on how to avoid unintended behavior (aka bugs) in Slang code, which can be seen [here](./docs/kernels.md). When compiling kernels, they may not be directly transpiled to the target language. For example, many languages first go through SPIR-V, enabling SPIRV-Opt to optimize code, as well as allowing use of SPIRV-Cross, which may be more mature and stable than Slang's direct output into the target language.
 
 ## Compiling
 
 Once you have the dependencies installed, you can simply add supasim as a dependency to your project, with your desired features. The examples can be easily run like any other rust project, for example `cargo run --example buddhabrot`.
 
 ### Requirements
-All requirements are part of the vulkan sdk. The only dynamically linked component is `DXC` for compiling DirectX shaders.
-This is required to use the wgpu backend, or to compile DXIL code for the shader library. Therefore, users seeking this
+All requirements are part of the vulkan sdk. The only dynamically linked component is `DXC` for compiling DirectX kernels.
+This is required to use the wgpu backend, or to compile DXIL code for the kernel library. Therefore, users seeking this
 functionality should plan to ship a copy of `dxc.dll`. If you wish to use older versions of DXC for whatever reason, you should also ship `dxil.dll`, which isn't part of the vulkan
 sdk and must be downloaded separately, such as from DXC github releases.
 

@@ -62,14 +62,20 @@ Note that CPU support is desired due to relieving gpu/not using its memory, even
 ## Updating the license header
 Run `./scripts/update-license-header.py -h LICENSE_HEADER ./**/*.rs ./**/*.toml ./**/*.py ./.github/**/*.yml ./**/*.slang ./**/*.wgsl` after `shopt -s globstar`
 
-## Sync & resource tracking overview (Out ouf date)
+## Sync & resource tracking overview
 
-* The instance tracks all command recorders submitted by index and associated semaphore
-* The instance occasionally checks for completed semaphores
-* Whenever a buffer is used for commands it gains details about how it is used and the semaphore
-* When a buffer is destroyed/dropped, it is added to a list of buffers to be destroyed when all users finish
-* Whenever a command recorder is submitted, it is destroyed and a semaphore is returned. The command recorders used get
-  added to the list of command recorders and semaphores
+For the authoritative, up-to-date description of the object model, residency / out-of-date (OOD)
+tracking, command recording, and the sync thread, see the root `CLAUDE.md`. In brief:
+
+* Frontend handles are `Arc<RwLock<Inner>>` newtypes; the instance owns weak-ref arenas of every
+  object so it can enumerate and destroy them without reference cycles.
+* Each buffer tracks its data across multiple locations (per-device GPU, host, disk) via a
+  residency + OOD system, which schedules copies and semaphore waits to make a location current
+  before an access.
+* Submitting command recorders assembles the commands into parallel streams, records them into a
+  HAL command buffer, and hands them to a per-(device, stream) background thread; a `WaitHandle`
+  wrapping a pooled semaphore is returned. (That background thread is not yet implemented on the
+  `residency-overhaul` branch.)
 
 ## Avoiding deadlocks
 * Locks are acquired in a specified order across all functions

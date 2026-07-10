@@ -339,7 +339,7 @@ impl GlobalState {
                 Self::recurse_params_reflection(vec, field);
             }
         } else if ty.kind() == slang::TypeKind::ParameterBlock {
-            //panic!("ParameterBlock's are a bad idea, see kernels/readme.md");
+            //panic!("ParameterBlock's are a bad idea, see docs/kernels.md");
             let a: &slang::reflection::TypeLayout = var.type_layout().element_type_layout();
             for field in a.fields() {
                 Self::recurse_params_reflection(vec, field);
