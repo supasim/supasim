@@ -83,7 +83,8 @@ pub struct BufferRange {
 
 impl BufferRange {
     pub fn join(&self, other: &Self) -> Option<Self> {
-        if self.start < (other.start + other.length) && other.start < (self.start + self.length) {
+        // Use <= to treat adjacent (touching) intervals as joinable, e.g. [0,10) + [10,10) -> [0,20)
+        if self.start <= (other.start + other.length) && other.start <= (self.start + self.length) {
             let start = self.start.min(other.start);
             Some(Self {
                 start: self.start.min(other.start),

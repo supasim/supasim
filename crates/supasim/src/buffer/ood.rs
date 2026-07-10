@@ -196,3 +196,56 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::buffer::BufferRange;
+
+    fn r(start: u64, length: u64) -> BufferRange {
+        BufferRange { start, length }
+    }
+
+    #[test]
+    fn range_intersects() {
+        assert!(r(0, 10).intersects(&r(5, 10)));
+        assert!(!r(0, 10).intersects(&r(10, 5)));
+        assert!(!r(0, 10).intersects(&r(20, 5)));
+    }
+
+    #[test]
+    fn range_subtract_middle_splits() {
+        // subtracting [4,6) from [0,10) leaves [0,4) and [6,10)
+        let (a, b) = r(0, 10).subtract(&r(4, 2));
+        assert_eq!(a, r(0, 4));
+        assert_eq!(b, Some(r(6, 4)));
+    }
+
+    #[cfg(feature = "vulkan")]
+    mod tracker {
+        use crate::buffer::{BufferRange, ood::OutOfDateTracker};
+
+        type T = OutOfDateTracker<hal::Vulkan>;
+
+        #[test]
+        fn tracker_starts_all_out_of_date() {
+            let t = T::uninit(100);
+            assert_eq!(t.out_of_date_ranges, vec![BufferRange { start: 0, length: 100 }]);
+        }
+
+        #[test]
+        fn immediate_update_clears_range() {
+            let mut t = T::uninit(100);
+            t.update_range_immediate(BufferRange { start: 0, length: 100 });
+            assert!(t.out_of_date_ranges.is_empty());
+        }
+
+        #[test]
+        fn invalidate_merges_adjacent() {
+            let mut t = T::uninit(0); // starts empty (length 0 -> [0,0))
+            t.out_of_date_ranges.clear();
+            t.invalidate_range(BufferRange { start: 0, length: 10 });
+            t.invalidate_range(BufferRange { start: 10, length: 10 });
+            assert_eq!(t.out_of_date_ranges, vec![BufferRange { start: 0, length: 20 }]);
+        }
+    }
+}
