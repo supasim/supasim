@@ -217,8 +217,12 @@ impl<B: hal::Backend> Instance<B> {
         {
             let mut inner_mut = s.inner_mut().unwrap();
             inner_mut.self_weak = Some(s.downgrade());
+            // Pass a WEAK instance handle: a strong clone here would form a
+            // ref-cycle (thread -> Instance -> stream_handle -> thread) that
+            // prevents `InstanceInner::drop` from ever running. See
+            // `create_sync_thread`.
             inner_mut.hal_devices[0].streams[0].stream_handle =
-                Some(RwLock::new(create_sync_thread(s.clone(), 0, 0)));
+                Some(RwLock::new(create_sync_thread(s.downgrade(), 0, 0)));
         }
         s
     }

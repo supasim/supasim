@@ -22,6 +22,12 @@ macro_rules! api_type {
                     Ok($name(self.0.upgrade().ok_or(crate::SupaSimError::AlreadyDestroyed(stringify!($name).to_owned()))?))
                 }
             }
+            // Mirrors the strong type's blanket Send + Sync. A `Weak` handle is a
+            // dangling-safe pointer to the same `Arc<RwLock<Inner>>`; sharing it across
+            // threads is exactly as sound as sharing the strong handle. The sync thread
+            // deliberately holds a `Weak` instance handle (see `create_sync_thread`).
+            unsafe impl<B: hal::Backend> Send for [<$name Weak>] <B> {}
+            unsafe impl<B: hal::Backend> Sync for [<$name Weak>] <B> {}
 
             // Outer type, with some helper methods
             #[derive(Clone)]

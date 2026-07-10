@@ -5,8 +5,8 @@
 END LICENSE */
 
 use crate::{
-    Buffer, Instance, Kernel, SupaSimError, SupaSimResult, buffer::ood::OutOfDateWait,
-    sync::SubmissionResources,
+    Buffer, Instance, InstanceWeak, Kernel, MapSupasimError, SupaSimError, SupaSimResult,
+    buffer::ood::OutOfDateWait, sync::SubmissionResources,
 };
 use parking_lot::{Condvar, Mutex};
 use std::sync::{Arc, mpsc::Sender};
@@ -69,7 +69,15 @@ impl<B: hal::Backend> StreamThreadHandle<B> {
 }
 
 pub fn create_sync_thread<B: hal::Backend>(
-    instance: Instance<B>,
+    // A WEAK handle deliberately: the thread must NOT keep the instance alive,
+    // otherwise `InstanceInner::drop` (which sends `ShutDown` and joins this
+    // thread) could never run — the thread's own strong `Arc` would keep the
+    // strong count above zero forever, so `Drop` never fires, so `ShutDown` is
+    // never sent, so the thread blocks on `recv()` forever and every HAL
+    // resource leaks. Holding only a weak ref between messages lets the last
+    // user `Instance` handle dropping bring `InstanceInner` to zero -> `Drop`
+    // -> `destroy()` -> `ShutDown` -> this (idle) thread exits -> `join()`.
+    instance: InstanceWeak<B>,
     device_idx: usize,
     stream_idx: usize,
 ) -> StreamThreadHandle<B> {
@@ -83,7 +91,35 @@ pub fn create_sync_thread<B: hal::Backend>(
         while let Ok(msg) = receiver.recv() {
             match msg {
                 StreamThreadMessage::Submission(info) => {
-                    run_submission(&instance, device_idx, stream_idx, info, &completed_thread);
+                    // Upgrade to a temporary STRONG ref for the whole duration of
+                    // processing this submission, so the instance cannot be
+                    // destroyed mid-submission. It is dropped before the next
+                    // `recv()`, restoring the weak-only state between messages.
+                    match instance.upgrade() {
+                        Ok(strong) => {
+                            run_submission(
+                                &strong,
+                                device_idx,
+                                stream_idx,
+                                info,
+                                &completed_thread,
+                            );
+                            drop(strong);
+                        }
+                        Err(_) => {
+                            // The instance is already gone (last handle dropped
+                            // before this submission was drained). Best-effort:
+                            // let `info` drop (releasing its Arcs) and advance the
+                            // completion counter so no waiter is wedged. HAL
+                            // resource cleanup already happened via
+                            // `InstanceInner::destroy`.
+                            drop(info);
+                            let (lock, cv) = &*completed_thread;
+                            let mut g = lock.lock();
+                            *g += 1;
+                            cv.notify_all();
+                        }
+                    }
                 }
                 StreamThreadMessage::ShutDown => break,
             }
@@ -97,6 +133,26 @@ pub fn create_sync_thread<B: hal::Backend>(
     }
 }
 
+/// Advances the completion counter and wakes waiters when dropped.
+///
+/// The completion counter MUST advance for every processed submission, even if a
+/// HAL call or resource-free errors partway through — otherwise `WaitHandle::wait`,
+/// `wait_for_idle`, and `thread.join()` (all of which block until the counter
+/// reaches their submission index) would hang forever. Doing it in `Drop` means the
+/// counter advances regardless of how `run_submission` returns (early error return
+/// or even an unwinding panic in a HAL call).
+struct CompletionGuard<'a> {
+    completed: &'a Arc<(Mutex<u64>, Condvar)>,
+}
+impl Drop for CompletionGuard<'_> {
+    fn drop(&mut self) {
+        let (lock, cv) = &**self.completed;
+        let mut g = lock.lock();
+        *g += 1;
+        cv.notify_all();
+    }
+}
+
 /// Runs a single GPU submission to completion: submit it, block until the GPU
 /// signals its completion semaphore, free its transient resources, then advance
 /// the completion counter and wake any waiters.
@@ -104,18 +160,35 @@ pub fn create_sync_thread<B: hal::Backend>(
 /// Locking rule (critical): the `instance.inner()` read lock and the stream mutex
 /// are only ever held for the submit call and the resource-free call, never across
 /// the blocking `signal_semaphore.wait()`.
+///
+/// Robustness: the completion counter is advanced by `CompletionGuard::drop` no
+/// matter how this function returns, so a HAL error (or panic) unblocks waiters
+/// instead of wedging the whole system. Errors are logged, not propagated.
 fn run_submission<B: hal::Backend>(
     instance: &Instance<B>,
     device_idx: usize,
     stream_idx: usize,
-    mut info: GpuSubmissionInfo<B>,
+    info: GpuSubmissionInfo<B>,
     completed: &Arc<(Mutex<u64>, Condvar)>,
 ) {
+    // Advances the completion counter on scope exit, whatever happens below.
+    let _completion = CompletionGuard { completed };
+    if let Err(e) = run_submission_inner(instance, device_idx, stream_idx, info) {
+        log::error!("sync thread failed to process submission: {e:?}");
+    }
+}
+
+fn run_submission_inner<B: hal::Backend>(
+    instance: &Instance<B>,
+    device_idx: usize,
+    stream_idx: usize,
+    mut info: GpuSubmissionInfo<B>,
+) -> SupaSimResult<B, ()> {
     use hal::Stream as _;
     // Submit the recorder, signalling the completion semaphore on the GPU.
     // Lock only for the duration of the submit call.
     {
-        let s = instance.inner().unwrap();
+        let s = instance.inner()?;
         let signal_lock = info.signal_semaphore.inner.as_ref().unwrap().read();
         let mut stream_guard = s.hal_devices[device_idx].streams[stream_idx].inner.lock();
         let stream = stream_guard.as_mut().unwrap();
@@ -129,18 +202,13 @@ fn run_submission<B: hal::Backend>(
                     wait_semaphores: &[],
                     signal_semaphore: Some(&signal_lock),
                 }))
-                .unwrap();
+                .map_supasim()?;
         }
     }
     // Block (CPU side) until the GPU signals completion. No locks held here.
-    info.signal_semaphore.wait().unwrap();
+    info.signal_semaphore.wait()?;
     // Free per-submission resources now that the GPU is done with them.
-    finish_submission(instance, device_idx, stream_idx, info);
-    // Advance the completion counter and wake anything waiting on this submission.
-    let (lock, cv) = &**completed;
-    let mut g = lock.lock();
-    *g += 1;
-    cv.notify_all();
+    finish_submission(instance, device_idx, stream_idx, info)
 }
 
 /// Frees the transient resources of a completed submission.
@@ -156,24 +224,24 @@ fn finish_submission<B: hal::Backend>(
     device_idx: usize,
     stream_idx: usize,
     info: GpuSubmissionInfo<B>,
-) {
+) -> SupaSimResult<B, ()> {
     use hal::{BindGroup as _, Buffer as _};
-    let s = instance.inner().unwrap();
+    let s = instance.inner()?;
     {
         let stream_guard = s.hal_devices[device_idx].streams[stream_idx].inner.lock();
         let stream = stream_guard.as_ref().unwrap();
         for (bg, kernel) in info.bind_groups {
-            let kernel_inner = kernel.inner().unwrap();
+            let kernel_inner = kernel.inner()?;
             unsafe {
                 bg.destroy(stream, kernel_inner.inner.as_ref().unwrap())
-                    .unwrap();
+                    .map_supasim()?;
             }
         }
     }
     if let Some(tmp) = info.used_resources.temp_copy_buffer {
         unsafe {
             tmp.destroy(s.hal_devices[device_idx].inner.lock().as_ref().unwrap())
-                .unwrap();
+                .map_supasim()?;
         }
     }
     // Return the command recorder to the pool for reuse.
@@ -181,6 +249,7 @@ fn finish_submission<B: hal::Backend>(
         .unused_hal_command_recorders
         .lock()
         .push(info.command_recorder);
+    Ok(())
     // `info.used_buffer_ranges` is dropped here, releasing its holds on the
     // dependency finishes (and thus their semaphores).
 }
