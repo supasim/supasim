@@ -95,11 +95,24 @@ pub fn mut_map_readback<Backend: hal::Backend>(
     w.wait().unwrap();
     instance.wait_for_idle(1.0).unwrap();
 
-    // Read the GPU result through a MUTABLE mapping (the read half of a read-modify-write).
-    // BUG #3/#4: returns stale data because the device->host readback was skipped for
-    // the mutable access.
-    let mapping = out.access(0, 16, true).unwrap();
-    assert_eq!(mapping.readable::<u32>().unwrap(), [11, 22, 33, 44]);
+    // Read half of a read-modify-write: the GPU result must be visible through a MUTABLE
+    // mapping. BUG #3/#4 returned stale data here (the device->host readback was skipped
+    // for a mutable access).
+    {
+        let mapping = out.access(0, 16, true).unwrap();
+        assert_eq!(mapping.readable::<u32>().unwrap(), [11, 22, 33, 44]);
+    }
+    // Write half: modify through a mutable mapping, drop it, and confirm the change lands
+    // (host write-back + device invalidation, so the next read re-fetches from the host).
+    {
+        let mut mapping = out.access(0, 16, true).unwrap();
+        for v in mapping.writeable::<u32>().unwrap() {
+            *v *= 2;
+        }
+    }
+    let mut got = [0u32; 4];
+    out.read(0, &mut got).unwrap();
+    assert_eq!(got, [22, 44, 66, 88]);
     Ok(())
 }
 

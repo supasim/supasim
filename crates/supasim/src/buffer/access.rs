@@ -116,7 +116,7 @@ impl<B: hal::Backend> Buffer<B> {
         drop(instance);
         // Reuse the already-held write guard: re-acquiring `residency.0.write()`
         // here would self-deadlock (parking_lot RwLock is not reentrant).
-        lock.release_cpu_access(access, true);
+        lock.release_cpu_access(access, true, true);
         Ok(())
     }
     pub fn read<T: bytemuck::Pod>(&self, start: u64, out: &mut [T]) -> SupaSimResult<B, ()> {
@@ -155,7 +155,7 @@ impl<B: hal::Backend> Buffer<B> {
         drop(instance);
         // Reuse the already-held write guard: re-acquiring `residency.0.write()`
         // here would self-deadlock (parking_lot RwLock is not reentrant).
-        lock.release_cpu_access(access, false);
+        lock.release_cpu_access(access, false, false);
         Ok(())
     }
     pub fn access(
@@ -239,7 +239,15 @@ impl<B: hal::Backend> MappedBuffer<B> {
     ) -> Self {
         let b = buffer.inner().unwrap();
         let instance_props = b.instance.inner().unwrap().hal_instance_properties;
-        let (mapping, vec_capacity) = if instance_props.map_buffers {
+        // Read-only mappings on a mappable backend hand out the host GPU buffer directly,
+        // mapped for READ (so non-unified backends like wgpu-over-llvmpipe return
+        // GPU-written data rather than stale bytes). Mutable mappings always go through a
+        // host-side vec instead: the caller may read the current bytes (read-modify-write
+        // or a partial write), and wgpu cannot map a buffer for simultaneous read+write.
+        // The host copy was made current for this range by `ensure_host_current` before
+        // this call, so the vec is filled with up-to-date data. (The vec is also the only
+        // option when the backend can't map buffers at all.)
+        let (mapping, vec_capacity) = if instance_props.map_buffers && !needs_mut {
             let mapping = unsafe {
                 residency
                     .host
@@ -252,18 +260,33 @@ impl<B: hal::Backend> MappedBuffer<B> {
                             .lock()
                             .as_ref()
                             .unwrap(),
-                        // Map in the direction of the access: a read-only access must map
-                        // `MapMode::Read` so non-unified-memory backends (e.g. wgpu over
-                        // llvmpipe) return GPU-written data rather than stale bytes.
-                        needs_mut,
+                        false,
                     )
                     .unwrap()
                     .add(start as usize)
             };
             (mapping, None)
         } else {
+            // Fill from the (now-current) host buffer directly; going through
+            // `Buffer::read` would re-lock this residency write guard and deadlock.
             let mut vec = vec![0u8; length as usize];
-            buffer.read(start, &mut vec).unwrap();
+            unsafe {
+                residency
+                    .host
+                    .buffer
+                    .as_mut()
+                    .unwrap()
+                    .read(
+                        b.instance.inner().unwrap().hal_devices[0]
+                            .inner
+                            .lock()
+                            .as_ref()
+                            .unwrap(),
+                        start,
+                        &mut vec,
+                    )
+                    .unwrap();
+            }
             let ptr = vec.as_mut_ptr();
             let cap = vec.capacity();
             std::mem::forget(vec);
@@ -293,24 +316,31 @@ impl<B: hal::Backend> Drop for MappedBuffer<B> {
         let s = self.buffer.inner().unwrap();
         let mut residency = s.residency.0.write();
         if let Some(cap) = self.vec_capacity {
-            // If the vec_capacity is Some() then this ptr was obtained from a vector,
-            // which we must copy back into the buffer and then destroy
-            unsafe {
-                let vec = Vec::from_raw_parts(self.inner, self.len as usize, cap);
-                residency.devices[0]
-                    .buffer
-                    .as_mut()
-                    .unwrap()
-                    .write(
-                        s.instance.inner().unwrap().hal_devices[0]
-                            .inner
-                            .lock()
-                            .as_ref()
-                            .unwrap(),
-                        self.in_buffer_offset,
-                        &vec,
-                    )
-                    .unwrap();
+            // This ptr was obtained from a vec (a mutable or non-mappable mapping).
+            // Reclaim it, and if the caller actually wrote through it, copy the bytes back
+            // into the HOST buffer (residency-tracked). `release_cpu_access` below then
+            // marks the host copy current and invalidates the device copies. Writing to
+            // `devices[0]` here (as before) bypassed residency and could be clobbered by a
+            // later host->device copy.
+            let vec = unsafe { Vec::from_raw_parts(self.inner, self.len as usize, cap) };
+            if self.was_used_mut {
+                unsafe {
+                    residency
+                        .host
+                        .buffer
+                        .as_mut()
+                        .unwrap()
+                        .write(
+                            s.instance.inner().unwrap().hal_devices[0]
+                                .inner
+                                .lock()
+                                .as_ref()
+                                .unwrap(),
+                            self.in_buffer_offset,
+                            &vec,
+                        )
+                        .unwrap();
+                }
             }
         } else if !self
             .buffer
@@ -339,6 +369,6 @@ impl<B: hal::Backend> Drop for MappedBuffer<B> {
                     .unwrap();
             }
         }
-        residency.release_cpu_access(self.access.clone(), self.has_mut);
+        residency.release_cpu_access(self.access.clone(), self.has_mut, self.was_used_mut);
     }
 }

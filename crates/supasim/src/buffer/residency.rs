@@ -453,12 +453,14 @@ impl<B: hal::Backend> BufferResidency<B> {
         });
         self.current_index += 1;
 
+        // Only RECORD the access here; do NOT touch the OOD trackers yet. Marking the
+        // host current / invalidating the device copies is deferred to
+        // `release_cpu_access` (when the write actually lands). Doing it up front would
+        // make `ensure_host_current` skip the device->host fetch, so a mutable mapping
+        // used for read-modify-write (or a partial write) would observe stale/zeroed
+        // host bytes.
         if is_mut {
             self.write_accesses.push_back(finish.clone());
-            for d in &mut self.devices {
-                d.ood_tracker.invalidate_range(range);
-            }
-            self.host.ood_tracker.update_range_immediate(range);
         } else {
             self.read_accesses.insert(finish.id, finish.clone());
         }
@@ -472,7 +474,12 @@ impl<B: hal::Backend> BufferResidency<B> {
         finish
     }
 
-    pub fn release_cpu_access(&mut self, finish: Arc<BufferAccessFinish<B>>, is_mut: bool) {
+    pub fn release_cpu_access(
+        &mut self,
+        finish: Arc<BufferAccessFinish<B>>,
+        is_mut: bool,
+        wrote: bool,
+    ) {
         self.num_mappings -= 1;
         // Update the finish, condvar, and possibly semaphore
         // Remove from access list
@@ -483,6 +490,19 @@ impl<B: hal::Backend> BufferResidency<B> {
         }
         if let Some(sem) = &*finish.device_semaphore.lock() {
             sem.signal().unwrap();
+        }
+        // If the host copy of `range` was actually modified, it is now the authoritative
+        // copy: mark the host tracker current and invalidate every other location so the
+        // next GPU use / device readback re-fetches from the host. Deferred to here from
+        // `get_cpu_access` so the read half of a read-modify-write sees current data.
+        if wrote {
+            for d in &mut self.devices {
+                d.ood_tracker.invalidate_range(finish.range);
+            }
+            if let Some(storage) = &mut self.storage {
+                storage.ood_tracker.invalidate_range(finish.range);
+            }
+            self.host.ood_tracker.update_range_immediate(finish.range);
         }
         if is_mut {
             let idx = self.write_accesses.iter().position(|a| {
@@ -817,6 +837,6 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
                 .unwrap();
         }
         s.host._remove_buffer(instance, None);
-        s.release_cpu_access(usage, false);
+        s.release_cpu_access(usage, false, false);
     }
 }
