@@ -315,7 +315,7 @@ impl<B: hal::Backend> BufferResidency<B> {
             id: self.current_index,
         });
         self.current_index += 1;
-        if is_mut {
+        if !is_mut {
             self.read_accesses.insert(finish.id, finish.clone());
             for (i, d) in self
                 .devices
