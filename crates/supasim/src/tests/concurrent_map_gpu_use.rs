@@ -73,10 +73,7 @@ pub fn concurrent_map_gpu_use<Backend: hal::Backend>(
 
     // Post-fix sanity: the completed GPU copy is visible on readback.
     assert_eq!(
-        dst.access(0, 16, false)
-            .unwrap()
-            .readable::<u32>()
-            .unwrap(),
+        dst.access(0, 16, false).unwrap().readable::<u32>().unwrap(),
         [1, 2, 3, 4]
     );
     Ok(())

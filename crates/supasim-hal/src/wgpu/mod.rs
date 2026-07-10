@@ -797,7 +797,12 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn signal(&mut self, _device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
-        unreachable!()
+        // wgpu exposes no host-side fence signal (`semaphore_signal == false`). The
+        // frontend only ever host-signals the placeholder semaphores it attaches to
+        // in-flight CPU accesses; on wgpu those are never GPU-waited (execution is
+        // in-order and `submit_recorders` takes no wait semaphores), so completing the
+        // access is a no-op here rather than an `unreachable!()` panic.
+        Ok(())
     }
 
     #[cfg_attr(feature = "trace", tracing::instrument)]

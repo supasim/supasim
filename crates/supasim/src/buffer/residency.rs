@@ -376,6 +376,13 @@ impl<B: hal::Backend> BufferResidency<B> {
         self.devices[device_index as usize]
             .ood_tracker
             .update_range_immediate(range);
+        // These placeholders are attached to *existing* accesses that don't yet have a
+        // semaphore — always CPU accesses (a GPU access always carries the submission
+        // semaphore). The CPU signals them from `release_cpu_access` when the access
+        // finishes, so they are HOST-signalled: `device_stream_submission` must be
+        // `None` (that is the discriminant `Semaphore::{wait,signal}` assert on). A
+        // non-`None` sentinel here made `release_cpu_access`'s `sem.signal()` trip
+        // `assert!(device_stream_submission.is_none())`.
         if is_mut {
             for f in self.read_accesses.values() {
                 if f.id != my_id && f.range.intersects(&range) {
@@ -383,7 +390,7 @@ impl<B: hal::Backend> BufferResidency<B> {
                     if lock.is_none() {
                         *lock = Some(Arc::new(Semaphore {
                             inner: Some(RwLock::new(instance.get_semaphore().unwrap())),
-                            device_stream_submission: Some((u16::MAX, u16::MAX, u64::MAX)),
+                            device_stream_submission: None,
                             instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
                         }))
                     }
@@ -397,7 +404,7 @@ impl<B: hal::Backend> BufferResidency<B> {
                 if lock.is_none() {
                     *lock = Some(Arc::new(Semaphore {
                         inner: Some(RwLock::new(instance.get_semaphore().unwrap())),
-                        device_stream_submission: Some((u16::MAX, u16::MAX, u64::MAX)),
+                        device_stream_submission: None,
                         instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
                     }))
                 }
