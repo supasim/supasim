@@ -301,11 +301,29 @@ pub fn submit_command_recorders<B: hal::Backend>(
             0,
         )?;
         let kernels = streams.resources.kernels.clone();
+        // Gather this submission's GPU-signalled dependencies from the conflict scans
+        // (see `GpuSubmissionInfo::wait_semaphores`). Skip host-signalled placeholders
+        // (`device_stream_submission == None`, i.e. CPU-access deps) and never wait on
+        // our own completion semaphore (same-submission overlapping ranges carry it).
+        let self_ptr = Arc::as_ptr(&semaphore);
+        let mut wait_semaphores: Vec<Arc<Semaphore<B>>> = Vec::new();
+        for (ood_wait, _b) in &used_buffer_ranges {
+            for finish in &ood_wait.semaphores {
+                if let Some(dep) = &*finish.device_semaphore.lock()
+                    && dep.device_stream_submission.is_some()
+                    && Arc::as_ptr(dep) != self_ptr
+                    && !wait_semaphores.iter().any(|s| Arc::ptr_eq(s, dep))
+                {
+                    wait_semaphores.push(dep.clone());
+                }
+            }
+        }
         lock.submit(GpuSubmissionInfo {
             index: submission_idx,
             command_recorder: recorder,
             signal_semaphore: semaphore.clone(),
             bind_groups,
+            wait_semaphores,
             used_buffer_ranges,
             used_resources: streams.resources,
         })?;

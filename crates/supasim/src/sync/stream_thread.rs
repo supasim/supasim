@@ -25,6 +25,15 @@ pub struct GpuSubmissionInfo<B: hal::Backend> {
     pub command_recorder: B::CommandRecorder,
     /// Signalled by the GPU when this submission completes; waited on CPU-side.
     pub signal_semaphore: Arc<crate::sync::Semaphore<B>>,
+    /// GPU-signalled completion semaphores of *earlier* submissions this one depends on
+    /// (from `add_gpu_use`'s conflict scan). Passed to `submit_recorders` as GPU wait
+    /// semaphores so a later submission does not run before the earlier one it reads
+    /// from. Today submissions serialize on this thread (each fully completes before the
+    /// next is drained), so these are already signalled by submit time and the wait is a
+    /// no-op — but wiring them keeps ordering correct once multiple streams run
+    /// concurrently. Host-signalled placeholders (CPU-access deps) are deliberately
+    /// excluded; those are handled by the CPU-side residency waits.
+    pub wait_semaphores: Vec<Arc<crate::sync::Semaphore<B>>>,
     /// The bind groups used that may be destroyed upon submission completion
     pub bind_groups: Vec<(B::BindGroup, Kernel<B>)>,
     /// Ranges that may be freed up for other use upon submission completion.
@@ -190,16 +199,22 @@ fn run_submission_inner<B: hal::Backend>(
     {
         let s = instance.inner()?;
         let signal_lock = info.signal_semaphore.inner.as_ref().unwrap().read();
+        // Hold a read guard on each dependency's HAL semaphore for the submit call and
+        // borrow it as `&B::Semaphore`. Under the current single-thread serialization
+        // these are already signalled, so the GPU wait resolves immediately.
+        let wait_guards: Vec<_> = info
+            .wait_semaphores
+            .iter()
+            .map(|s| s.inner.as_ref().unwrap().read())
+            .collect();
+        let wait_refs: Vec<&B::Semaphore> = wait_guards.iter().map(|g| &**g).collect();
         let mut stream_guard = s.hal_devices[device_idx].streams[stream_idx].inner.lock();
         let stream = stream_guard.as_mut().unwrap();
         unsafe {
             stream
                 .submit_recorders(std::slice::from_mut(&mut hal::RecorderSubmitInfo {
                     command_recorder: &mut info.command_recorder,
-                    // TODO: cross-submission waits. Both integration tests submit
-                    // exactly once, so there are no cross-submission GPU dependencies;
-                    // ordering within a single recorder is handled by pipeline barriers.
-                    wait_semaphores: &[],
+                    wait_semaphores: &wait_refs,
                     signal_semaphore: Some(&signal_lock),
                 }))
                 .map_supasim()?;
