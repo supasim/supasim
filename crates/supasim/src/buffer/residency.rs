@@ -10,7 +10,8 @@ END LICENSE */
 // and `Download` HAL buffers (CPU writes -> upload, CPU reads <- download) with a GPU
 // copy syncing between them. All wgpu adapters tested so far expose
 // `MAPPABLE_PRIMARY_BUFFERS` (so `upload_download_buffers == true`) and the split path
-// is untestable here; it is deferred to a follow-up (see issue #57-adjacent work).
+// is untestable here; it is deferred to a separate follow-up (not related to issue #57
+// external-memory import; this is purely about the host-buffer split-type capability).
 
 // TODO: switch to binary tree search for all kinds of stuff
 
@@ -101,6 +102,9 @@ pub struct StorageResidencyState<B: hal::Backend> {
     ood_tracker: OutOfDateTracker<B>,
 }
 impl<B: hal::Backend> StorageResidencyState<B> {
+    // Dead code is expected: disk-swapping scaffolding for the long-term hot-memory-swap
+    // goal (issues #8/#122). Do not remove; the eviction policy comes in a later milestone.
+    #[allow(dead_code)]
     pub fn _new(len: u64) -> Self {
         let file = tempfile::tempfile().unwrap();
         file.set_len(len).unwrap();
@@ -691,8 +695,14 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
             .lock()
             .push(recorder);
 
-        // Mark the device copy current for `range`, so the subsequent `add_gpu_use`
-        // for this range sees the device as current and does not re-schedule a copy.
+        // Mark the device copy current for `range`. This is needed to keep the OOD
+        // tracker consistent after the blocking copy above. Note: the subsequent
+        // `add_gpu_use` call in `submit_command_recorders` does NOT double-copy even
+        // though `get_needed_waits` may still produce an `other_copy_range`; that
+        // placeholder is carried in `used_buffer_ranges` and dropped in
+        // `finish_submission` without ever emitting a GPU copy. The spurious
+        // `current_copies` entry is a known gap tracked under the OOD-validation TODO
+        // in `ood.rs`.
         self.0.write().devices[device_idx as usize]
             .ood_tracker
             .update_range_immediate(range);
@@ -760,6 +770,9 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
         self.ensure_host_current(range, instance);
     }
 
+    // Dead code is expected: disk-swapping scaffolding for the long-term hot-memory-swap
+    // goal (issues #8/#122). Do not remove; the eviction policy comes in a later milestone.
+    #[allow(dead_code)]
     pub fn _switch_to_storage(&self, instance: &InstanceInner<B>) {
         let length = self.0.read().size;
 

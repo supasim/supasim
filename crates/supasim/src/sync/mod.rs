@@ -237,8 +237,15 @@ pub fn submit_command_recorders<B: hal::Backend>(
         // section below: `ensure_device_current` owns its own locking (it takes a
         // brief residency read lock, drops it before the blocking GPU wait, then a
         // brief write lock to mark current). Nesting it inside the `add_gpu_use`
-        // write lock would deadlock. After this pass, the `add_gpu_use` call for the
-        // same range sees device[0] current and does not re-schedule a copy.
+        // write lock would deadlock.
+        //
+        // Note: there is no double data-copy even though `add_gpu_use` below also
+        // calls `get_needed_waits` on the same range. The true reason is that
+        // `add_gpu_use`'s `other_copy_range` (from `get_needed_waits`) is carried in
+        // `used_buffer_ranges` and is only dropped in `finish_submission` — it is
+        // never used to emit an actual GPU copy on the submission path. The resulting
+        // spurious `current_copies` placeholder is a known gap tracked under the
+        // OOD-validation TODO in `ood.rs`.
         for (buf_id, ranges) in &streams.used_ranges {
             let b = s
                 .buffers

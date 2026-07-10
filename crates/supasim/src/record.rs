@@ -657,7 +657,18 @@ pub fn record_command_streams<B: hal::Backend>(
                             import: *import,
                         }
                     }
-                    HalCommandBuilder::_UpdateBindGroup { .. } => todo!(),
+                    HalCommandBuilder::_UpdateBindGroup { .. } => {
+                        // `_UpdateBindGroup` is never emitted by `assemble_streams`: all
+                        // backends recreate bind groups fresh each submission
+                        // (`easily_update_bind_groups` is false on Vulkan and wgpu; Metal's
+                        // in-place update path is also not wired up yet). If a future backend
+                        // wants in-place updates it would need to emit this variant and
+                        // implement the arm below.
+                        unreachable!(
+                            "_UpdateBindGroup is not produced by assemble_streams; \
+                             bind groups are always recreated per submission"
+                        )
+                    }
                     HalCommandBuilder::Dummy => hal::BufferCommand::Dummy,
                 };
                 hal_commands.push(cmd);

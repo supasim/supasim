@@ -288,7 +288,8 @@ impl<B: hal::Backend> Instance<B> {
         let r = CommandRecorder::from_inner(CommandRecorderInner {
             _phantom: Default::default(),
             instance: self.clone(),
-            // Yes its UB, but id doesn't have any destructor and just contains two numbers
+            // thunderdome::Index is POD (two u32s, no destructor); constructing with
+            // Index::DANGLING then immediately overwriting via the arena insert below is sound.
             id: Index::DANGLING,
             commands: Vec::new(),
             is_alive: true,
@@ -306,7 +307,8 @@ impl<B: hal::Backend> Instance<B> {
         let b = Buffer::from_inner(BufferInner {
             _phantom: Default::default(),
             instance: self.clone(),
-            // Yes its UB, but id doesn't have any destructor and just contains two numbers
+            // thunderdome::Index is POD (two u32s, no destructor); constructing with
+            // Index::DANGLING then immediately overwriting via the arena insert below is sound.
             id: Index::DANGLING,
             create_info: *desc,
             residency: BufferResidencyRef(RwLock::new(BufferResidency::new(

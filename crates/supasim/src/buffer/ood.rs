@@ -250,7 +250,9 @@ mod tests {
 
         #[test]
         fn invalidate_merges_adjacent() {
-            let mut t = T::uninit(0); // starts empty (length 0 -> [0,0))
+            // `uninit(0)` produces a single zero-length range [0,0); clear it so the
+            // test starts from a genuinely empty tracker.
+            let mut t = T::uninit(0);
             t.out_of_date_ranges.clear();
             t.invalidate_range(BufferRange {
                 start: 0,

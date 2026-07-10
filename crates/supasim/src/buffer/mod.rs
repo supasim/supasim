@@ -87,7 +87,7 @@ impl BufferRange {
         if self.start <= (other.start + other.length) && other.start <= (self.start + self.length) {
             let start = self.start.min(other.start);
             Some(Self {
-                start: self.start.min(other.start),
+                start,
                 length: (self.start + self.length).max(other.start + other.length) - start,
             })
         } else {
