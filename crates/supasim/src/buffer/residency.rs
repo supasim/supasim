@@ -138,14 +138,19 @@ impl<B: hal::Backend> BufferAccessFinish<B> {
             let lock = self.is_complete.lock();
             *lock
         } else if let Some(s) = self.device_semaphore.lock().as_ref() {
-            let lock = self.is_complete.lock();
+            // Hold the `is_complete` guard for the whole check and reuse it to write
+            // the memoized result. Re-locking `is_complete` (as an earlier version did
+            // via `*self.is_complete.lock() = true`) self-deadlocks: parking_lot's
+            // `Mutex` is not reentrant, so acquiring it again while `lock` is still in
+            // scope hangs.
+            let mut lock = self.is_complete.lock();
             if *lock {
                 return true;
             }
             assert!(s.device_stream_submission.is_some());
             let res = s.is_signalled().unwrap();
             if res {
-                *self.is_complete.lock() = true;
+                *lock = true;
             }
             res
         } else {
@@ -601,6 +606,76 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
         self.0
             .write()
             .host
+            .ood_tracker
+            .update_range_immediate(range);
+    }
+
+    /// Ensures the device[`device_idx`] copy of `range` is current, copying host ->
+    /// device[`device_idx`] if the device is stale and the host holds the up-to-date
+    /// data for `range`. This is the mirror image of [`Self::ensure_host_current`],
+    /// used before a GPU submission consumes a buffer whose current data was last
+    /// written on the host (e.g. via `Buffer::write`).
+    ///
+    /// Locking: this method owns lock acquisition. It records+submits the copy under a
+    /// short residency read lock, drops **all** residency locks before the blocking
+    /// GPU wait (Task 3's rule), then re-acquires a brief write lock only to mark the
+    /// device tracker current. It must be called with no residency lock held.
+    pub fn ensure_device_current(
+        &self,
+        device_idx: u32,
+        range: BufferRange,
+        instance: &InstanceInner<B>,
+    ) {
+        if range.length == 0 {
+            return;
+        }
+        // Make sure both host and device[device_idx] HAL buffers exist.
+        {
+            let mut s = self.0.write();
+            s.setup_buffer(None, instance); // host
+            s.setup_buffer(Some(device_idx), instance); // device[device_idx]
+        }
+
+        // Decide whether a copy is needed and, if so, record+submit it, all under a
+        // read lock that is dropped before the blocking wait below.
+        let (semaphore, recorder) = {
+            let s = self.0.read();
+            let device_stale = s.devices[device_idx as usize]
+                .ood_tracker
+                .out_of_date_ranges
+                .iter()
+                .any(|r| r.intersects(&range));
+            let host_current = !s
+                .host
+                .ood_tracker
+                .out_of_date_ranges
+                .iter()
+                .any(|r| r.intersects(&range));
+            if !(device_stale && host_current) {
+                return;
+            }
+            let src = s.host.buffer.as_ref().unwrap();
+            let dst = s.devices[device_idx as usize].buffer.as_ref().unwrap();
+            unsafe { submit_copy_between_hal_buffers::<B>(instance, src, dst, range).unwrap() }
+            // `s` (residency read lock) drops here, before we block.
+        };
+
+        // Block on the GPU copy with NO residency lock held.
+        unsafe {
+            semaphore
+                .wait(instance.hal_instance.read().as_ref().unwrap())
+                .unwrap();
+        }
+        // The GPU is now done: it's safe to return both to their pools for reuse.
+        instance.unused_semaphores.lock().push(semaphore);
+        instance.hal_devices[0].streams[0]
+            .unused_hal_command_recorders
+            .lock()
+            .push(recorder);
+
+        // Mark the device copy current for `range`, so the subsequent `add_gpu_use`
+        // for this range sees the device as current and does not re-schedule a copy.
+        self.0.write().devices[device_idx as usize]
             .ood_tracker
             .update_range_immediate(range);
     }

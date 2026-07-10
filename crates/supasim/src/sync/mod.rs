@@ -174,6 +174,34 @@ pub fn submit_command_recorders<B: hal::Backend>(
             device_stream_submission: Some((0, 0, submission_idx)),
             instance: instance.clone(),
         });
+        // WRITE-side residency pass: before the GPU submission consumes any buffer
+        // range, make device[0] current for it. If the range's current data was last
+        // written on the host (e.g. via `Buffer::write`), the device copy is stale;
+        // `ensure_device_current` records a host->device copy, submits it, waits with
+        // all residency locks dropped, and marks device[0]'s tracker current.
+        //
+        // This runs in a pass that is NOT inside the `add_gpu_use` residency-write
+        // section below: `ensure_device_current` owns its own locking (it takes a
+        // brief residency read lock, drops it before the blocking GPU wait, then a
+        // brief write lock to mark current). Nesting it inside the `add_gpu_use`
+        // write lock would deadlock. After this pass, the `add_gpu_use` call for the
+        // same range sees device[0] current and does not re-schedule a copy.
+        for (buf_id, ranges) in &streams.used_ranges {
+            let b = s
+                .buffers
+                .read()
+                .get(*buf_id)
+                .ok_or(SupaSimError::AlreadyDestroyed("Buffer".to_owned()))?
+                .as_ref()
+                .unwrap()
+                .upgrade()?;
+            let b_inner = b.inner()?;
+            for &range in ranges {
+                b_inner
+                    .residency
+                    .ensure_device_current(0, range.range, &s);
+            }
+        }
         for (buf_id, ranges) in &streams.used_ranges {
             let b = s
                 .buffers
