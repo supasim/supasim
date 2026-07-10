@@ -6,7 +6,7 @@ END LICENSE */
 
 use crate::*;
 use std::fmt::Debug;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::{borrow::Cow, num::NonZero};
 pub use wgpu::Backends;
 use wgpu::RequestAdapterError;
@@ -223,6 +223,7 @@ impl Device<Wgpu> for WgpuDevice {
     ) -> Result<<Wgpu as Backend>::Semaphore, <Wgpu as Backend>::Error> {
         Ok(WgpuSemaphore {
             inner: Mutex::new(None),
+            submitted: Condvar::new(),
         })
     }
 
@@ -273,6 +274,8 @@ impl Stream<Wgpu> for WgpuStream {
         for info in infos {
             if let Some(signal) = info.signal_semaphore {
                 *signal.inner.lock().unwrap() = Some(idx.clone());
+                // Wake any CPU waiter that blocked because the index wasn't known yet.
+                signal.submitted.notify_all();
             }
         }
         Ok(())
@@ -434,6 +437,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
     ) -> Result<<Wgpu as Backend>::Semaphore, <Wgpu as Backend>::Error> {
         Ok(WgpuSemaphore {
             inner: Mutex::new(None),
+            submitted: Condvar::new(),
         })
     }
 
@@ -586,7 +590,15 @@ impl Buffer<Wgpu> for WgpuBuffer {
                     },
                     |_| (),
                 );
-                device.device.poll(wgpu::PollType::Poll).unwrap();
+                // `map_async` is asynchronous: the mapping (and, for `MapMode::Read`,
+                // the device->host copy that populates it) only completes once the
+                // device is polled to completion. A non-blocking `Poll` can return
+                // before the map is ready, so `get_mapped_range` would observe stale
+                // bytes (intermittent wrong readbacks). Block until it's done.
+                device
+                    .device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .unwrap();
                 let view = if mutable {
                     MappedView::Write(slice.get_mapped_range_mut())
                 } else {
@@ -727,7 +739,13 @@ impl BindGroup<Wgpu> for WgpuBindGroup {
 }
 
 pub struct WgpuSemaphore {
+    /// `None` means the work backing this semaphore has not been submitted to
+    /// the queue yet (its `SubmissionIndex` is only known after `queue.submit`).
+    /// It does NOT mean "already complete".
     inner: Mutex<Option<wgpu::SubmissionIndex>>,
+    /// Notified when a `SubmissionIndex` is assigned (i.e. the work is submitted),
+    /// so a CPU waiter created before submission can block instead of racing ahead.
+    submitted: Condvar,
 }
 
 unsafe impl Send for WgpuSemaphore {}
@@ -743,15 +761,24 @@ impl Debug for WgpuSemaphore {
 impl Semaphore<Wgpu> for WgpuSemaphore {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn wait(&self, device: &WgpuInstance) -> Result<(), <Wgpu as Backend>::Error> {
-        if let Some(a) = self.inner.lock().unwrap().clone() {
-            device
-                .device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: Some(a.clone()),
-                    timeout: None,
-                })
-                .map_err(|_| WgpuError::PollTimeout)?;
-        }
+        // Block until the work has actually been submitted (the sync thread may
+        // not have reached `submit_recorders` yet). A `None` index means "pending
+        // submission", not "complete" — proceeding on it would let this reader
+        // race ahead of the GPU and observe stale data.
+        let idx = {
+            let mut guard = self.inner.lock().unwrap();
+            while guard.is_none() {
+                guard = self.submitted.wait(guard).unwrap();
+            }
+            guard.clone().unwrap()
+        };
+        device
+            .device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(idx),
+                timeout: None,
+            })
+            .map_err(|_| WgpuError::PollTimeout)?;
         Ok(())
     }
 
@@ -763,7 +790,8 @@ impl Semaphore<Wgpu> for WgpuSemaphore {
                 .poll(wgpu::PollType::Poll)
                 .is_ok_and(|a| a.wait_finished()))
         } else {
-            Ok(true)
+            // Not submitted yet => not complete (see `wait`).
+            Ok(false)
         }
     }
 
