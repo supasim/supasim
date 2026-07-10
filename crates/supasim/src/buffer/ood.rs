@@ -229,13 +229,22 @@ mod tests {
         #[test]
         fn tracker_starts_all_out_of_date() {
             let t = T::uninit(100);
-            assert_eq!(t.out_of_date_ranges, vec![BufferRange { start: 0, length: 100 }]);
+            assert_eq!(
+                t.out_of_date_ranges,
+                vec![BufferRange {
+                    start: 0,
+                    length: 100
+                }]
+            );
         }
 
         #[test]
         fn immediate_update_clears_range() {
             let mut t = T::uninit(100);
-            t.update_range_immediate(BufferRange { start: 0, length: 100 });
+            t.update_range_immediate(BufferRange {
+                start: 0,
+                length: 100,
+            });
             assert!(t.out_of_date_ranges.is_empty());
         }
 
@@ -243,9 +252,21 @@ mod tests {
         fn invalidate_merges_adjacent() {
             let mut t = T::uninit(0); // starts empty (length 0 -> [0,0))
             t.out_of_date_ranges.clear();
-            t.invalidate_range(BufferRange { start: 0, length: 10 });
-            t.invalidate_range(BufferRange { start: 10, length: 10 });
-            assert_eq!(t.out_of_date_ranges, vec![BufferRange { start: 0, length: 20 }]);
+            t.invalidate_range(BufferRange {
+                start: 0,
+                length: 10,
+            });
+            t.invalidate_range(BufferRange {
+                start: 10,
+                length: 10,
+            });
+            assert_eq!(
+                t.out_of_date_ranges,
+                vec![BufferRange {
+                    start: 0,
+                    length: 20
+                }]
+            );
         }
     }
 }

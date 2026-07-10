@@ -517,15 +517,15 @@ unsafe fn submit_copy_between_hal_buffers<B: hal::Backend>(
     let mut stream_guard = stream_wrapper.inner.lock();
     let stream = stream_guard.as_mut().unwrap();
 
-    let mut recorder =
-        if let Some(mut r) = stream_wrapper.unused_hal_command_recorders.lock().pop() {
-            unsafe {
-                r.clear(stream).map_supasim()?;
-            }
-            r
-        } else {
-            unsafe { stream.create_recorder().map_supasim()? }
-        };
+    let mut recorder = if let Some(mut r) = stream_wrapper.unused_hal_command_recorders.lock().pop()
+    {
+        unsafe {
+            r.clear(stream).map_supasim()?;
+        }
+        r
+    } else {
+        unsafe { stream.create_recorder().map_supasim()? }
+    };
 
     unsafe {
         recorder

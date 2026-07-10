@@ -4,6 +4,58 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
+//! # Canonical lock ordering (issue #120)
+//!
+//! SupaSim uses `parking_lot` `RwLock`/`Mutex` liberally and none of them is
+//! reentrant. To avoid deadlock, any code path that holds more than one lock at a
+//! time MUST acquire them in the following top-to-bottom order, and release them in
+//! the reverse order. This is the order the code actually takes after the Task 7
+//! audit; keep it in sync if the locking changes.
+//!
+//! 1. `Instance::inner()` — the outer `Instance<B>` RwLock (`InstanceInner`).
+//!    Almost always taken as a **read** guard and held for the whole operation.
+//!    The only **write** lockers are `Instance::destroy` and
+//!    `clear_cached_resources`; because those need exclusive access, no other
+//!    operation may be in flight when they run.
+//! 2. Instance-owned arenas: `instance.{buffers,kernels,wait_handles,
+//!    command_recorders}.{read,write}()`. Short-lived; used to look up / register
+//!    weak handles.
+//! 3. Per-object outer guards, taken in a fixed order by object type
+//!    (alphabetical): `Buffer::inner()`, `CommandRecorder::inner_mut()`,
+//!    `Kernel::inner()`, `WaitHandle::inner()`. When several buffers are locked at
+//!    once (`access_buffers`, `record::*`) they are collected first, then locked.
+//! 4. `buffer.residency.0.{read,write}()` — the per-buffer `BufferResidency`.
+//! 5. `stream.stream_handle.{read,write}()` — the per-stream `StreamThreadHandle`.
+//! 6. Innermost, always brief and never held across anything blocking:
+//!    `hal_instance.{read,write}()`, `device.inner.lock()`,
+//!    `stream.inner.lock()`, `unused_hal_command_recorders.lock()`,
+//!    `unused_semaphores.lock()`, and the per-access `BufferAccessFinish`
+//!    `is_complete` / `device_semaphore` mutexes.
+//!
+//! ## The one hard rule: no lock across a blocking semaphore wait
+//!
+//! A CPU-side wait on a GPU completion semaphore (`Semaphore::wait`,
+//! `BufferAccessFinish::wait_host`, `StreamThreadHandle::wait_for_submission`) may
+//! block for an unbounded time until the GPU signals. **No residency write lock, no
+//! instance write lock, and no stream/device mutex may be held across such a wait.**
+//! The blocking waiter itself may need `instance.inner()` (a *read* lock) — e.g. the
+//! sync thread's `run_submission` and the residency `ensure_*_current` copies re-take
+//! a read lock only for the short submit call, drop it, then block. Holding a write
+//! lock across the wait would starve that reader and deadlock.
+//!
+//! ### Known tolerated residuals (tracked for #120)
+//!
+//! These hold an instance/buffer **read** guard (never a write guard) across a
+//! blocking wait. They are not deadlocks today (no concurrent writer of that lock
+//! runs while a buffer access / submission is live), but they widen the lock scope
+//! more than strictly necessary:
+//!  * `Buffer::{read,write,access}` (`buffer/access.rs`) hold a hoisted `instance`
+//!    read guard across `wait_for_cpu_access`.
+//!  * `submit_command_recorders`' `ensure_device_current` pass holds a buffer read
+//!    guard (and the instance read guard `s`) across the blocking host->device copy.
+//! Fully removing them requires threading the borrowed resources out of the guards,
+//! a larger refactor left to #120.
+
 pub mod stream_thread;
 
 use crate::{
@@ -195,11 +247,18 @@ pub fn submit_command_recorders<B: hal::Backend>(
                 .as_ref()
                 .unwrap()
                 .upgrade()?;
+            // NOTE (residual, tracked for #120): `b_inner` is the buffer's *read* guard
+            // and is held across `ensure_device_current`, which blocks on a GPU copy
+            // internally (it drops all *residency* locks before that blocking wait, but
+            // this outer buffer read guard stays alive). This is tolerated, not a
+            // deadlock: `ensure_device_current` never re-locks this buffer's `inner`
+            // and never takes a buffer *write* guard, and buffer write guards only come
+            // from create/destroy paths. Tightening (borrowing the `BufferResidencyRef`
+            // out of the guard so the guard can drop before the wait) needs a larger
+            // refactor; left as-is per the Task 7 lock-audit scope.
             let b_inner = b.inner()?;
             for &range in ranges {
-                b_inner
-                    .residency
-                    .ensure_device_current(0, range.range, &s);
+                b_inner.residency.ensure_device_current(0, range.range, &s);
             }
         }
         for (buf_id, ranges) in &streams.used_ranges {

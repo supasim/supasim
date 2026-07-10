@@ -82,23 +82,20 @@ impl<B: hal::Backend> Buffer<B> {
     pub fn write<T: bytemuck::Pod>(&self, start: u64, data: &[T]) -> SupaSimResult<B, ()> {
         let s = self.inner()?;
         let data = bytemuck::cast_slice::<T, u8>(data);
-        let access = s.residency.0.write().get_cpu_access(
-            BufferRange {
-                start,
-                length: data.len() as u64,
-            },
-            true,
-            &*s.instance.inner()?,
-        );
-        s.residency.wait_for_cpu_access(
-            BufferRange {
-                start,
-                length: data.len() as u64,
-            },
-            true,
-            access.id,
-            &*s.instance.inner()?,
-        );
+        let range = BufferRange {
+            start,
+            length: data.len() as u64,
+        };
+        // Single hoisted instance read guard (canonical lock order: Instance first).
+        // It is a *read* guard, so it does not block other readers (the sync thread,
+        // other accesses); the only instance *write* lockers are `destroy` /
+        // `clear_cached_resources`. Holding it across the blocking `wait_for_cpu_access`
+        // is a tolerated residual (see the lock-order note in `sync/mod.rs`); dropping
+        // it earlier would require threading the instance guard out of that call.
+        let instance = s.instance.inner()?;
+        let access = s.residency.0.write().get_cpu_access(range, true, &instance);
+        s.residency
+            .wait_for_cpu_access(range, true, access.id, &instance);
         let mut lock = s.residency.0.write();
         unsafe {
             lock.host
@@ -106,16 +103,17 @@ impl<B: hal::Backend> Buffer<B> {
                 .as_mut()
                 .unwrap()
                 .write(
-                    s.instance.inner()?.hal_devices[0]
-                        .inner
-                        .lock()
-                        .as_ref()
-                        .unwrap(),
+                    instance.hal_devices[0].inner.lock().as_ref().unwrap(),
                     start,
                     data,
                 )
                 .map_supasim()?;
         }
+        // Drop the instance read guard before `release_cpu_access`: if a concurrent
+        // GPU use attached a semaphore to this access, `release_cpu_access` signals
+        // it via `Semaphore::signal`, which re-locks `instance.inner()`. Releasing
+        // our guard first keeps that a fresh (non-nested) read lock.
+        drop(instance);
         // Reuse the already-held write guard: re-acquiring `residency.0.write()`
         // here would self-deadlock (parking_lot RwLock is not reentrant).
         lock.release_cpu_access(access, true);
@@ -124,23 +122,21 @@ impl<B: hal::Backend> Buffer<B> {
     pub fn read<T: bytemuck::Pod>(&self, start: u64, out: &mut [T]) -> SupaSimResult<B, ()> {
         let s = self.inner()?;
         let data = bytemuck::cast_slice_mut::<T, u8>(out);
-        let access = s.residency.0.write().get_cpu_access(
-            BufferRange {
-                start,
-                length: data.len() as u64,
-            },
-            false,
-            &*s.instance.inner()?,
-        );
-        s.residency.wait_for_cpu_access(
-            BufferRange {
-                start,
-                length: data.len() as u64,
-            },
-            false,
-            access.id,
-            &*s.instance.inner()?,
-        );
+        let range = BufferRange {
+            start,
+            length: data.len() as u64,
+        };
+        // See `write` above: hoisted instance *read* guard, held across the blocking
+        // `wait_for_cpu_access` as a tolerated residual (no instance writer runs
+        // concurrently with a live buffer access).
+        let instance = s.instance.inner()?;
+        let access = s
+            .residency
+            .0
+            .write()
+            .get_cpu_access(range, false, &instance);
+        s.residency
+            .wait_for_cpu_access(range, false, access.id, &instance);
         let mut lock = s.residency.0.write();
         unsafe {
             lock.host
@@ -148,16 +144,15 @@ impl<B: hal::Backend> Buffer<B> {
                 .as_mut()
                 .unwrap()
                 .read(
-                    s.instance.inner()?.hal_devices[0]
-                        .inner
-                        .lock()
-                        .as_ref()
-                        .unwrap(),
+                    instance.hal_devices[0].inner.lock().as_ref().unwrap(),
                     start,
                     data,
                 )
                 .map_supasim()?;
         }
+        // Drop the instance read guard before `release_cpu_access` (see `write`): it may
+        // signal a semaphore that re-locks `instance.inner()`.
+        drop(instance);
         // Reuse the already-held write guard: re-acquiring `residency.0.write()`
         // here would self-deadlock (parking_lot RwLock is not reentrant).
         lock.release_cpu_access(access, false);
@@ -170,18 +165,20 @@ impl<B: hal::Backend> Buffer<B> {
         needs_mut: bool,
     ) -> SupaSimResult<B, MappedBuffer<B>> {
         let s = self.inner()?;
-
-        let access = s.residency.0.write().get_cpu_access(
-            BufferRange { start, length },
-            needs_mut,
-            &*s.instance.inner()?,
-        );
-        s.residency.wait_for_cpu_access(
-            BufferRange { start, length },
-            needs_mut,
-            access.id,
-            &*s.instance.inner()?,
-        );
+        let range = BufferRange { start, length };
+        // See `write` above: hoisted instance *read* guard, held across the blocking
+        // `wait_for_cpu_access` as a tolerated residual.
+        let instance = s.instance.inner()?;
+        let access = s
+            .residency
+            .0
+            .write()
+            .get_cpu_access(range, needs_mut, &instance);
+        s.residency
+            .wait_for_cpu_access(range, needs_mut, access.id, &instance);
+        // Drop the instance guard before `MappedBuffer::new` re-locks the instance
+        // internally (it takes its own `instance.inner()`), avoiding a nested guard.
+        drop(instance);
 
         let mut residency = s.residency.0.write();
         Ok(MappedBuffer::new(
