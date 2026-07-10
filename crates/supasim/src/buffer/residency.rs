@@ -314,6 +314,7 @@ impl<B: hal::Backend> BufferResidency<B> {
             range,
             id: self.current_index,
         });
+        let my_id = finish.id;
         self.current_index += 1;
         if is_mut {
             self.write_accesses.push_back(finish.clone());
@@ -343,9 +344,9 @@ impl<B: hal::Backend> BufferResidency<B> {
             .ood_tracker
             .invalidate_range(range);
         if is_mut {
-            for finish in self.read_accesses.values() {
-                if finish.range.intersects(&range) {
-                    let mut lock = finish.device_semaphore.lock();
+            for f in self.read_accesses.values() {
+                if f.id != my_id && f.range.intersects(&range) {
+                    let mut lock = f.device_semaphore.lock();
                     if lock.is_none() {
                         *lock = Some(Arc::new(Semaphore {
                             inner: Some(RwLock::new(instance.get_semaphore().unwrap())),
@@ -353,13 +354,13 @@ impl<B: hal::Backend> BufferResidency<B> {
                             instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
                         }))
                     }
-                    wait.semaphores.push(finish.clone());
+                    wait.semaphores.push(f.clone());
                 }
             }
         }
-        for finish in &self.write_accesses {
-            if finish.range.intersects(&range) {
-                let mut lock = finish.device_semaphore.lock();
+        for f in &self.write_accesses {
+            if f.id != my_id && f.range.intersects(&range) {
+                let mut lock = f.device_semaphore.lock();
                 if lock.is_none() {
                     *lock = Some(Arc::new(Semaphore {
                         inner: Some(RwLock::new(instance.get_semaphore().unwrap())),
@@ -367,7 +368,7 @@ impl<B: hal::Backend> BufferResidency<B> {
                         instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
                     }))
                 }
-                wait.semaphores.push(finish.clone());
+                wait.semaphores.push(f.clone());
             }
         }
         if let Some(extra_copy) = &wait.other_copy_range {
