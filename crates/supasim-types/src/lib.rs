@@ -180,25 +180,6 @@ pub struct HalDeviceProperties {
     pub supports_buffer_import: bool,
     pub supports_semaphore_import: bool,
 }
-/// # Safety
-/// This is undefined behavior lol
-pub unsafe fn to_static_lifetime<T>(r: &T) -> &'static T
-where
-    T: ?Sized,
-{
-    unsafe {
-        let r = r as *const T;
-        &*r
-    }
-}
-/// # Safety
-/// This is undefined behavior lol
-pub unsafe fn to_static_lifetime_mut<T>(r: &mut T) -> &'static mut T {
-    unsafe {
-        let r = r as *mut T;
-        &mut *r
-    }
-}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KernelReflectionInfo {
     pub entry_point_name: String,
