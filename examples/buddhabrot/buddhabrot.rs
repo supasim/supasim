@@ -639,11 +639,9 @@ impl<B: hal::Backend> ApplicationHandler<AppState<B>> for App<B> {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
-            WindowEvent::RedrawRequested => {
-                if !state.render() {
-                    let size = state.window.inner_size();
-                    state.resize(size.width, size.height);
-                }
+            WindowEvent::RedrawRequested if !state.render() => {
+                let size = state.window.inner_size();
+                state.resize(size.width, size.height);
             }
             _ => (),
         }

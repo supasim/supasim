@@ -53,6 +53,7 @@ END LICENSE */
 //!    read guard across `wait_for_cpu_access`.
 //!  * `submit_command_recorders`' `ensure_device_current` pass holds a buffer read
 //!    guard (and the instance read guard `s`) across the blocking host->device copy.
+//!
 //! Fully removing them requires threading the borrowed resources out of the guards,
 //! a larger refactor left to #120.
 
