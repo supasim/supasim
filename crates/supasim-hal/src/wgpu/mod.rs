@@ -181,7 +181,14 @@ impl Device<Wgpu> for WgpuDevice {
             map_mut: match alloc_info.memory_type {
                 HalBufferType::Download => Some(false),
                 HalBufferType::Upload => Some(true),
-                _ => None,
+                // `UploadDownload` is only created when `MAPPABLE_PRIMARY_BUFFERS`
+                // (unified memory) is available, so mapping it as `Write` is valid
+                // (it has `MAP_WRITE` usage) and the mapped range reflects real
+                // memory, so reads through the pointer work too.
+                HalBufferType::UploadDownload => Some(true),
+                // `Storage` buffers are not host-mappable; `map` must not be called
+                // on them. Keep `None` so a stray call fails loudly.
+                HalBufferType::Storage => None,
             },
         })
     }
@@ -600,7 +607,11 @@ impl CommandRecorder<Wgpu> for WgpuCommandRecorder {
                     );
                     drop(pass);
                 }
-                BufferCommand::MemoryTransfer { .. } => todo!(),
+                BufferCommand::MemoryTransfer { .. } => {
+                    // External memory import/export is unimplemented on wgpu (issue #57).
+                    // Return a clean backend error rather than panicking via `todo!()`.
+                    return Err(WgpuError::ExternalMemoryUnsupported);
+                }
                 BufferCommand::UpdateBindGroup { .. } => {
                     unreachable!()
                 }
@@ -735,6 +746,8 @@ pub enum WgpuError {
     PollTimeout,
     #[error("A buffer export was attempted under invalid conditions")]
     ExternalMemoryExport,
+    #[error("External memory transfer is unsupported on the wgpu backend (issue #57)")]
+    ExternalMemoryUnsupported,
 }
 
 impl Error<Wgpu> for WgpuError {

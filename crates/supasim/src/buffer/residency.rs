@@ -4,7 +4,13 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-// TODO: handle wgpu where combined upload & download buffers are unsupported
+// TODO: handle backends where combined upload & download buffers are unsupported
+// (`upload_download_buffers == false`). The host location currently uses a single
+// `UploadDownload` HAL buffer. On such backends the host would need separate `Upload`
+// and `Download` HAL buffers (CPU writes -> upload, CPU reads <- download) with a GPU
+// copy syncing between them. All wgpu adapters tested so far expose
+// `MAPPABLE_PRIMARY_BUFFERS` (so `upload_download_buffers == true`) and the split path
+// is untestable here; it is deferred to a follow-up (see issue #57-adjacent work).
 
 // TODO: switch to binary tree search for all kinds of stuff
 
@@ -396,10 +402,22 @@ impl<B: hal::Backend> BufferResidency<B> {
         is_mut: bool,
         instance: &InstanceInner<B>,
     ) -> Arc<BufferAccessFinish<B>> {
-        // TODO: wgpu doesn't support buffer mapping while its in a command on the GPU.
-        // We should in these cases request access to the entire buffer.
         self.setup_buffer(None, instance);
         self.num_mappings += 1;
+        // Backends that can't map a buffer while it's used by an in-flight GPU
+        // command (wgpu, `map_buffer_while_gpu_use == false`) require the whole
+        // buffer to be free of GPU use before we may map any part of it. In that
+        // case widen the range we *wait/sync* on to the entire buffer. The access
+        // record below still stores the caller's requested `range` so the exposed
+        // mapped slice remains the requested sub-range.
+        let wait_range = if instance.hal_instance_properties.map_buffer_while_gpu_use {
+            range
+        } else {
+            BufferRange {
+                start: 0,
+                length: self.size,
+            }
+        };
         // Push this buffer access, update out of date ranges
         // Wait for dependencies to finish
         let finish = Arc::new(BufferAccessFinish::<B> {
@@ -422,7 +440,7 @@ impl<B: hal::Backend> BufferResidency<B> {
         }
 
         // TODO: finalize copies for out of date stuff
-        let wait = self.host.ood_tracker.get_needed_waits(range, instance);
+        let wait = self.host.ood_tracker.get_needed_waits(wait_range, instance);
         for sem in wait.semaphores {
             sem.wait_host();
         }
@@ -687,6 +705,17 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
         my_id: u64,
         instance: &InstanceInner<B>,
     ) {
+        // Mirror `get_cpu_access`: on backends that can't map while the buffer is in
+        // GPU use, widen the conflict scan to the whole buffer so we wait for any
+        // in-flight access touching any byte before mapping.
+        let scan_range = if instance.hal_instance_properties.map_buffer_while_gpu_use {
+            range
+        } else {
+            BufferRange {
+                start: 0,
+                length: self.0.read().size,
+            }
+        };
         let mut s = Some(self.0.read());
         let mut any_waits = false;
         loop {
@@ -694,7 +723,7 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
             let mut wait = None;
             if is_mut {
                 for read in s.as_ref().unwrap().read_accesses.values() {
-                    if read.range.intersects(&range) && read.id < my_id {
+                    if read.range.intersects(&scan_range) && read.id < my_id {
                         wait = Some(read.clone());
                         break;
                     }
@@ -702,7 +731,7 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
             }
             if wait.is_none() {
                 for write in s.as_ref().unwrap().write_accesses.iter().rev() {
-                    if write.range.intersects(&range) && write.id < my_id {
+                    if write.range.intersects(&scan_range) && write.id < my_id {
                         wait_is_mut = true;
                         wait = Some(write.clone());
                         break;
