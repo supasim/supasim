@@ -360,9 +360,22 @@ impl<B: hal::Backend> BufferResidency<B> {
         let mut wait = self.devices[device_index as usize]
             .ood_tracker
             .get_needed_waits(range, instance);
+        // After this GPU use, device[device_index] holds the authoritative data for
+        // `range`, so mark ITS tracker current — do NOT invalidate it. A write makes
+        // this device the fresh copy (the loop above already invalidated the host and
+        // every other device); a read leaves it current (it was made current by
+        // `ensure_device_current` before this call, so this is a no-op for reads).
+        //
+        // The previous code called `invalidate_range` here, marking the just-written
+        // device copy stale on the very device that wrote it. That was only masked by
+        // the now-removed `get_needed_waits` placeholder, whose `update_range_delayed`
+        // re-marked the range current. With the placeholder gone (B2 fix), invalidating
+        // here left device[device_index] permanently out of date after a write, so the
+        // next device->host readback saw `device_current == false`, skipped the copy,
+        // and returned stale/zeroed host data.
         self.devices[device_index as usize]
             .ood_tracker
-            .invalidate_range(range);
+            .update_range_immediate(range);
         if is_mut {
             for f in self.read_accesses.values() {
                 if f.id != my_id && f.range.intersects(&range) {

@@ -9,7 +9,7 @@ use crate::{
     buffer::{BufferRange, residency::BufferAccessFinish},
     sync::Semaphore,
 };
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::sync::Arc;
 
 // TODO: optimize and validate all OOD logic
@@ -122,68 +122,39 @@ impl<B: hal::Backend> OutOfDateTracker<B> {
             };
         }
         self.check_all_current_copies();
+        // Wait on every in-flight copy in `current_copies` that intersects `range`
+        // (attaching a real completion semaphore to each if one isn't already set).
+        //
+        // We NEVER manufacture an `other_copy_range` placeholder here. Previously,
+        // any part of `range` still in `out_of_date_ranges` with no in-flight copy
+        // produced an `extra_copy` carrying a fresh timeline semaphore that NOTHING
+        // ever signalled — leaking a HAL semaphore per submission and, if that stale
+        // placeholder was ever waited, deadlocking (the B2 bug). Such still-out-of-date
+        // ranges are benign and need no in-tracker copy:
+        //   * A WRITE access produces the data itself (normal write-first case, e.g. a
+        //     copy/dispatch destination that never held data anywhere). `add_gpu_use`
+        //     then marks this location current via `update_range_immediate`.
+        //   * A READ access has already been made current up front by
+        //     `ensure_device_current` / `ensure_host_current`, so the range is no
+        //     longer out of date by the time we get here.
         let mut waits = Vec::new();
-        let mut needing_copy = vec![range];
-        for &(ref copy, other_range) in &self.current_copies {
-            if range.intersects(&other_range) {
-                {
-                    let mut lock = copy.device_semaphore.lock();
-                    if lock.is_none() {
-                        *lock = Some(Arc::new(Semaphore {
-                            inner: Some(RwLock::new(instance.get_semaphore().unwrap())),
-                            device_stream_submission: Some((u16::MAX, u16::MAX, u64::MAX)),
-                            instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
-                        }))
-                    }
+        for (copy, other_range) in &self.current_copies {
+            if range.intersects(other_range) {
+                let mut lock = copy.device_semaphore.lock();
+                if lock.is_none() {
+                    *lock = Some(Arc::new(Semaphore {
+                        inner: Some(RwLock::new(instance.get_semaphore().unwrap())),
+                        device_stream_submission: Some((u16::MAX, u16::MAX, u64::MAX)),
+                        instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
+                    }))
                 }
+                drop(lock);
                 waits.push(copy.clone());
-
-                let mut i = 0;
-                while i < needing_copy.len() && !needing_copy.is_empty() {
-                    let diff = needing_copy[i].subtract(&other_range);
-                    if diff.0.length == 0 {
-                        needing_copy.remove(i);
-                        continue;
-                    }
-                    needing_copy[i] = diff.0;
-                    i += 1;
-                    if let Some(o) = diff.1 {
-                        needing_copy.insert(i, o);
-                        i += 1;
-                    }
-                }
             }
         }
-        let extra_copy = if needing_copy.is_empty() {
-            None
-        } else {
-            let start = needing_copy.iter().min_by_key(|a| a.start).unwrap().start;
-            let end = needing_copy
-                .iter()
-                .max_by_key(|a| a.start + a.length)
-                .unwrap();
-            let end = end.start + end.length;
-            let range = BufferRange {
-                start,
-                length: end - start,
-            };
-            let sem_raw = instance.get_semaphore().unwrap();
-            let sem = Arc::new(Semaphore {
-                inner: Some(RwLock::new(sem_raw)),
-                device_stream_submission: Some((u16::MAX, u16::MAX, u64::MAX)),
-                instance: instance.self_weak.as_ref().unwrap().upgrade().unwrap(),
-            });
-            Some(BufferAccessFinish {
-                condvar: None,
-                is_complete: Mutex::new(false),
-                device_semaphore: Mutex::new(Some(sem)),
-                range,
-                id: u64::MAX,
-            })
-        };
         OutOfDateWait {
             semaphores: waits,
-            other_copy_range: extra_copy.map(Arc::new),
+            other_copy_range: None,
         }
     }
 
@@ -220,6 +191,18 @@ mod tests {
         assert_eq!(b, Some(r(6, 4)));
     }
 
+    #[test]
+    fn range_intersection() {
+        // Overlapping -> the shared middle.
+        assert_eq!(r(0, 10).intersection(&r(5, 10)), Some(r(5, 5)));
+        assert_eq!(r(5, 10).intersection(&r(0, 10)), Some(r(5, 5)));
+        // Fully contained -> the smaller.
+        assert_eq!(r(0, 100).intersection(&r(10, 20)), Some(r(10, 20)));
+        // Disjoint / adjacent -> None.
+        assert_eq!(r(0, 10).intersection(&r(10, 5)), None);
+        assert_eq!(r(0, 10).intersection(&r(20, 5)), None);
+    }
+
     #[cfg(feature = "vulkan")]
     mod tracker {
         use crate::buffer::{BufferRange, ood::OutOfDateTracker};
@@ -246,6 +229,60 @@ mod tests {
                 length: 100,
             });
             assert!(t.out_of_date_ranges.is_empty());
+        }
+
+        // Mirrors the `needing_copy` computation at the top of `get_needed_waits`
+        // (before the `current_copies` subtraction): the ranges that genuinely need
+        // a copy are `out_of_date_ranges ∩ range`. This is the crux of the B2 fix —
+        // once `ensure_*_current` marks a range current via `update_range_immediate`,
+        // that range is gone from `out_of_date_ranges`, so no placeholder is produced.
+        fn needing_copy(t: &T, range: BufferRange) -> Vec<BufferRange> {
+            t.out_of_date_ranges
+                .iter()
+                .filter_map(|ood| ood.intersection(&range))
+                .collect()
+        }
+
+        #[test]
+        fn current_range_needs_no_copy() {
+            let mut t = T::uninit(100);
+            let range = BufferRange {
+                start: 0,
+                length: 100,
+            };
+            // Fresh buffer: everything is out of date, so the whole range needs a copy.
+            assert_eq!(needing_copy(&t, range), vec![range]);
+            // After `ensure_*_current` marks it current, NO range needs a copy — hence
+            // no unsignalled placeholder semaphore is manufactured on the next access.
+            t.update_range_immediate(range);
+            assert!(needing_copy(&t, range).is_empty());
+        }
+
+        #[test]
+        fn partially_current_range_needs_partial_copy() {
+            let mut t = T::uninit(100);
+            // Mark the middle [40,60) current; the ends stay out of date.
+            t.update_range_immediate(BufferRange {
+                start: 40,
+                length: 20,
+            });
+            let asked = BufferRange {
+                start: 0,
+                length: 100,
+            };
+            assert_eq!(
+                needing_copy(&t, asked),
+                vec![
+                    BufferRange {
+                        start: 0,
+                        length: 40
+                    },
+                    BufferRange {
+                        start: 60,
+                        length: 40
+                    },
+                ]
+            );
         }
 
         #[test]

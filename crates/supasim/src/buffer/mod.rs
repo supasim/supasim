@@ -99,6 +99,20 @@ impl BufferRange {
         self.start < other.start + other.length && other.start < self.start + self.length
     }
 
+    /// Returns the overlapping portion of the two ranges, or `None` if they do
+    /// not overlap.
+    pub fn intersection(&self, other: &Self) -> Option<Self> {
+        if !self.intersects(other) {
+            return None;
+        }
+        let start = self.start.max(other.start);
+        let end = (self.start + self.length).min(other.start + other.length);
+        Some(Self {
+            start,
+            length: end - start,
+        })
+    }
+
     pub fn subtract(&self, other: &Self) -> (Self, Option<Self>) {
         let self_end = self.start + self.length;
         let other_end = other.start + other.length;
