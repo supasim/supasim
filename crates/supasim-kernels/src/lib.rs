@@ -17,7 +17,7 @@ unsafe extern "system" {}
 mod tests;
 
 use anyhow::{Result, anyhow};
-use rand::Rng;
+use rand::RngExt;
 use slang::Downcast;
 #[allow(unused_imports)]
 use std::ptr::null_mut;
