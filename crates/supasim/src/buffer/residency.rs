@@ -16,7 +16,7 @@ use crate::{
     },
     sync::Semaphore,
 };
-use hal::{Buffer, Device as _};
+use hal::{Buffer, CommandRecorder as _, Device as _, Semaphore as _, Stream as _};
 use memmap2::{MmapMut, MmapOptions};
 use parking_lot::{Condvar, Mutex, RwLock};
 use smallvec::SmallVec;
@@ -467,8 +467,144 @@ impl<B: hal::Backend> BufferResidency<B> {
     }
 }
 
+/// Records and submits a single `src -> dst` copy on device/stream 0, returning the
+/// semaphore the GPU will signal on completion together with the command recorder used.
+///
+/// The caller must wait on the returned semaphore before relying on the copy's result,
+/// and only then return both the semaphore and the recorder to their pools (the
+/// recorder is still queued on the GPU until the wait completes). Doing the wait
+/// separately lets the caller drop every residency lock before blocking, per Task 3's
+/// rule that no lock the sync thread (or other accesses) needs may be held across a
+/// blocking semaphore wait. The stream mutex is only held for the submit here, never
+/// across a wait.
+///
+/// # Safety
+/// * `src` and `dst` must be valid buffers on device 0 with at least `range` bytes.
+unsafe fn submit_copy_between_hal_buffers<B: hal::Backend>(
+    instance: &InstanceInner<B>,
+    src: &B::Buffer,
+    dst: &B::Buffer,
+    range: BufferRange,
+) -> SupaSimResult<B, (B::Semaphore, B::CommandRecorder)> {
+    let stream_wrapper = &instance.hal_devices[0].streams[0];
+
+    // Grab (or reset+reuse) a semaphore the GPU will signal when the copy finishes.
+    let mut semaphore = instance.get_semaphore()?;
+
+    let mut stream_guard = stream_wrapper.inner.lock();
+    let stream = stream_guard.as_mut().unwrap();
+
+    let mut recorder =
+        if let Some(mut r) = stream_wrapper.unused_hal_command_recorders.lock().pop() {
+            unsafe {
+                r.clear(stream).map_supasim()?;
+            }
+            r
+        } else {
+            unsafe { stream.create_recorder().map_supasim()? }
+        };
+
+    unsafe {
+        recorder
+            .record_commands(
+                stream,
+                &[hal::BufferCommand::CopyBuffer {
+                    src_buffer: src,
+                    dst_buffer: dst,
+                    src_offset: range.start,
+                    dst_offset: range.start,
+                    len: range.length,
+                }],
+            )
+            .map_supasim()?;
+    }
+
+    // Bump the timeline target so a pooled/reused semaphore doesn't observe a stale
+    // prior signal as "already complete".
+    unsafe {
+        semaphore
+            .reset(instance.hal_instance.read().as_ref().unwrap())
+            .map_supasim()?;
+    }
+
+    unsafe {
+        stream
+            .submit_recorders(std::slice::from_mut(&mut hal::RecorderSubmitInfo {
+                command_recorder: &mut recorder,
+                wait_semaphores: &[],
+                signal_semaphore: Some(&semaphore),
+            }))
+            .map_supasim()?;
+    }
+
+    Ok((semaphore, recorder))
+}
+
 pub struct BufferResidencyRef<B: hal::Backend>(pub RwLock<BufferResidency<B>>);
 impl<B: hal::Backend> BufferResidencyRef<B> {
+    /// Ensures the host copy of `range` is current, copying device[0] -> host if the
+    /// host is stale and device[0] holds the up-to-date data for `range`.
+    ///
+    /// Locking: this method owns lock acquisition. It records+submits the copy under a
+    /// short residency read lock, drops **all** residency locks before the blocking
+    /// GPU wait (Task 3's rule), then re-acquires a brief write lock only to mark the
+    /// host tracker current. It must be called with no residency lock held.
+    pub fn ensure_host_current(&self, range: BufferRange, instance: &InstanceInner<B>) {
+        if range.length == 0 {
+            return;
+        }
+        // Make sure both host and device[0] HAL buffers exist.
+        {
+            let mut s = self.0.write();
+            s.setup_buffer(None, instance); // host
+            s.setup_buffer(Some(0), instance); // device[0]
+        }
+
+        // Decide whether a copy is needed and, if so, record+submit it, all under a
+        // read lock that is dropped before the blocking wait below.
+        let (semaphore, recorder) = {
+            let s = self.0.read();
+            let host_stale = s
+                .host
+                .ood_tracker
+                .out_of_date_ranges
+                .iter()
+                .any(|r| r.intersects(&range));
+            let device_current = !s.devices[0]
+                .ood_tracker
+                .out_of_date_ranges
+                .iter()
+                .any(|r| r.intersects(&range));
+            if !(host_stale && device_current) {
+                return;
+            }
+            let src = s.devices[0].buffer.as_ref().unwrap();
+            let dst = s.host.buffer.as_ref().unwrap();
+            unsafe { submit_copy_between_hal_buffers::<B>(instance, src, dst, range).unwrap() }
+            // `s` (residency read lock) drops here, before we block.
+        };
+
+        // Block on the GPU copy with NO residency lock held.
+        unsafe {
+            semaphore
+                .wait(instance.hal_instance.read().as_ref().unwrap())
+                .unwrap();
+        }
+        // The GPU is now done: it's safe to return both to their pools for reuse.
+        instance.unused_semaphores.lock().push(semaphore);
+        instance.hal_devices[0].streams[0]
+            .unused_hal_command_recorders
+            .lock()
+            .push(recorder);
+
+        // Mark the host copy current for `range`.
+        self.0
+            .write()
+            .host
+            .ood_tracker
+            .update_range_immediate(range);
+    }
+
     pub fn wait_for_cpu_access(
         &self,
         range: BufferRange,
@@ -511,11 +647,13 @@ impl<B: hal::Backend> BufferResidencyRef<B> {
             }
         }
         drop(s);
-        let mut s = self.0.write();
         if any_waits {
-            s.update_all_accesses().unwrap();
+            self.0.write().update_all_accesses().unwrap();
         }
-        let _needed_waits = s.host.ood_tracker.get_needed_waits(range, instance);
+        // Pull current data from device[0] into the host copy so the CPU read/write
+        // below sees up-to-date bytes. `ensure_host_current` owns its own locking and
+        // must be called with no residency lock held (it blocks on the GPU copy).
+        self.ensure_host_current(range, instance);
     }
 
     pub fn _switch_to_storage(&self, instance: &InstanceInner<B>) {

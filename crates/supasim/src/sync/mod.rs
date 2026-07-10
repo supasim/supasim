@@ -111,7 +111,18 @@ pub fn submit_command_recorders<B: hal::Backend>(
     let submission_idx;
     let semaphore;
     {
-        let semaphore_raw = s.get_semaphore()?;
+        let mut semaphore_raw = s.get_semaphore()?;
+        // Reset the (possibly pooled) timeline semaphore so its CPU-side wait/signal
+        // target advances past any value it already reached in a previous life. A
+        // semaphore returned to the pool by a completed submission (e.g. the
+        // device<->host copies in `BufferResidency`) still has its GPU counter at the
+        // last signalled value; reusing it without `reset` would make the next
+        // submission's signal a no-op and its wait return immediately or hang.
+        unsafe {
+            semaphore_raw
+                .reset(s.hal_instance.read().as_ref().unwrap())
+                .map_supasim()?;
+        }
         let mut recorder_locks = Vec::new();
         for r in recorders.iter() {
             r.check_destroyed()?;
