@@ -832,11 +832,21 @@ pub struct VulkanSemaphore {
 impl Semaphore<Vulkan> for VulkanSemaphore {
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn wait(&self, device: &VulkanInstance) -> Result<(), <Vulkan as Backend>::Error> {
+        // Snapshot the target value and DROP the `current_value` guard before the
+        // (potentially unbounded) blocking wait below. Writing the lock inline in the
+        // `.values(&[*self.current_value.lock().unwrap() + 1])` argument would keep the
+        // `MutexGuard` temporary alive until the end of the whole `supa_wait_semaphores`
+        // statement — i.e. held across the blocking wait. The thread that must signal
+        // this same semaphore (`Stream::submit_recorders`, `signal`) also needs to lock
+        // `current_value`, so holding it across the wait deadlocks: the waiter blocks
+        // until the signal, the signaller blocks on the lock the waiter holds. This is
+        // the root cause of the intermittent `add_numbers_vulkan` sync hang.
+        let target = *self.current_value.lock().unwrap() + 1;
         unsafe {
             device.shared.functions.supa_wait_semaphores(
                 &vk::SemaphoreWaitInfo::default()
                     .semaphores(std::slice::from_ref(&self.inner))
-                    .values(&[*self.current_value.lock().unwrap() + 1]),
+                    .values(&[target]),
                 u64::MAX,
             )?;
         }
