@@ -648,7 +648,11 @@ impl GlobalState {
                 &[],
                 &[],
             )?;
-            let dxil = hassle_rs::validate_dxil(&dxil)?;
+            // Modern DXC validates and signs DXIL internally during compilation, so
+            // the standalone `dxil.dll` validator (`hassle_rs::validate_dxil`) is no
+            // longer needed. Running it additionally fails when the bundled dxcompiler
+            // is newer than the validator ("Validator version in metadata (x) is not
+            // supported; maximum (y)"), so we no longer call it.
             _other_blob = dxil;
             data = &_other_blob;
         }
