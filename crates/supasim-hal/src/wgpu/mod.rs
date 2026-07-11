@@ -74,7 +74,7 @@ impl Wgpu {
         backends: wgpu::Backends,
         preset_unified_memory: Option<bool>,
     ) -> Result<InstanceDescriptor<Wgpu>, WgpuError> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             flags: if advanced_dbg {
                 wgpu::InstanceFlags::advanced_debugging()
             } else {
@@ -88,12 +88,14 @@ impl Wgpu {
                 },
                 ..Default::default()
             },
-            ..Default::default()
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            display: None,
         });
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
             compatible_surface: None,
+            apply_limit_buckets: false,
         }))
         .map_err(WgpuError::NoSuitableAdapters)?;
 
@@ -411,7 +413,7 @@ impl BackendInstance<Wgpu> for WgpuInstance {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[&bgl],
+                bind_group_layouts: &[Some(&bgl)],
                 immediate_size: 0,
             });
         let pipeline = self
@@ -487,7 +489,7 @@ impl MappedView {
             // `BufferView::as_ptr` yields a `*const u8`; the caller of a read mapping only
             // reads through the pointer, so casting away const is sound here.
             MappedView::Read(view) => view.as_ptr() as *mut u8,
-            MappedView::Write(view) => view.as_mut_ptr(),
+            MappedView::Write(view) => view.slice(..).as_raw_ptr().as_ptr() as *mut u8,
         }
     }
 
@@ -600,9 +602,17 @@ impl Buffer<Wgpu> for WgpuBuffer {
                     .poll(wgpu::PollType::wait_indefinitely())
                     .unwrap();
                 let view = if mutable {
-                    MappedView::Write(slice.get_mapped_range_mut())
+                    MappedView::Write(
+                        slice
+                            .get_mapped_range_mut()
+                            .expect("wgpu: get_mapped_range_mut failed (overlapping views?)"),
+                    )
                 } else {
-                    MappedView::Read(slice.get_mapped_range())
+                    MappedView::Read(
+                        slice
+                            .get_mapped_range()
+                            .expect("wgpu: get_mapped_range failed (overlapping views?)"),
+                    )
                 };
                 self.view = Some(view);
                 self.view.as_mut().unwrap().as_mut_ptr()
