@@ -218,7 +218,7 @@ Concrete spots that look wrong or unfinished. Verify before relying on them.
   trait) may not compile if Metal/wgpu types are `!Send`, so it needs deliberate design.
 - **Vulkan timeline-semaphore value protocol is racy** ([vulkan/mod.rs](crates/supasim-hal/src/vulkan/mod.rs)):
   each op re-reads `current+1` without holding the value mutex across submit/reset/wait, and
-  assumes single-use per value — can hang or mis-sync under concurrency. This is issue #164 and is
+  assumes single-use per value — can hang or miss-sync under concurrency. This is issue #164 and is
   tied to the still-undecided threading model (#143), so not patched piecemeal.
 - **`import_buffer` / `import_semaphore` are `todo!()`** (frontend) / `unreachable!()` (HAL).
   External memory (issue #57) unimplemented; `supports_buffer_import` is reported `false`.
