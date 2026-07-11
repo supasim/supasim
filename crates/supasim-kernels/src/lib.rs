@@ -122,7 +122,7 @@ impl GlobalState {
     }
     #[cfg(feature = "opt-valid")]
     fn optimize_spv(module: &[u32], s: SpirvVersion) -> Result<Vec<u8>> {
-        use std::{ffi::c_void, ptr::null_mut};
+        use std::ptr::null_mut;
 
         unsafe {
             let env = Self::env_from_version(s);
@@ -142,15 +142,15 @@ impl GlobalState {
             if res < 0 {
                 return Err(anyhow!("Error in optimization"));
             }
+            // Copy the optimized SPIR-V into a Rust-owned buffer. The binary was
+            // allocated by SPIRV-Tools' own (C++) allocator, so it must be released with
+            // its matching deallocator (`spvBinaryDestroy`) — adopting `code` into a Rust
+            // `Vec` and dropping it through the global allocator was undefined behavior.
             let v = {
-                let optimized = &mut *optimized;
-                Vec::from_raw_parts(
-                    optimized.code as *mut u8,
-                    optimized.wordCount * 4,
-                    optimized.wordCount * 4,
-                )
+                let bin = &*optimized;
+                std::slice::from_raw_parts(bin.code as *const u8, bin.wordCount * 4).to_vec()
             };
-            libc::free(optimized as *mut c_void);
+            spirv_tools_sys::spvBinaryDestroy(optimized);
             spirv_tools_sys::spvOptimizerDestroy(optim);
             spirv_tools_sys::spvOptimizerOptionsDestroy(options);
             Ok(v)

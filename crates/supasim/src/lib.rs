@@ -82,6 +82,9 @@ pub enum SupaSimError<B: hal::Backend> {
     Other(anyhow::Error),
     AlreadyDestroyed(String),
     BufferRegionNotValid,
+    /// Two accesses in a single batch (`access_buffers` / one dispatch) overlap the same
+    /// buffer with at least one being mutable — that would alias `&mut` / tear reads.
+    AliasingBufferAccess,
     ValidateIndirectUnsupported,
     UserClosure(anyhow::Error),
     KernelCompileError(#[from] kernels::KernelCompileError),
@@ -410,19 +413,23 @@ impl<B: hal::Backend> InstanceInner<B> {
     fn destroy(&mut self) {
         // Tell all streams to shutdown
         for stream in self.hal_devices.iter().flat_map(|a| &a.streams) {
-            // This will only not occur if this an error occurs during creation
-            if let Some(sync_handle) = stream.stream_handle.as_ref() {
-                sync_handle
+            // This will only not occur if this an error occurs during creation.
+            // Runs in `Drop`, so log rather than unwrap — panicking here can abort.
+            if let Some(sync_handle) = stream.stream_handle.as_ref()
+                && let Err(e) = sync_handle
                     .write()
                     .sender
                     .send(StreamThreadMessage::ShutDown)
-                    .unwrap()
+            {
+                log::error!("failed to signal stream thread to shut down: {e:?}");
             }
         }
         // Wait for all streams to shutdown
         for stream in self.hal_devices.iter_mut().flat_map(|a| &mut a.streams) {
-            if let Some(handle) = stream.stream_handle.take() {
-                handle.into_inner().thread.join().unwrap();
+            if let Some(handle) = stream.stream_handle.take()
+                && let Err(e) = handle.into_inner().thread.join()
+            {
+                log::error!("stream thread panicked during shutdown: {e:?}");
             }
         }
         for (_, cr) in std::mem::take(&mut *self.command_recorders.write()) {
@@ -457,25 +464,42 @@ impl<B: hal::Backend> InstanceInner<B> {
         }
         for thing in std::mem::take(&mut *self.unused_semaphores.lock()) {
             unsafe {
-                thing
-                    .destroy(self.hal_instance.read().as_ref().unwrap())
-                    .unwrap();
+                if let Err(e) = thing.destroy(self.hal_instance.read().as_ref().unwrap()) {
+                    log::error!("failed to destroy pooled semaphore: {e:?}");
+                }
             }
         }
+        // Runs in `Drop`: log HAL destroy errors instead of unwrapping (a panic while
+        // unwinding aborts the process).
         unsafe {
-            let mut instance = self.hal_instance.get_mut().take().unwrap();
-            for mut device in std::mem::take(&mut self.hal_devices) {
-                let mut dev = device.inner.get_mut().take().unwrap();
-                for mut stream in device.streams {
-                    let st = stream.inner.get_mut().take().unwrap();
-                    for cr in std::mem::take(&mut *stream.unused_hal_command_recorders.lock()) {
-                        cr.destroy(&st).unwrap();
+            if let Some(mut instance) = self.hal_instance.get_mut().take() {
+                for mut device in std::mem::take(&mut self.hal_devices) {
+                    if let Some(mut dev) = device.inner.get_mut().take() {
+                        for mut stream in device.streams {
+                            if let Some(st) = stream.inner.get_mut().take() {
+                                for cr in
+                                    std::mem::take(&mut *stream.unused_hal_command_recorders.lock())
+                                {
+                                    if let Err(e) = cr.destroy(&st) {
+                                        log::error!(
+                                            "failed to destroy cached command recorder: {e:?}"
+                                        );
+                                    }
+                                }
+                                if let Err(e) = st.destroy(&mut dev) {
+                                    log::error!("failed to destroy stream: {e:?}");
+                                }
+                            }
+                        }
+                        if let Err(e) = dev.destroy(&mut instance) {
+                            log::error!("failed to destroy device: {e:?}");
+                        }
                     }
-                    st.destroy(&mut dev).unwrap();
                 }
-                dev.destroy(&mut instance).unwrap();
+                if let Err(e) = instance.destroy() {
+                    log::error!("failed to destroy instance: {e:?}");
+                }
             }
-            instance.destroy().unwrap();
         }
     }
 }
@@ -504,10 +528,12 @@ impl<B: hal::Backend> KernelInner<B> {
         instance.kernels.write().remove(self.id).unwrap();
         if let Some(inner) = std::mem::take(&mut self.inner) {
             unsafe {
-                MapSupasimError::<(), B>::map_supasim(
+                // Reachable from `Drop`: log HAL errors instead of unwrapping.
+                if let Err(e) = MapSupasimError::<(), B>::map_supasim(
                     inner.destroy(instance.hal_instance.read().as_ref().unwrap()),
-                )
-                .unwrap();
+                ) {
+                    log::error!("failed to destroy kernel: {e:?}");
+                }
             }
         }
     }
@@ -702,6 +728,17 @@ impl<B: hal::Backend> CommandRecorder<B> {
         }
         for b in buffers {
             b.validate()?;
+        }
+        // Reject the same buffer bound twice with overlapping mutable ranges within one
+        // dispatch — an undefined GPU aliasing hazard.
+        for i in 0..buffers.len() {
+            for j in (i + 1)..buffers.len() {
+                if buffers[i].buffer.inner()?.id == buffers[j].buffer.inner()?.id
+                    && buffers[i].access.overlaps(&buffers[j].access)
+                {
+                    return Err(SupaSimError::AliasingBufferAccess);
+                }
+            }
         }
         let mut s = self.inner_mut()?;
         s.commands.push(BufferCommand {

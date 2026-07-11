@@ -213,6 +213,16 @@ impl VulkanCommandRecorder {
         }
 
         if pre_flags.is_empty() || post_flags.is_empty() {
+            // A memory barrier with no accompanying pipeline-stage scope is undefined per
+            // the `BufferCommand::MemoryBarrier` contract. Emitting nothing here silently
+            // loses synchronization, so surface it rather than dropping real barriers quietly.
+            if !barriers.is_empty() {
+                log::error!(
+                    "dropping {} buffer memory barrier(s) with no pipeline-stage scope; \
+                     synchronization is undefined (missing PipelineBarrier)",
+                    barriers.len()
+                );
+            }
             return Ok(());
         }
         for barrier in &mut barriers {

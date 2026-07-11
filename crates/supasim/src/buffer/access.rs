@@ -42,9 +42,21 @@ impl<B: hal::Backend> Instance<B> {
         let mut residency_locks = HashMap::new();
         let mut first_id = HashMap::new();
         let mut accesses = Vec::with_capacity(buffers.len());
+        let mut ids = Vec::with_capacity(buffers.len());
         for buffer in buffers {
             let b_inner = buffer.buffer.inner()?;
+            ids.push(b_inner.id);
             buffer_locks.entry(b_inner.id).or_insert(b_inner);
+        }
+        // Reject aliasing within a single batch: co-registered accesses don't wait on each
+        // other, so two overlapping slices of the same buffer where at least one is mutable
+        // would hand out aliasing `&mut` / torn reads with no diagnostic.
+        for i in 0..buffers.len() {
+            for j in (i + 1)..buffers.len() {
+                if ids[i] == ids[j] && buffers[i].access.overlaps(&buffers[j].access) {
+                    return Err(SupaSimError::AliasingBufferAccess);
+                }
+            }
         }
         for (id, lock) in &mut buffer_locks {
             residency_locks.insert(id, lock.residency.0.write());

@@ -281,7 +281,11 @@ impl<B: hal::Backend> BufferInner<B> {
     pub(crate) fn destroy(&mut self, instance: &InstanceInner<B>) {
         instance.buffers.write().remove(self.id);
         unsafe {
-            self.residency.0.write().destroy(instance).unwrap();
+            // Reachable from `Drop`: log HAL errors instead of unwrapping (a panic while
+            // unwinding aborts the process).
+            if let Err(e) = self.residency.0.write().destroy(instance) {
+                log::error!("failed to destroy buffer residency: {e:?}");
+            }
         }
         self.is_alive = false;
     }

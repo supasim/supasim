@@ -207,7 +207,15 @@ impl Device<Vulkan> for VulkanDevice {
             };
             let (buffer, mut allocation) = self.alloc.create_buffer(&buffer_info, &alloc_info)?;
             let mapped_ptr = if mapped {
-                Some(self.alloc.map_memory(&mut allocation)?)
+                // If mapping fails, the buffer + allocation we just created would leak;
+                // tear them down before propagating the error.
+                match self.alloc.map_memory(&mut allocation) {
+                    Ok(ptr) => Some(ptr),
+                    Err(e) => {
+                        self.alloc.destroy_buffer(buffer, &mut allocation);
+                        return Err(e.into());
+                    }
+                }
             } else {
                 None
             };
@@ -408,11 +416,15 @@ impl Stream<Vulkan> for VulkanStream {
             let alloc_info = vk::DescriptorSetAllocateInfo::default()
                 .descriptor_pool(pool)
                 .set_layouts(std::slice::from_ref(&kernel.descriptor_set_layout));
-            let descriptor_set = self
-                .shared
-                .functions
-                .allocate_descriptor_sets(&alloc_info)?[0];
-            defer! {}
+            let descriptor_set = match self.shared.functions.allocate_descriptor_sets(&alloc_info) {
+                Ok(sets) => sets[0],
+                Err(e) => {
+                    // We already bumped `current_size` for this pool above; undo it so a
+                    // failed allocation doesn't permanently consume a slot.
+                    kernel.descriptor_pools.lock().unwrap()[pool_idx].current_size -= 1;
+                    return Err(e.into());
+                }
+            };
             let mut bg = VulkanBindGroup {
                 inner: descriptor_set,
                 pool_idx: pool_idx as u32,
@@ -598,6 +610,11 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                 &vk::PipelineLayoutCreateInfo::default().set_layouts(&[descriptor_set_layout]),
                 None,
             )?;
+            defer! {
+                if err.get() {
+                    self.shared.functions.destroy_pipeline_layout(pipeline_layout, None);
+                }
+            }
             let entry = c"main";
             let pipeline_create_info = vk::ComputePipelineCreateInfo::default()
                 .stage(

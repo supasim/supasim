@@ -2100,7 +2100,6 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "hassle-rs",
- "libc",
  "naga",
  "rand",
  "serde_json",

@@ -302,19 +302,19 @@ impl Vulkan {
             // features makes `vkCreateDevice` fail with `VK_ERROR_FEATURE_NOT_PRESENT` on
             // ICDs that lack them (e.g. lavapipe, some mobile/software drivers). Query the
             // selected device and only enable what it actually supports.
-            let (has_buffer_int64_atomics, has_shared_int64_atomics) =
-                if instance_api_version >= vk::API_VERSION_1_1 {
-                    let mut queried = vk::PhysicalDeviceShaderAtomicInt64Features::default();
-                    let mut features2 =
-                        vk::PhysicalDeviceFeatures2::default().push_next(&mut queried);
-                    instance.get_physical_device_features2(phyd, &mut features2);
-                    (
-                        queried.shader_buffer_int64_atomics != 0,
-                        queried.shader_shared_int64_atomics != 0,
-                    )
-                } else {
-                    (false, false)
-                };
+            let (has_buffer_int64_atomics, has_shared_int64_atomics) = if instance_api_version
+                >= vk::API_VERSION_1_1
+            {
+                let mut queried = vk::PhysicalDeviceShaderAtomicInt64Features::default();
+                let mut features2 = vk::PhysicalDeviceFeatures2::default().push_next(&mut queried);
+                instance.get_physical_device_features2(phyd, &mut features2);
+                (
+                    queried.shader_buffer_int64_atomics != 0,
+                    queried.shader_shared_int64_atomics != 0,
+                )
+            } else {
+                (false, false)
+            };
             let mut timeline_semaphore =
                 vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
             let mut sync2 =

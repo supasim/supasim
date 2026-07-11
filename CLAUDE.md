@@ -1,7 +1,9 @@
 # CLAUDE.md — SupaSim architecture guide
 
-Guidance for AI agents working in this repo. Written 2026-07 while re-orienting on the
-`residency-overhaul` branch (PR #93). Keep this file updated when architecture changes.
+Guidance for AI agents working in this repo. Written 2026-07; the residency overhaul (PR #93) has
+since **merged to `main`**, and `create_sync_thread` is now implemented. See "Known rough edges"
+for what a post-audit pass fixed vs. what's still open. Keep this file updated when architecture
+changes.
 
 ## What SupaSim is
 
@@ -140,15 +142,17 @@ Pipeline:
 4. `sync::submit_command_recorders` ([sync/mod.rs](crates/supasim/src/sync/mod.rs)) allocates a
    pooled `Semaphore`, submits to the stream thread, returns a `WaitHandle`.
 
-### Threading (issue #143 — undecided/incomplete)
+### Threading (issue #143 — model still undecided)
 
 Design is **one background thread per (device, stream)**. `StreamThreadHandle` / `GpuSubmissionInfo`
-live in [sync/stream_thread.rs](crates/supasim/src/sync/stream_thread.rs) but
-**`create_sync_thread` is a bare `todo!()`** — the thread that actually drains submissions,
-signals completion, and frees resources is not implemented on this branch. The old monolithic
-`sync.rs` (1265 lines, deleted; see `git show main:crates/supasim/src/sync.rs`) had a full
-batching loop; it was torn down and not yet rebuilt. Device/stream indices are hardcoded to
-`(0, 0)` for now.
+live in [sync/stream_thread.rs](crates/supasim/src/sync/stream_thread.rs). `create_sync_thread`
+**is now implemented** (the guide previously said `todo!()` — that's stale): the thread drains
+submissions, signals completion via a monotonic counter, and frees resources. The weak-instance
+design avoids a thread↔instance ref-cycle, and `CompletionGuard` advances the completion counter
+on any exit (including panic). Teardown is `Instance::destroy → ShutDown → join`. Device/stream
+indices are still hardcoded to `(0, 0)`, and the broader multi-thread protocol (how values/waits
+compose across streams) is unsettled — see #143/#164. The old monolithic `sync.rs` (1265 lines,
+deleted; see `git show main:crates/supasim/src/sync.rs`) is the historical reference.
 
 ## Kernels (`crates/supasim-kernels/`)
 
@@ -176,29 +180,58 @@ A full rewrite is planned (issue #145).
 
 Concrete spots that look wrong or unfinished. Verify before relying on them.
 
-- **`residency.rs` read/write access lists look inverted.** In `add_gpu_use`
-  ([residency.rs:318](crates/supasim/src/buffer/residency.rs#L318)) and `get_cpu_access`
-  ([residency.rs:403](crates/supasim/src/buffer/residency.rs#L403)):
-  `if is_mut { read_accesses.insert(...) } else { write_accesses.push_back(...) }` — a *mutating*
-  access goes into `read_accesses`, a *read* into `write_accesses`. Either the field names are
-  swapped, or new reads (which only wait on `write_accesses`) won't wait on prior writes → a
-  RAW hazard. Reconcile the naming with the wait-building logic below it.
-- **`create_sync_thread` is `todo!()`** ([stream_thread.rs:66](crates/supasim/src/sync/stream_thread.rs#L66)) —
-  submissions can be queued but nothing drains/completes them. Top of the PR TODO list.
-- **`import_buffer` / `import_semaphore` are `todo!()`** ([lib.rs:380](crates/supasim/src/lib.rs#L380),
-  [lib.rs:389](crates/supasim/src/lib.rs#L389)). External memory (issue #57) unimplemented.
-- **wgpu residency gaps** — can't map a buffer while it's in a GPU command
-  ([residency.rs:388](crates/supasim/src/buffer/residency.rs#L388)); combined upload+download
+**Recently fixed (2026-07, post-audit — noted so the old warnings aren't re-applied):**
+
+- The `residency.rs` read/write access lists are **no longer inverted**: `add_gpu_use` /
+  `get_cpu_access` now correctly do `if is_mut { write_accesses.push_back } else {
+  read_accesses.insert }`, and the hazard scan is right (writers wait on readers+writers, reads
+  wait on writers). Prior guide warnings about a RAW hazard here are obsolete.
+- `to_static_lifetime` / `to_static_lifetime_mut` have been **removed**; `supasim-types` has no
+  `unsafe` at all now.
+- `BufferAccess::intersection` used to compute the *union* (over-broad sync ranges) — fixed to the
+  real overlap.
+- `contents_align == 0` (the old default) no longer panics (`x % 0`); default is 1 and both
+  validators treat 0 as "no requirement".
+- Vulkan `atomic_int64` was hardcoded `true` and int64 atomics were requested unconditionally →
+  `vkCreateDevice` failed `FEATURE_NOT_PRESENT` on ICDs lacking them (blocked all Vulkan on such
+  machines). Now queried per-device and only requested/reported when supported.
+- `supasim-kernels::optimize_spv` freed a SPIRV-Tools (C++) allocation through Rust's global
+  allocator (UB); now copies into a Rust `Vec` and frees via `spvBinaryDestroy`.
+- Instance/object teardown (`InstanceInner::destroy`, `Kernel`/`Buffer` `destroy`) now **logs**
+  HAL errors instead of `unwrap()`ing in `Drop` (a panic while unwinding aborts).
+- `access_buffers` and `dispatch_kernel` now reject **intra-batch aliasing** (same buffer,
+  overlapping range, ≥1 mutable) with `SupaSimError::AliasingBufferAccess`.
+- `WaitHandle` is now registered in the instance arena like every other object (was
+  `Index::DANGLING`).
+
+**Still open:**
+
+- **OOD copy scheduling relies on an unenforced invariant.** `ood::get_needed_waits` returns
+  `other_copy_range: None` and reads mark the device current unconditionally
+  ([residency.rs](crates/supasim/src/buffer/residency.rs)); correctness depends on
+  `ensure_device_current` running before *every* read's `add_gpu_use`. The one caller
+  (`submit_command_recorders`) honors it, but nothing asserts it — a new call site that skips it
+  gets silent stale GPU data. Whole `ood.rs` is still self-flagged "TODO: optimize and validate".
+- **Unbounded `unsafe impl Send + Sync`** for all handle types ([api_type.rs](crates/supasim/src/api_type.rs))
+  with no bounds on `B`'s associated types — real UB if any backend handle is thread-affine
+  (issue #16/#164). Left as-is: the sound fix (bound the assoc types, likely on the `Backend`
+  trait) may not compile if Metal/wgpu types are `!Send`, so it needs deliberate design.
+- **Vulkan timeline-semaphore value protocol is racy** ([vulkan/mod.rs](crates/supasim-hal/src/vulkan/mod.rs)):
+  each op re-reads `current+1` without holding the value mutex across submit/reset/wait, and
+  assumes single-use per value — can hang or mis-sync under concurrency. This is issue #164 and is
+  tied to the still-undecided threading model (#143), so not patched piecemeal.
+- **`import_buffer` / `import_semaphore` are `todo!()`** (frontend) / `unreachable!()` (HAL).
+  External memory (issue #57) unimplemented; `supports_buffer_import` is reported `false`.
+- **wgpu residency gaps** — can't map a buffer while it's in a GPU command; combined upload+download
   buffers unsupported ([residency.rs:7](crates/supasim/src/buffer/residency.rs#L7)); wgpu
-  `MemoryTransfer` is `todo!()`.
-- **`"Yes its UB"` comments are misleading** ([lib.rs:257](crates/supasim/src/lib.rs#L257) etc.).
+  `MemoryTransfer` is a returned error; push constants ignored on wgpu **and Metal** (Vulkan only).
+- **`"Yes its UB"` comments are misleading** ([lib.rs](crates/supasim/src/lib.rs)).
   Constructing an object with `id: Index::DANGLING` then overwriting it is *fine* —
   `thunderdome::Index` is POD (two `u32`s, no destructor). Not actual UB.
-- **`to_static_lifetime` / `to_static_lifetime_mut`** ([types/lib.rs:183](crates/supasim-types/src/lib.rs#L183))
-  are genuinely unsound lifetime-laundering helpers ("This is undefined behavior lol"). Every
-  call site is a soundness hazard; part of the "make supasim safe" work (issue #16).
-- **`do_busywork` and `clear_cached_resources`** ([lib.rs:342](crates/supasim/src/lib.rs#L342))
-  are NOOP / partial stubs.
+- **`do_busywork` and `clear_cached_resources`** are NOOP / partial stubs.
+- **`SpirvVersion::Cl*` can `unimplemented!()`-panic** (publicly constructible) and the CL/PTX
+  mappings are admitted guesses — part of the kernel rewrite (#145); only reachable via the
+  unbuilt OpenCL/CUDA target path.
 - **`docs/for-devs.md` "Sync & resource tracking overview" is explicitly outdated** — it
   describes the pre-overhaul design. Don't trust it for current behavior.
 

@@ -346,11 +346,15 @@ pub fn submit_command_recorders<B: hal::Backend>(
     for recorder in recorders {
         recorder.inner_mut()?.destroy(&s);
     }
-    Ok(WaitHandle::from_inner(WaitHandleInner {
+    let handle = WaitHandle::from_inner(WaitHandleInner {
         _phantom: Default::default(),
         instance: instance.clone(),
         id: Index::DANGLING,
         is_alive: true,
         semaphore: semaphore.clone(),
-    }))
+    });
+    // Register in the instance arena like every other object, so it's enumerable for
+    // teardown and removes itself cleanly on drop (previously left as `Index::DANGLING`).
+    handle.inner_mut()?.id = s.wait_handles.write().insert(handle.downgrade());
+    Ok(handle)
 }
