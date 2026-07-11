@@ -197,11 +197,18 @@ impl Device<Vulkan> for VulkanDevice {
             );
             let alloc_info = vk_mem::AllocationCreateInfo {
                 usage: vk_mem::MemoryUsage::Auto,
-                flags: if mapped {
-                    AllocationCreateFlags::MAPPED
-                        | AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-                } else {
-                    AllocationCreateFlags::empty()
+                flags: match desc.memory_type {
+                    // Upload: CPU writes sequentially → write-combining is fine.
+                    HalBufferType::Upload => {
+                        AllocationCreateFlags::MAPPED
+                            | AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                    }
+                    // Download / UploadDownload: CPU reads back → must prefer HOST_CACHED
+                    // memory so reads don't go through write-combining (catastrophically slow).
+                    HalBufferType::Download | HalBufferType::UploadDownload => {
+                        AllocationCreateFlags::MAPPED | AllocationCreateFlags::HOST_ACCESS_RANDOM
+                    }
+                    HalBufferType::Storage => AllocationCreateFlags::empty(),
                 },
                 ..Default::default()
             };
@@ -238,18 +245,7 @@ impl Device<Vulkan> for VulkanDevice {
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_semaphore(&self) -> std::result::Result<VulkanSemaphore, VulkanError> {
-        unsafe {
-            let mut next = vk::SemaphoreTypeCreateInfo::default()
-                .initial_value(0)
-                .semaphore_type(vk::SemaphoreType::TIMELINE);
-            let create_info = vk::SemaphoreCreateInfo::default()
-                .flags(vk::SemaphoreCreateFlags::empty())
-                .push_next(&mut next);
-            Ok(VulkanSemaphore {
-                inner: self.shared.functions.create_semaphore(&create_info, None)?,
-                current_value: Mutex::new(0),
-            })
-        }
+        unsafe { self.shared.create_timeline_semaphore() }
     }
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
@@ -606,8 +602,21 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     self.shared.functions.destroy_descriptor_set_layout(descriptor_set_layout, None);
                 }
             }
+            let push_constant_ranges: Vec<vk::PushConstantRange> =
+                if desc.reflection.push_constants_size > 0 {
+                    vec![
+                        vk::PushConstantRange::default()
+                            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                            .offset(0)
+                            .size(desc.reflection.push_constants_size as u32),
+                    ]
+                } else {
+                    vec![]
+                };
             let pipeline_layout = self.shared.functions.create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::default().set_layouts(&[descriptor_set_layout]),
+                &vk::PipelineLayoutCreateInfo::default()
+                    .set_layouts(&[descriptor_set_layout])
+                    .push_constant_ranges(&push_constant_ranges),
                 None,
             )?;
             defer! {
@@ -642,18 +651,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_semaphore(&self) -> std::result::Result<VulkanSemaphore, VulkanError> {
-        unsafe {
-            let mut next = vk::SemaphoreTypeCreateInfo::default()
-                .initial_value(0)
-                .semaphore_type(vk::SemaphoreType::TIMELINE);
-            let create_info = vk::SemaphoreCreateInfo::default()
-                .flags(vk::SemaphoreCreateFlags::empty())
-                .push_next(&mut next);
-            Ok(VulkanSemaphore {
-                inner: self.shared.functions.create_semaphore(&create_info, None)?,
-                current_value: Mutex::new(0),
-            })
-        }
+        unsafe { self.shared.create_timeline_semaphore() }
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
@@ -917,6 +915,23 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
 pub struct SharedDeviceInfo {
     functions: DeviceFunctions,
     queue_family_indices: Vec<u32>,
+}
+
+impl SharedDeviceInfo {
+    unsafe fn create_timeline_semaphore(&self) -> Result<VulkanSemaphore, VulkanError> {
+        unsafe {
+            let mut next = vk::SemaphoreTypeCreateInfo::default()
+                .initial_value(0)
+                .semaphore_type(vk::SemaphoreType::TIMELINE);
+            let create_info = vk::SemaphoreCreateInfo::default()
+                .flags(vk::SemaphoreCreateFlags::empty())
+                .push_next(&mut next);
+            Ok(VulkanSemaphore {
+                inner: self.functions.create_semaphore(&create_info, None)?,
+                current_value: Mutex::new(0),
+            })
+        }
+    }
 }
 
 pub struct DeviceFunctions {

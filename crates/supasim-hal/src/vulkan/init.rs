@@ -173,18 +173,20 @@ impl Vulkan {
                         debug_utils_loader.destroy_debug_utils_messenger(debug_callback, None);
                     }
             }
-            let ext = [
+            // Required extensions (device is rejected if missing and not yet promoted to core).
+            // khr::shader_atomic_int64 is intentionally absent — it is optional; devices
+            // without int64 atomics are still usable (atomic_int64 capability is reported false).
+            let required_ext = [
                 (khr::synchronization2::NAME, vk::API_VERSION_1_3),
                 (khr::timeline_semaphore::NAME, vk::API_VERSION_1_2),
                 (
                     khr::get_physical_device_properties2::NAME,
                     vk::API_VERSION_1_1,
                 ),
-                (khr::shader_atomic_int64::NAME, vk::API_VERSION_1_2),
             ];
-            let (phyd, queue_family_idx, api_version, extension_spirv_version) = {
+            let (phyd, queue_family_idx, api_version) = {
                 let mut best_score = 0;
-                let mut pair = (vk::PhysicalDevice::null(), 0, 0, types::SpirvVersion::V1_0);
+                let mut pair = (vk::PhysicalDevice::null(), 0, 0u32);
                 'outer: for phyd in instance.enumerate_physical_devices()? {
                     let properties = instance.get_physical_device_properties(phyd);
                     let api_version = properties.api_version.min(instance_api_version);
@@ -193,18 +195,13 @@ impl Vulkan {
                         .iter()
                         .map(|a| a.extension_name_as_c_str().unwrap())
                         .collect();
-                    let mut extension_spirv_version = types::SpirvVersion::V1_0;
                     let caps = instance.get_physical_device_features(phyd);
                     if caps.shader_int64 == 0 {
                         continue;
                     }
-                    for extension in ext {
+                    for extension in required_ext {
                         if extension.1 > api_version && !extensions.contains(&extension.0) {
                             continue 'outer;
-                        }
-                        if extension.0 == khr::spirv_1_4::NAME && api_version >= vk::API_VERSION_1_1
-                        {
-                            extension_spirv_version = types::SpirvVersion::V1_4;
                         }
                     }
                     let queue_families = instance.get_physical_device_queue_family_properties(phyd);
@@ -248,12 +245,7 @@ impl Vulkan {
                         + vk::api_version_minor(api_version).min(3);
                     if score > best_score {
                         best_score = score;
-                        pair = (
-                            phyd,
-                            best_queue.1 as u32,
-                            api_version,
-                            extension_spirv_version,
-                        );
+                        pair = (phyd, best_queue.1 as u32, api_version);
                     }
                 }
                 if best_score > 0 {
@@ -261,6 +253,23 @@ impl Vulkan {
                 } else {
                     return Err(VulkanError::NoSupportedDevice);
                 }
+            };
+            // Query extensions of the selected device to determine optional capabilities.
+            // Done once here rather than threading extension lists out of the selection loop.
+            let selected_device_exts = instance.enumerate_device_extension_properties(phyd)?;
+            let selected_device_ext_names: Vec<&CStr> = selected_device_exts
+                .iter()
+                .map(|e| e.extension_name_as_c_str().unwrap())
+                .collect();
+            // SPIRV 1.4 support via VK_KHR_spirv_1_4 (Vulkan 1.1 devices only; 1.2+ already
+            // exposes SPIRV 1.5 natively). VK_KHR_spirv_1_4 depends on
+            // VK_KHR_shader_float_controls, which must also be enabled in that case.
+            let extension_spirv_version = if api_version < vk::API_VERSION_1_2
+                && selected_device_ext_names.contains(&khr::spirv_1_4::NAME)
+            {
+                types::SpirvVersion::V1_4
+            } else {
+                types::SpirvVersion::V1_0
             };
             let api_supported_spirv_version = match api_version {
                 vk::API_VERSION_1_0 => types::SpirvVersion::V1_0,
@@ -275,7 +284,7 @@ impl Vulkan {
                     }
                 }
             };
-            let mut ext: Vec<_> = ext
+            let mut ext: Vec<_> = required_ext
                 .iter()
                 .filter_map(|(ext, api)| {
                     if *api > api_version {
@@ -285,6 +294,13 @@ impl Vulkan {
                     }
                 })
                 .collect();
+            // Optionally enable shader_atomic_int64 on pre-1.2 devices that have the extension.
+            // On 1.2+ it is promoted to core and enabled via PhysicalDeviceShaderAtomicInt64Features.
+            if api_version < vk::API_VERSION_1_2
+                && selected_device_ext_names.contains(&khr::shader_atomic_int64::NAME)
+            {
+                ext.push(khr::shader_atomic_int64::NAME.as_ptr());
+            }
             let spirv_version = if api_supported_spirv_version >= extension_spirv_version {
                 api_supported_spirv_version
             } else {
