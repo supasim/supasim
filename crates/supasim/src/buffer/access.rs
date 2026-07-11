@@ -209,7 +209,7 @@ impl<B: hal::Backend> MappedBuffer<B> {
         }
     }
 
-    pub fn writeable<T: bytemuck::Pod>(&mut self) -> SupaSimResult<B, &mut [T]> {
+    pub fn writable<T: bytemuck::Pod>(&mut self) -> SupaSimResult<B, &mut [T]> {
         if !self.has_mut {
             return Err(SupaSimError::BufferRegionNotValid);
         }

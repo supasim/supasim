@@ -185,7 +185,7 @@ pub struct KernelReflectionInfo {
     pub entry_point_name: String,
     pub workgroup_size: [u32; 3],
     pub subgroup_size: u32,
-    /// bool is for whether it is writeable
+    /// bool is for whether it is writable
     pub buffers: Vec<bool>,
     pub push_constants_size: u64,
 }

@@ -106,7 +106,7 @@ pub fn mut_map_readback<Backend: hal::Backend>(
     // (host write-back + device invalidation, so the next read re-fetches from the host).
     {
         let mut mapping = out.access(0, 16, true).unwrap();
-        for v in mapping.writeable::<u32>().unwrap() {
+        for v in mapping.writable::<u32>().unwrap() {
             *v *= 2;
         }
     }
