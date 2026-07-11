@@ -281,4 +281,86 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
     }
 }
 
-dev_utils::all_backend_tests!(hal_comprehensive);
+// Per-backend test wrappers.
+//
+// `#[cfg_attr(not(feature = "..."), ignore = "...")]` keeps the function
+// always compiled so nextest always lists it, showing it as ignored rather
+// than silently absent when the feature is disabled.
+//
+// Runtime unavailability (feature compiled, instance creation fails) is
+// handled by returning early — the test shows as passed, which is acceptable
+// since the HAL tests live in a harness=true binary where there is no
+// nextest-recognised "skip" exit code.
+
+#[test]
+#[cfg_attr(not(feature = "vulkan"), ignore = "vulkan feature not compiled")]
+fn hal_comprehensive_vulkan() {
+    #[cfg(feature = "vulkan")]
+    {
+        let descriptor = match super::Vulkan::create_instance(true) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("SKIP: Vulkan unavailable: {e}");
+                return;
+            }
+        };
+        hal_comprehensive::<super::Vulkan>(descriptor).unwrap();
+    }
+}
+
+#[test]
+#[cfg_attr(not(feature = "wgpu"), ignore = "wgpu feature not compiled")]
+fn hal_comprehensive_wgpu_vulkan() {
+    #[cfg(feature = "wgpu")]
+    {
+        let descriptor =
+            match super::wgpu::Wgpu::create_instance(true, super::wgpu::Backends::VULKAN, None) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("SKIP: wgpu+Vulkan unavailable: {e}");
+                    return;
+                }
+            };
+        hal_comprehensive::<super::wgpu::Wgpu>(descriptor).unwrap();
+    }
+}
+
+#[test]
+#[cfg_attr(
+    not(all(feature = "wgpu", target_vendor = "apple")),
+    ignore = "wgpu+Metal requires the wgpu feature on Apple platforms"
+)]
+fn hal_comprehensive_wgpu_metal() {
+    #[cfg(all(feature = "wgpu", target_vendor = "apple"))]
+    {
+        let descriptor =
+            match super::wgpu::Wgpu::create_instance(true, super::wgpu::Backends::METAL, None) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("SKIP: wgpu+Metal unavailable: {e}");
+                    return;
+                }
+            };
+        hal_comprehensive::<super::wgpu::Wgpu>(descriptor).unwrap();
+    }
+}
+
+#[test]
+#[cfg_attr(
+    not(all(feature = "wgpu", target_os = "windows")),
+    ignore = "wgpu+DX12 requires the wgpu feature on Windows"
+)]
+fn hal_comprehensive_wgpu_dx12() {
+    #[cfg(all(feature = "wgpu", target_os = "windows"))]
+    {
+        let descriptor =
+            match super::wgpu::Wgpu::create_instance(true, super::wgpu::Backends::DX12, None) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("SKIP: wgpu+DX12 unavailable: {e}");
+                    return;
+                }
+            };
+        hal_comprehensive::<super::wgpu::Wgpu>(descriptor).unwrap();
+    }
+}

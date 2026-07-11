@@ -49,6 +49,22 @@ env_logger.workspace = true
 rand.workspace = true
 wgpu = { workspace = true, features = ["wgsl"] }
 
+[[test]]
+name = "vulkan_backend"
+harness = false
+
+[[test]]
+name = "wgpu_vulkan_backend"
+harness = false
+
+[[test]]
+name = "wgpu_metal_backend"
+harness = false
+
+[[test]]
+name = "wgpu_dx12_backend"
+harness = false
+
 [[example]]
 name = "buddhabrot"
 path = "../../examples/buddhabrot/buddhabrot.rs"

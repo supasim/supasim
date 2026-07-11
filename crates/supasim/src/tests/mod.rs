@@ -4,8 +4,5 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-mod add_numbers;
-mod basic_buffer_copy;
-mod concurrent_map_gpu_use;
-mod double_submit_same_buffer;
-mod mut_map_readback;
+// Tests have moved to crates/supasim/tests/ (integration test binaries).
+// See tests/common/mod.rs for the shared test bodies and registry.
