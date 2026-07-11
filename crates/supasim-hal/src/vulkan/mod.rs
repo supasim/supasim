@@ -197,11 +197,18 @@ impl Device<Vulkan> for VulkanDevice {
             );
             let alloc_info = vk_mem::AllocationCreateInfo {
                 usage: vk_mem::MemoryUsage::Auto,
-                flags: if mapped {
-                    AllocationCreateFlags::MAPPED
-                        | AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-                } else {
-                    AllocationCreateFlags::empty()
+                flags: match desc.memory_type {
+                    // Upload: CPU writes sequentially → write-combining is fine.
+                    HalBufferType::Upload => {
+                        AllocationCreateFlags::MAPPED
+                            | AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                    }
+                    // Download / UploadDownload: CPU reads back → must prefer HOST_CACHED
+                    // memory so reads don't go through write-combining (catastrophically slow).
+                    HalBufferType::Download | HalBufferType::UploadDownload => {
+                        AllocationCreateFlags::MAPPED | AllocationCreateFlags::HOST_ACCESS_RANDOM
+                    }
+                    HalBufferType::Storage => AllocationCreateFlags::empty(),
                 },
                 ..Default::default()
             };
@@ -606,8 +613,19 @@ impl BackendInstance<Vulkan> for VulkanInstance {
                     self.shared.functions.destroy_descriptor_set_layout(descriptor_set_layout, None);
                 }
             }
+            let push_constant_ranges: Vec<vk::PushConstantRange> =
+                if desc.reflection.push_constants_size > 0 {
+                    vec![vk::PushConstantRange::default()
+                        .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                        .offset(0)
+                        .size(desc.reflection.push_constants_size as u32)]
+                } else {
+                    vec![]
+                };
             let pipeline_layout = self.shared.functions.create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::default().set_layouts(&[descriptor_set_layout]),
+                &vk::PipelineLayoutCreateInfo::default()
+                    .set_layouts(&[descriptor_set_layout])
+                    .push_constant_ranges(&push_constant_ranges),
                 None,
             )?;
             defer! {

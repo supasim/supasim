@@ -225,6 +225,29 @@ impl VulkanCommandRecorder {
             }
             return Ok(());
         }
+        if barriers.is_empty() {
+            // PipelineBarrier with no MemoryBarriers: emit a global execution + memory barrier.
+            // An empty DependencyInfoKHR carries no stage/access scopes — the call would be a
+            // no-op and the intended execution dependency would be silently lost.
+            let global = vk::MemoryBarrier2KHR::default()
+                .src_stage_mask(pre_flags)
+                .dst_stage_mask(post_flags)
+                .src_access_mask(
+                    vk::AccessFlags2KHR::MEMORY_READ_KHR | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
+                )
+                .dst_access_mask(
+                    vk::AccessFlags2KHR::MEMORY_READ_KHR | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
+                );
+            let dep = vk::DependencyInfoKHR::default()
+                .memory_barriers(std::slice::from_ref(&global));
+            unsafe {
+                stream
+                    .shared
+                    .functions
+                    .supa_cmd_pipeline_barrier2(cb, &dep)
+            };
+            return Ok(());
+        }
         for barrier in &mut barriers {
             *barrier = barrier.src_stage_mask(pre_flags).dst_stage_mask(post_flags);
         }
