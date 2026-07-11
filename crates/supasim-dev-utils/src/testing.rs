@@ -4,11 +4,16 @@
   SPDX-License-Identifier: MIT OR Apache-2.0
 END LICENSE */
 
-//! Test harness utilities.
+//! Test harness utilities for `harness = false` integration test binaries.
 //!
-//! Backends are probed at runtime; tests are skipped (exit 51, which nextest
-//! recognises as "ignored") rather than silently absent when a backend is
-//! unavailable or its feature flag is not compiled in.
+//! Backends are probed at runtime; tests are marked ignored rather than
+//! silently absent when a backend is unavailable or its feature flag is not
+//! compiled in.
+//!
+//! **Do not use `skip()` from `harness = true` (`#[test]`) functions** — exit
+//! code 51 is only recognised by nextest for `libtest_mimic` binaries.  In
+//! `#[test]` functions, use `#[cfg_attr(not(feature = "…"), ignore)]` for
+//! compile-time skips and an early `return` for runtime unavailability.
 
 use libtest_mimic::{Arguments, Failed, Trial};
 
