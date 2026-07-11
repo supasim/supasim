@@ -281,4 +281,62 @@ fn hal_comprehensive<B: Backend>(descriptor: crate::InstanceDescriptor<B>) -> Re
     }
 }
 
-dev_utils::all_backend_tests!(hal_comprehensive);
+// Per-backend test wrappers.
+//
+// Tests are always defined so nextest reports them as skipped (exit 51) rather
+// than silently absent when a backend is unavailable at runtime.
+
+#[cfg(feature = "vulkan")]
+#[test]
+fn hal_comprehensive_vulkan() {
+    let descriptor = match super::Vulkan::create_instance(true) {
+        Ok(d) => d,
+        Err(e) => dev_utils::testing::skip(&e.to_string()),
+    };
+    hal_comprehensive::<super::Vulkan>(descriptor).unwrap();
+}
+
+#[cfg(not(feature = "vulkan"))]
+#[test]
+fn hal_comprehensive_vulkan() {
+    dev_utils::testing::skip("vulkan feature not compiled");
+}
+
+#[cfg(feature = "wgpu")]
+#[test]
+fn hal_comprehensive_wgpu_vulkan() {
+    let descriptor =
+        match super::wgpu::Wgpu::create_instance(true, super::wgpu::Backends::VULKAN, None) {
+            Ok(d) => d,
+            Err(e) => dev_utils::testing::skip(&e.to_string()),
+        };
+    hal_comprehensive::<super::wgpu::Wgpu>(descriptor).unwrap();
+}
+
+#[cfg(not(feature = "wgpu"))]
+#[test]
+fn hal_comprehensive_wgpu_vulkan() {
+    dev_utils::testing::skip("wgpu feature not compiled");
+}
+
+#[cfg(all(feature = "wgpu", target_vendor = "apple"))]
+#[test]
+fn hal_comprehensive_wgpu_metal() {
+    let descriptor =
+        match super::wgpu::Wgpu::create_instance(true, super::wgpu::Backends::METAL, None) {
+            Ok(d) => d,
+            Err(e) => dev_utils::testing::skip(&e.to_string()),
+        };
+    hal_comprehensive::<super::wgpu::Wgpu>(descriptor).unwrap();
+}
+
+#[cfg(all(feature = "wgpu", target_os = "windows"))]
+#[test]
+fn hal_comprehensive_wgpu_dx12() {
+    let descriptor =
+        match super::wgpu::Wgpu::create_instance(true, super::wgpu::Backends::DX12, None) {
+            Ok(d) => d,
+            Err(e) => dev_utils::testing::skip(&e.to_string()),
+        };
+    hal_comprehensive::<super::wgpu::Wgpu>(descriptor).unwrap();
+}
