@@ -39,7 +39,7 @@ jobs:
           git diff --exit-code
 
       - name: Install Taplo(from wgpu CI)
-        uses: uncenter/setup-taplo@v1
+        uses: uncenter/setup-taplo@v2
         with:
           version: "0.9.3"
 
