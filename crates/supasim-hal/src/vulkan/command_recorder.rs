@@ -247,14 +247,9 @@ impl VulkanCommandRecorder {
                 .dst_stage_mask(post_flags)
                 .src_access_mask(Self::access_mask_for_stage(pre_flags))
                 .dst_access_mask(Self::access_mask_for_stage(post_flags));
-            let dep = vk::DependencyInfoKHR::default()
-                .memory_barriers(std::slice::from_ref(&global));
-            unsafe {
-                stream
-                    .shared
-                    .functions
-                    .supa_cmd_pipeline_barrier2(cb, &dep)
-            };
+            let dep =
+                vk::DependencyInfoKHR::default().memory_barriers(std::slice::from_ref(&global));
+            unsafe { stream.shared.functions.supa_cmd_pipeline_barrier2(cb, &dep) };
             return Ok(());
         }
         let src_access = Self::access_mask_for_stage(pre_flags);

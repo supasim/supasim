@@ -604,10 +604,12 @@ impl BackendInstance<Vulkan> for VulkanInstance {
             }
             let push_constant_ranges: Vec<vk::PushConstantRange> =
                 if desc.reflection.push_constants_size > 0 {
-                    vec![vk::PushConstantRange::default()
-                        .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                        .offset(0)
-                        .size(desc.reflection.push_constants_size as u32)]
+                    vec![
+                        vk::PushConstantRange::default()
+                            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                            .offset(0)
+                            .size(desc.reflection.push_constants_size as u32),
+                    ]
                 } else {
                     vec![]
                 };
