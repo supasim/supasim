@@ -14,9 +14,10 @@ fn main() {
     #[cfg(feature = "wgpu")]
     {
         use supasim::hal;
-        let availability = hal::wgpu::Wgpu::create_instance(true, hal::wgpu::Backends::VULKAN, None)
-            .map(|_| ())
-            .map_err(|e| e.to_string());
+        let availability =
+            hal::wgpu::Wgpu::create_instance(true, hal::wgpu::Backends::VULKAN, None)
+                .map(|_| ())
+                .map_err(|e| e.to_string());
         let cases = common::all_tests(|| {
             hal::wgpu::Wgpu::create_instance(true, hal::wgpu::Backends::VULKAN, None).unwrap()
         });

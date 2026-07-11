@@ -14,12 +14,12 @@ END LICENSE */
 
 #![allow(unused_imports, dead_code)]
 
+use dev_utils::testing::TestCase;
 use supasim::{
     Buffer, BufferDescriptor, BufferSlice, Instance,
     hal::{self, Backend, InstanceDescriptor},
     kernels,
 };
-use dev_utils::testing::TestCase;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -71,9 +71,15 @@ fn add_numbers<B: Backend>(desc: InstanceDescriptor<B>) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let recorder = instance.create_recorder().map_err(|e| e.to_string())?;
-    recorder.write_buffer::<u32>(&buffer1, 0, &[1, 2, 3, 4]).map_err(|e| e.to_string())?;
-    recorder.write_buffer::<u32>(&buffer2, 0, &[5, 6, 7, 8]).map_err(|e| e.to_string())?;
-    recorder.write_buffer::<u32>(&buffer3, 0, &[1, 1, 1, 1]).map_err(|e| e.to_string())?;
+    recorder
+        .write_buffer::<u32>(&buffer1, 0, &[1, 2, 3, 4])
+        .map_err(|e| e.to_string())?;
+    recorder
+        .write_buffer::<u32>(&buffer2, 0, &[5, 6, 7, 8])
+        .map_err(|e| e.to_string())?;
+    recorder
+        .write_buffer::<u32>(&buffer3, 0, &[1, 1, 1, 1])
+        .map_err(|e| e.to_string())?;
     recorder
         .dispatch_kernel(
             &kernel,
@@ -88,7 +94,9 @@ fn add_numbers<B: Backend>(desc: InstanceDescriptor<B>) -> Result<(), String> {
     recorder
         .copy_buffer(&buffer3, &download_buffer, 0, 0, 16)
         .map_err(|e| e.to_string())?;
-    instance.submit_commands(&[recorder]).map_err(|e| e.to_string())?;
+    instance
+        .submit_commands(&[recorder])
+        .map_err(|e| e.to_string())?;
 
     assert_eq!(
         download_buffer
@@ -109,7 +117,9 @@ fn basic_buffer_copy<B: Backend>(desc: InstanceDescriptor<B>) -> Result<(), Stri
     let gpu_buffer = mk_buf(&instance);
     let download_buffer = mk_buf(&instance);
 
-    upload_buffer.write::<u32>(0, &[1, 2, 3, 4]).map_err(|e| e.to_string())?;
+    upload_buffer
+        .write::<u32>(0, &[1, 2, 3, 4])
+        .map_err(|e| e.to_string())?;
     let recorder = instance.create_recorder().map_err(|e| e.to_string())?;
     recorder
         .copy_buffer(&upload_buffer, &gpu_buffer, 0, 0, 16)
@@ -117,7 +127,9 @@ fn basic_buffer_copy<B: Backend>(desc: InstanceDescriptor<B>) -> Result<(), Stri
     recorder
         .copy_buffer(&gpu_buffer, &download_buffer, 0, 0, 16)
         .map_err(|e| e.to_string())?;
-    instance.submit_commands(&[recorder]).map_err(|e| e.to_string())?;
+    instance
+        .submit_commands(&[recorder])
+        .map_err(|e| e.to_string())?;
     instance.wait_for_idle(1.0).map_err(|e| e.to_string())?;
 
     assert_eq!(
@@ -139,12 +151,14 @@ fn concurrent_map_gpu_use<B: Backend>(desc: InstanceDescriptor<B>) -> Result<(),
 
     let src = mk_buf(&instance);
     let dst = mk_buf(&instance);
-    src.write::<u32>(0, &[1, 2, 3, 4]).map_err(|e| e.to_string())?;
+    src.write::<u32>(0, &[1, 2, 3, 4])
+        .map_err(|e| e.to_string())?;
 
     let mapping = dst.access(0, 16, false).map_err(|e| e.to_string())?;
 
     let r = instance.create_recorder().map_err(|e| e.to_string())?;
-    r.copy_buffer(&src, &dst, 0, 0, 16).map_err(|e| e.to_string())?;
+    r.copy_buffer(&src, &dst, 0, 0, 16)
+        .map_err(|e| e.to_string())?;
     let w = instance.submit_commands(&[r]).map_err(|e| e.to_string())?;
     w.wait().map_err(|e| e.to_string())?;
 
@@ -195,10 +209,14 @@ fn double_submit_same_buffer<B: Backend>(desc: InstanceDescriptor<B>) -> Result<
         .compile_raw_kernel(&spirv, reflection_info)
         .map_err(|e| e.to_string())?;
 
-    a1.write::<u32>(0, &[1, 2, 3, 4]).map_err(|e| e.to_string())?;
-    b1.write::<u32>(0, &[10, 20, 30, 40]).map_err(|e| e.to_string())?;
-    a2.write::<u32>(0, &[100, 200, 300, 400]).map_err(|e| e.to_string())?;
-    b2.write::<u32>(0, &[1000, 2000, 3000, 4000]).map_err(|e| e.to_string())?;
+    a1.write::<u32>(0, &[1, 2, 3, 4])
+        .map_err(|e| e.to_string())?;
+    b1.write::<u32>(0, &[10, 20, 30, 40])
+        .map_err(|e| e.to_string())?;
+    a2.write::<u32>(0, &[100, 200, 300, 400])
+        .map_err(|e| e.to_string())?;
+    b2.write::<u32>(0, &[1000, 2000, 3000, 4000])
+        .map_err(|e| e.to_string())?;
 
     let r1 = instance.create_recorder().map_err(|e| e.to_string())?;
     r1.dispatch_kernel(
@@ -211,7 +229,8 @@ fn double_submit_same_buffer<B: Backend>(desc: InstanceDescriptor<B>) -> Result<
         [4, 1, 1],
     )
     .map_err(|e| e.to_string())?;
-    r1.copy_buffer(&scratch, &download, 0, 0, 16).map_err(|e| e.to_string())?;
+    r1.copy_buffer(&scratch, &download, 0, 0, 16)
+        .map_err(|e| e.to_string())?;
     let w1 = instance.submit_commands(&[r1]).map_err(|e| e.to_string())?;
     w1.wait().map_err(|e| e.to_string())?;
 
@@ -226,7 +245,8 @@ fn double_submit_same_buffer<B: Backend>(desc: InstanceDescriptor<B>) -> Result<
         [4, 1, 1],
     )
     .map_err(|e| e.to_string())?;
-    r2.copy_buffer(&scratch, &download, 0, 0, 16).map_err(|e| e.to_string())?;
+    r2.copy_buffer(&scratch, &download, 0, 0, 16)
+        .map_err(|e| e.to_string())?;
     let w2 = instance.submit_commands(&[r2]).map_err(|e| e.to_string())?;
     w2.wait().map_err(|e| e.to_string())?;
     instance.wait_for_idle(1.0).map_err(|e| e.to_string())?;
@@ -273,8 +293,10 @@ fn mut_map_readback<B: Backend>(desc: InstanceDescriptor<B>) -> Result<(), Strin
         .compile_raw_kernel(&spirv, reflection_info)
         .map_err(|e| e.to_string())?;
 
-    a.write::<u32>(0, &[1, 2, 3, 4]).map_err(|e| e.to_string())?;
-    b.write::<u32>(0, &[10, 20, 30, 40]).map_err(|e| e.to_string())?;
+    a.write::<u32>(0, &[1, 2, 3, 4])
+        .map_err(|e| e.to_string())?;
+    b.write::<u32>(0, &[10, 20, 30, 40])
+        .map_err(|e| e.to_string())?;
 
     let r = instance.create_recorder().map_err(|e| e.to_string())?;
     r.dispatch_kernel(
@@ -293,7 +315,10 @@ fn mut_map_readback<B: Backend>(desc: InstanceDescriptor<B>) -> Result<(), Strin
 
     {
         let mapping = out.access(0, 16, true).map_err(|e| e.to_string())?;
-        assert_eq!(mapping.readable::<u32>().map_err(|e| e.to_string())?, [11, 22, 33, 44]);
+        assert_eq!(
+            mapping.readable::<u32>().map_err(|e| e.to_string())?,
+            [11, 22, 33, 44]
+        );
     }
     {
         let mut mapping = out.access(0, 16, true).map_err(|e| e.to_string())?;

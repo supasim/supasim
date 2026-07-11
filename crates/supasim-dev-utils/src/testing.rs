@@ -60,17 +60,12 @@ pub fn run_backend_tests(
 
     let trials: Vec<Trial> = cases
         .into_iter()
-        .map(|case| {
-            match &availability {
-                Err(reason) => {
-                    let msg = format!("backend '{backend_name}' unavailable: {reason}");
-                    Trial::test(case.name, move || Err(Failed::from(msg)))
-                        .with_ignored_flag(true)
-                }
-                Ok(()) => Trial::test(case.name, move || {
-                    (case.run)().map_err(Failed::from)
-                }),
+        .map(|case| match &availability {
+            Err(reason) => {
+                let msg = format!("backend '{backend_name}' unavailable: {reason}");
+                Trial::test(case.name, move || Err(Failed::from(msg))).with_ignored_flag(true)
             }
+            Ok(()) => Trial::test(case.name, move || (case.run)().map_err(Failed::from)),
         })
         .collect();
 
