@@ -675,11 +675,7 @@ impl CommandRecorder<Metal> for MetalCommandRecorder {
                     let buffers_lock = bind_group.buffers.lock().unwrap();
                     for (i, item) in buffers_lock.iter().enumerate() {
                         unsafe {
-                            comp.setBuffer_offset_atIndex(
-                                Some(&item.0),
-                                item.1 as usize,
-                                i,
-                            );
+                            comp.setBuffer_offset_atIndex(Some(&item.0), item.1 as usize, i);
                         }
                     }
                     drop(buffers_lock);
