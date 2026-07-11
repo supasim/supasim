@@ -90,10 +90,10 @@ impl<B: hal::Backend> AppState<B> {
 
         let size = window.inner_size();
 
-        let wgpu_instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let wgpu_instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             flags: wgpu::InstanceFlags::all(),
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let surface = wgpu_instance.create_surface(window.clone()).unwrap();
         let adapter = wgpu_instance
@@ -101,6 +101,7 @@ impl<B: hal::Backend> AppState<B> {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 force_fallback_adapter: false,
                 compatible_surface: Some(&surface),
+                apply_limit_buckets: false,
             })
             .await
             .unwrap();
@@ -131,6 +132,7 @@ impl<B: hal::Backend> AppState<B> {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width,
             height: size.height,
             present_mode: wgpu::PresentMode::Fifo,
@@ -225,8 +227,8 @@ impl<B: hal::Backend> AppState<B> {
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: None,
                     bind_group_layouts: &[
-                        &max_uniform_bind_group_layout,
-                        &buffer_bind_group_layout,
+                        Some(&max_uniform_bind_group_layout),
+                        Some(&buffer_bind_group_layout),
                     ],
                     immediate_size: 0,
                 }),
@@ -276,8 +278,8 @@ impl<B: hal::Backend> AppState<B> {
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: None,
                     bind_group_layouts: &[
-                        &render_uniform_bind_group_layout,
-                        &buffer_bind_group_layout,
+                        Some(&render_uniform_bind_group_layout),
+                        Some(&buffer_bind_group_layout),
                     ],
                     immediate_size: 0,
                 }),
@@ -539,7 +541,12 @@ impl<B: hal::Backend> AppState<B> {
 
         self.update();
 
-        let output = self.surface.get_current_texture().unwrap();
+        let output = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            // Skip this frame; the caller can retry / reconfigure on the next tick.
+            _ => return false,
+        };
         let output_view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -603,7 +610,7 @@ impl<B: hal::Backend> AppState<B> {
         }
 
         self.queue.submit([encoder.finish()]);
-        output.present();
+        self.queue.present(output);
         true
     }
 }

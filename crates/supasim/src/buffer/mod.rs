@@ -23,16 +23,11 @@ pub struct BufferSlice<B: hal::Backend> {
 impl<B: hal::Backend> BufferSlice<B> {
     pub fn validate(&self) -> SupaSimResult<B, ()> {
         let b = self.buffer.inner()?;
-        if self
-            .access
-            .range
-            .start
-            .is_multiple_of(b.create_info.contents_align)
-            && self
-                .access
-                .range
-                .length
-                .is_multiple_of(b.create_info.contents_align)
+        // `contents_align == 0` means "no alignment requirement"; treat it as 1 to
+        // avoid a divide-by-zero panic inside `is_multiple_of`.
+        let align = b.create_info.contents_align.max(1);
+        if self.access.range.start.is_multiple_of(align)
+            && self.access.range.length.is_multiple_of(align)
         {
             Ok(())
         } else {
@@ -42,8 +37,11 @@ impl<B: hal::Backend> BufferSlice<B> {
 
     pub fn validate_with_align(&self, align: u64) -> SupaSimResult<B, ()> {
         let b = self.buffer.inner()?;
-        // This is explained in MappedBuffer associated methods
-        if align.is_multiple_of(b.create_info.contents_align)
+        // This is explained in MappedBuffer associated methods.
+        // `contents_align == 0` means "no alignment requirement"; treat it as 1 to
+        // avoid a divide-by-zero panic inside `is_multiple_of`.
+        let contents_align = b.create_info.contents_align.max(1);
+        if align.is_multiple_of(contents_align)
             && self.access.range.start.is_multiple_of(align)
             && self.access.range.length.is_multiple_of(align)
         {
@@ -168,7 +166,8 @@ impl Default for BufferDescriptor {
     fn default() -> Self {
         Self {
             size: 0,
-            contents_align: 0,
+            // 1 == "no alignment requirement"; 0 would divide-by-zero in `validate`.
+            contents_align: 1,
             priority: 1.0,
             preferred_device_index: None,
         }
@@ -221,9 +220,11 @@ impl BufferAccess {
 
     pub fn intersection(&self, other: &Self) -> Option<Self> {
         if self.overlaps(other) {
-            let start = self.range.start.min(other.range.start);
+            // The overlapping portion is [max(starts), min(ends)); using min/max here
+            // (the bounding union) was a bug that over-broadened every sync range.
+            let start = self.range.start.max(other.range.start);
             let end =
-                (self.range.start + self.range.length).max(other.range.start + other.range.length);
+                (self.range.start + self.range.length).min(other.range.start + other.range.length);
             Some(Self {
                 range: BufferRange {
                     start,

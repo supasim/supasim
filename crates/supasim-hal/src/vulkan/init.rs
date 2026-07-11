@@ -297,13 +297,31 @@ impl Vulkan {
                 };
                 extension_spirv_version
             };
+            // The device-selection loop only guarantees `shader_int64` (the 64-bit
+            // integer *type*), not int64 *atomics*. Unconditionally requesting the atomic
+            // features makes `vkCreateDevice` fail with `VK_ERROR_FEATURE_NOT_PRESENT` on
+            // ICDs that lack them (e.g. lavapipe, some mobile/software drivers). Query the
+            // selected device and only enable what it actually supports.
+            let (has_buffer_int64_atomics, has_shared_int64_atomics) =
+                if instance_api_version >= vk::API_VERSION_1_1 {
+                    let mut queried = vk::PhysicalDeviceShaderAtomicInt64Features::default();
+                    let mut features2 =
+                        vk::PhysicalDeviceFeatures2::default().push_next(&mut queried);
+                    instance.get_physical_device_features2(phyd, &mut features2);
+                    (
+                        queried.shader_buffer_int64_atomics != 0,
+                        queried.shader_shared_int64_atomics != 0,
+                    )
+                } else {
+                    (false, false)
+                };
             let mut timeline_semaphore =
                 vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
             let mut sync2 =
                 vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
             let mut atomic_int64 = vk::PhysicalDeviceShaderAtomicInt64Features::default()
-                .shader_shared_int64_atomics(true)
-                .shader_buffer_int64_atomics(true);
+                .shader_shared_int64_atomics(has_shared_int64_atomics)
+                .shader_buffer_int64_atomics(has_buffer_int64_atomics);
             let phyd_features = vk::PhysicalDeviceFeatures::default().shader_int64(true);
             // TODO: investigate multiple queues. currently we only use a general queue, but this could potentially be optimized by using special compute queues and special transfer queues
             let queue_priority = 1.0;
@@ -398,6 +416,15 @@ impl Vulkan {
                         .flags
                         .contains(vk::MemoryHeapFlags::DEVICE_LOCAL)
             };
+            // Report int64-atomic capability from what the device actually supports rather
+            // than assuming `true` (which lies on ICDs lacking the feature). Safe to query:
+            // this fn's contract requires the instance be created with API >= 1.1.
+            let supports_atomic_int64 = {
+                let mut queried = vk::PhysicalDeviceShaderAtomicInt64Features::default();
+                let mut features2 = vk::PhysicalDeviceFeatures2::default().push_next(&mut queried);
+                instance.get_physical_device_features2(phyd, &mut features2);
+                queried.shader_buffer_int64_atomics != 0 && queried.shader_shared_int64_atomics != 0
+            };
             let instance = VulkanInstance {
                 entry,
                 instance,
@@ -413,7 +440,7 @@ impl Vulkan {
                 }),
                 spirv_version,
                 _api_version: api_version,
-                atomic_int64: true,
+                atomic_int64: supports_atomic_int64,
             };
             let device = VulkanDevice {
                 shared: instance.shared.clone(),

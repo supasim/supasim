@@ -102,13 +102,17 @@ impl GlobalState {
                 spirv_tools_sys::spvValidateWithOptions(ctx, options, &mut binary, &mut diagnostic);
             let mut out = Ok(());
             if res < 0 {
-                let diagnostic = &*diagnostic;
-                out = Err(anyhow!(
-                    "Validation error: {}",
-                    CStr::from_ptr(diagnostic.error as *const i8).to_str()?
-                ));
+                if diagnostic.is_null() {
+                    out = Err(anyhow!("Validation error (no diagnostic available)"));
+                } else {
+                    let diagnostic = &*diagnostic;
+                    out = Err(anyhow!(
+                        "Validation error: {}",
+                        CStr::from_ptr(diagnostic.error as *const i8).to_str()?
+                    ));
+                }
             }
-            if diagnostic.is_null() {
+            if !diagnostic.is_null() {
                 spirv_tools_sys::spvDiagnosticDestroy(diagnostic);
             }
             spirv_tools_sys::spvContextDestroy(ctx);
@@ -642,7 +646,8 @@ impl GlobalState {
         if let KernelTarget::Dxil { shader_model } = options.target {
             let dxil = hassle_rs::compile_hlsl(
                 "intermediate.hlsl",
-                unsafe { std::str::from_utf8_unchecked(data) },
+                std::str::from_utf8(data)
+                    .map_err(|e| anyhow!("Transpiled HLSL was not valid UTF-8: {e}"))?,
                 options.entry,
                 shader_model.to_str(),
                 &[],
