@@ -117,7 +117,7 @@ impl Device<Metal> for MetalDevice {
         &self,
         _info: &types::ExternalBufferDescriptor,
     ) -> Result<<Metal as Backend>::Buffer, <Metal as Backend>::Error> {
-        unreachable!()
+        Err(MetalError::UnsupportedOperation("import_buffer"))
     }
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
@@ -139,7 +139,7 @@ impl Device<Metal> for MetalDevice {
         &self,
         _info: &types::ExternalSemaphoreDescriptor,
     ) -> Result<<Metal as Backend>::Semaphore, <Metal as Backend>::Error> {
-        unreachable!()
+        Err(MetalError::UnsupportedOperation("import_semaphore"))
     }
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
@@ -208,15 +208,17 @@ impl Stream<Metal> for MetalStream {
         for info in &*infos {
             for wait_semaphore in info.wait_semaphores {
                 let as_event: &ProtocolObject<dyn MTLEvent> = wait_semaphore.event.0.as_ref();
+                // Wait for current_value + 1, matching what reset() + signal()/encodeSignalEvent sets.
                 info.command_recorder
                     .command_buffer
-                    .encodeWaitForEvent_value(as_event, wait_semaphore.current_value);
+                    .encodeWaitForEvent_value(as_event, wait_semaphore.current_value + 1);
             }
             if let Some(signal_semaphore) = info.signal_semaphore {
                 let as_event: &ProtocolObject<dyn MTLEvent> = signal_semaphore.event.0.as_ref();
+                // Signal at current_value + 1 so CPU wait() (which also waits for current_value + 1) unblocks.
                 info.command_recorder
                     .command_buffer
-                    .encodeSignalEvent_value(as_event, signal_semaphore.current_value);
+                    .encodeSignalEvent_value(as_event, signal_semaphore.current_value + 1);
             }
             info.command_recorder.command_buffer.commit();
         }
@@ -352,30 +354,15 @@ impl BackendInstance<Metal> for MetalInstance {
         let pipeline = self
             .device
             .newComputePipelineStateWithFunction_error(&function)?;
-        let mut revised_layout = vec![0; descriptor.reflection.buffers.len()];
-        {
-            let mut new_index = 0;
-            for (old_index, &is_writable) in descriptor.reflection.buffers.iter().enumerate() {
-                if is_writable {
-                    revised_layout[old_index] = new_index;
-                    new_index += 1;
-                }
-            }
-
-            // Then, collect indices of readonly buffers
-            for (old_index, &is_writable) in descriptor.reflection.buffers.iter().enumerate() {
-                if !is_writable {
-                    revised_layout[old_index] = new_index;
-                    new_index += 1;
-                }
-            }
-        }
+        // SPIRV-Cross (with argument buffers disabled) preserves SPIR-V binding decorations
+        // directly as Metal [[buffer(n)]] indices. recurse_params_reflection stores buffers
+        // indexed by their SPIR-V binding index, so the mapping is already the identity —
+        // user buffer i goes to Metal slot i. No writability-based reordering is needed.
         Ok(MetalKernel {
             _library: UniqueObject::new(library),
             _function: UniqueObject::new(function),
             pipeline: UniqueObject::new(pipeline),
             reflection: descriptor.reflection.clone(),
-            revised_buffer_indices: revised_layout,
         })
     }
 
@@ -393,7 +380,7 @@ impl BackendInstance<Metal> for MetalInstance {
 #[must_use]
 #[derive(Error, Debug)]
 pub enum MetalError {
-    #[error("SupaSim requires metal version ")]
+    #[error("SupaSim requires Metal 2.3 or later")]
     BadMetalVersion,
     #[error("Failed to create metal device or queue. No other information.")]
     DeviceCreate,
@@ -407,6 +394,8 @@ pub enum MetalError {
     BufferAllocate,
     #[error("An invalid utf8 string was passed to compile_kernel")]
     NonUtf8KernelString,
+    #[error("Unsupported Metal operation: {0}")]
+    UnsupportedOperation(&'static str),
 }
 
 impl crate::Error<Metal> for MetalError {
@@ -477,12 +466,13 @@ impl BindGroup<Metal> for MetalBindGroup {
         buffers: &[crate::HalBufferSlice<Metal>],
     ) -> Result<(), <Metal as Backend>::Error> {
         let mut buffers_lock = self.buffers.lock().unwrap();
-        for (i, slice) in buffers.iter().enumerate() {
-            buffers_lock[i] = (
+        buffers_lock.clear();
+        for slice in buffers {
+            buffers_lock.push((
                 unsafe { slice.buffer.buffer.unsafe_clone() },
                 slice.offset,
                 slice.length,
-            );
+            ));
         }
         Ok(())
     }
@@ -503,9 +493,6 @@ pub struct MetalKernel {
     _function: UniqueObject<dyn MTLFunction>,
     pipeline: UniqueObject<dyn MTLComputePipelineState>,
     reflection: KernelReflectionInfo,
-    /// For user passed buffer #i, `revised_buffer_indices[i]` is the index
-    /// in the kernel's reordered layout
-    revised_buffer_indices: Vec<usize>,
 }
 
 impl Kernel<Metal> for MetalKernel {
@@ -688,11 +675,7 @@ impl CommandRecorder<Metal> for MetalCommandRecorder {
                     let buffers_lock = bind_group.buffers.lock().unwrap();
                     for (i, item) in buffers_lock.iter().enumerate() {
                         unsafe {
-                            comp.setBuffer_offset_atIndex(
-                                Some(&item.0),
-                                item.1 as usize,
-                                kernel.revised_buffer_indices[i],
-                            );
+                            comp.setBuffer_offset_atIndex(Some(&item.0), item.1 as usize, i);
                         }
                     }
                     drop(buffers_lock);
