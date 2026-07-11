@@ -245,18 +245,7 @@ impl Device<Vulkan> for VulkanDevice {
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_semaphore(&self) -> std::result::Result<VulkanSemaphore, VulkanError> {
-        unsafe {
-            let mut next = vk::SemaphoreTypeCreateInfo::default()
-                .initial_value(0)
-                .semaphore_type(vk::SemaphoreType::TIMELINE);
-            let create_info = vk::SemaphoreCreateInfo::default()
-                .flags(vk::SemaphoreCreateFlags::empty())
-                .push_next(&mut next);
-            Ok(VulkanSemaphore {
-                inner: self.shared.functions.create_semaphore(&create_info, None)?,
-                current_value: Mutex::new(0),
-            })
-        }
+        unsafe { self.shared.create_timeline_semaphore() }
     }
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
@@ -660,18 +649,7 @@ impl BackendInstance<Vulkan> for VulkanInstance {
 
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn create_semaphore(&self) -> std::result::Result<VulkanSemaphore, VulkanError> {
-        unsafe {
-            let mut next = vk::SemaphoreTypeCreateInfo::default()
-                .initial_value(0)
-                .semaphore_type(vk::SemaphoreType::TIMELINE);
-            let create_info = vk::SemaphoreCreateInfo::default()
-                .flags(vk::SemaphoreCreateFlags::empty())
-                .push_next(&mut next);
-            Ok(VulkanSemaphore {
-                inner: self.shared.functions.create_semaphore(&create_info, None)?,
-                current_value: Mutex::new(0),
-            })
-        }
+        unsafe { self.shared.create_timeline_semaphore() }
     }
     #[cfg_attr(feature = "trace", tracing::instrument)]
     unsafe fn cleanup_cached_resources(&mut self) -> Result<(), <Vulkan as Backend>::Error> {
@@ -935,6 +913,23 @@ impl Semaphore<Vulkan> for VulkanSemaphore {
 pub struct SharedDeviceInfo {
     functions: DeviceFunctions,
     queue_family_indices: Vec<u32>,
+}
+
+impl SharedDeviceInfo {
+    unsafe fn create_timeline_semaphore(&self) -> Result<VulkanSemaphore, VulkanError> {
+        unsafe {
+            let mut next = vk::SemaphoreTypeCreateInfo::default()
+                .initial_value(0)
+                .semaphore_type(vk::SemaphoreType::TIMELINE);
+            let create_info = vk::SemaphoreCreateInfo::default()
+                .flags(vk::SemaphoreCreateFlags::empty())
+                .push_next(&mut next);
+            Ok(VulkanSemaphore {
+                inner: self.functions.create_semaphore(&create_info, None)?,
+                current_value: Mutex::new(0),
+            })
+        }
+    }
 }
 
 pub struct DeviceFunctions {

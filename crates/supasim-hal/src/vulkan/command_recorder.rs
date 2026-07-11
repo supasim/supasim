@@ -137,6 +137,25 @@ impl VulkanCommandRecorder {
         }
     }
 
+    /// Derive the tightest correct access mask for a given stage mask.
+    /// Using MEMORY_READ|MEMORY_WRITE for every barrier forces the GPU to flush/invalidate
+    /// all caches regardless of what was actually accessed; this maps stage bits to the
+    /// specific access types that stage can produce, shrinking the flush scope.
+    fn access_mask_for_stage(stage: vk::PipelineStageFlags2KHR) -> vk::AccessFlags2KHR {
+        use vk::{AccessFlags2KHR as A, PipelineStageFlags2KHR as S};
+        if stage.contains(S::ALL_COMMANDS_KHR) {
+            return A::MEMORY_READ_KHR | A::MEMORY_WRITE_KHR;
+        }
+        let mut access = A::empty();
+        if stage.contains(S::TRANSFER) {
+            access |= A::TRANSFER_READ | A::TRANSFER_WRITE;
+        }
+        if stage.contains(S::COMPUTE_SHADER) {
+            access |= A::SHADER_STORAGE_READ | A::SHADER_STORAGE_WRITE;
+        }
+        access
+    }
+
     /// First command must be a pipeline barrier. Following commands must be memory barriers
     fn sync_command<'a>(
         &mut self,
@@ -157,20 +176,14 @@ impl VulkanCommandRecorder {
                             length: len,
                         },
                 } => barriers.push(
+                    // Access masks are left as zero here; they are filled in after the loop
+                    // once pre_flags/post_flags are known, so we use the stage-derived masks.
                     vk::BufferMemoryBarrier2KHR::default()
                         .buffer(buffer.buffer)
                         .offset(*offset)
                         .size(*len)
                         .src_queue_family_index(stream.queue_family_idx)
-                        .dst_queue_family_index(stream.queue_family_idx)
-                        .src_access_mask(
-                            vk::AccessFlags2KHR::MEMORY_READ_KHR
-                                | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
-                        )
-                        .dst_access_mask(
-                            vk::AccessFlags2KHR::MEMORY_READ_KHR
-                                | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
-                        ),
+                        .dst_queue_family_index(stream.queue_family_idx),
                 ),
                 BufferCommand::MemoryTransfer {
                     buffer:
@@ -232,12 +245,8 @@ impl VulkanCommandRecorder {
             let global = vk::MemoryBarrier2KHR::default()
                 .src_stage_mask(pre_flags)
                 .dst_stage_mask(post_flags)
-                .src_access_mask(
-                    vk::AccessFlags2KHR::MEMORY_READ_KHR | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
-                )
-                .dst_access_mask(
-                    vk::AccessFlags2KHR::MEMORY_READ_KHR | vk::AccessFlags2KHR::MEMORY_WRITE_KHR,
-                );
+                .src_access_mask(Self::access_mask_for_stage(pre_flags))
+                .dst_access_mask(Self::access_mask_for_stage(post_flags));
             let dep = vk::DependencyInfoKHR::default()
                 .memory_barriers(std::slice::from_ref(&global));
             unsafe {
@@ -248,8 +257,14 @@ impl VulkanCommandRecorder {
             };
             return Ok(());
         }
+        let src_access = Self::access_mask_for_stage(pre_flags);
+        let dst_access = Self::access_mask_for_stage(post_flags);
         for barrier in &mut barriers {
-            *barrier = barrier.src_stage_mask(pre_flags).dst_stage_mask(post_flags);
+            *barrier = barrier
+                .src_stage_mask(pre_flags)
+                .dst_stage_mask(post_flags)
+                .src_access_mask(src_access)
+                .dst_access_mask(dst_access);
         }
         let dependency_info = vk::DependencyInfoKHR::default().buffer_memory_barriers(&barriers);
         unsafe {
